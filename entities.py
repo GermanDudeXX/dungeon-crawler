@@ -46,6 +46,10 @@ class Player(Entity):
         self.xp_to_next = 15
         self.potions = 0
         self.kills = 0
+        self.gold = 0
+        self.scrolls = {"fireball": 0, "teleport": 0, "reveal": 0}
+        self.poison_turns = 0
+        self.potions_drunk_this_run = 0
 
     @property
     def power(self):
@@ -54,6 +58,10 @@ class Player(Entity):
     @property
     def defense(self):
         return self.base_defense + self.armor_bonus
+
+    @property
+    def crit_chance(self):
+        return min(0.35, 0.05 + self.level * 0.02)
 
     def is_alive(self):
         return self.hp > 0
@@ -75,28 +83,58 @@ class Player(Entity):
 
 
 class Monster(Entity):
-    def __init__(self, x, y, kind, boss=False):
+    def __init__(self, x, y, kind, boss=False, elite=None):
         stats = C.MONSTER_TYPES[kind]
         char = stats["char"].upper() if boss else stats["char"]
         color = C.COLOR_BOSS if boss else stats["color"]
         name = f"{stats['name']} chieftain" if boss else stats["name"]
+
+        self.elite_name = elite["name"] if elite else None
+        if elite:
+            color = tuple((c + m) // 2 for c, m in zip(color, elite["color"]))
+            name = f"{elite['name']} {name}"
+
         super().__init__(x, y, char, color, name)
         self.kind = kind
         multiplier = 3 if boss else 1
-        self.max_hp = stats["hp"] * multiplier
+        base_hp = stats["hp"] * multiplier
+        base_power = stats["power"] + (stats["power"] // 2 if boss else 0)
+        base_defense = stats["defense"] + (2 if boss else 0)
+        base_xp = stats["xp"] * (4 if boss else 1)
+
+        if elite:
+            base_hp = int(base_hp * elite["hp_mult"])
+            base_power = max(1, int(base_power * elite["power_mult"]))
+            base_defense = int(base_defense * elite["defense_mult"])
+            base_xp = int(base_xp * C.ELITE_XP_MULT)
+
+        self.max_hp = base_hp
         self.hp = self.max_hp
-        self.power = stats["power"] + (stats["power"] // 2 if boss else 0)
-        self.defense = stats["defense"] + (2 if boss else 0)
-        self.xp_reward = stats["xp"] * (4 if boss else 1)
+        self.power = base_power
+        self.defense = base_defense
+        self.xp_reward = base_xp
         self.is_boss = boss
         self.awake = False
+
+        self.ranged = stats.get("ranged", False)
+        self.speed = stats.get("speed", 1) + (elite["speed_bonus"] if elite and "speed_bonus" in elite else 0)
+        self.splits = stats.get("splits", False)
+        self.poisons_on_hit = stats.get("poisons", False)
+        self.regen = elite["regen"] if elite and "regen" in elite else 0
+        self.is_split_child = False
 
     def is_alive(self):
         return self.hp > 0
 
 
+class Merchant(Entity):
+    def __init__(self, x, y):
+        super().__init__(x, y, "M", C.COLOR_MERCHANT, "merchant")
+
+
 class Item(Entity):
-    def __init__(self, x, y, kind, name, char, color, bonus=0):
+    def __init__(self, x, y, kind, name, char, color, bonus=0, scroll_type=None):
         super().__init__(x, y, char, color, name, blocks_movement=False)
         self.kind = kind
         self.bonus = bonus
+        self.scroll_type = scroll_type

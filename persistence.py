@@ -9,17 +9,24 @@ DEFAULT_STATS = {
     "games_played": 0,
     "deaths": 0,
     "total_kills": 0,
-    "kills_by_monster": {"rat": 0, "goblin": 0, "orc": 0, "boss": 0},
+    "kills_by_monster": {
+        "rat": 0, "goblin": 0, "orc": 0, "boss": 0,
+        "skeleton": 0, "slime": 0, "bat": 0, "spider": 0,
+    },
     "deepest_level_ever": 1,
     "most_kills_in_a_run": 0,
     "highest_character_level": 1,
     "total_potions_drunk": 0,
+    "total_gold_collected": 0,
+    "total_scrolls_used": 0,
+    "achievements_unlocked": [],
 }
 
 
 def _default_stats():
     stats = dict(DEFAULT_STATS)
     stats["kills_by_monster"] = dict(DEFAULT_STATS["kills_by_monster"])
+    stats["achievements_unlocked"] = list(DEFAULT_STATS["achievements_unlocked"])
     return stats
 
 

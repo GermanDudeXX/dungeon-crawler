@@ -67,6 +67,14 @@ class Game:
         self.potion_button = pygame.Rect(712, 492, 56, 56)
         self.save_button = pygame.Rect(895, 8, 58, 30)
 
+        scroll_size = 40
+        scroll_y = 492 - 6 - scroll_size
+        self.scroll_buttons = {
+            "fireball": pygame.Rect(712, scroll_y, scroll_size, scroll_size),
+            "teleport": pygame.Rect(712 + (scroll_size + 4), scroll_y, scroll_size, scroll_size),
+            "reveal": pygame.Rect(712 + 2 * (scroll_size + 4), scroll_y, scroll_size, scroll_size),
+        }
+
     def start_new_run(self):
         persistence.delete_save()
         self.save_data = None
@@ -80,6 +88,8 @@ class Game:
         self.move_repeat_timer = 0
         self.move_held = False
         self.new_best = False
+        self.damage_numbers = []
+        self.boss_banner_timer = 0
         self.new_level()
         self.add_log("You descend into the dungeon.")
         self.state = "playing"
@@ -109,24 +119,38 @@ class Game:
         player.potions = p["potions"]
         player.kills = p["kills"]
         player.facing = p["facing"]
+        player.gold = p.get("gold", 0)
+        player.scrolls = dict(p.get("scrolls", {"fireball": 0, "teleport": 0, "reveal": 0}))
+        player.poison_turns = p.get("poison_turns", 0)
+        player.potions_drunk_this_run = p.get("potions_drunk_this_run", 0)
         self.player = player
 
         self.grid = data["grid"]
         self.stairs_pos = tuple(data["stairs_pos"])
         self.explored = {tuple(t) for t in data["explored"]}
+        self.traps = {tuple(int(v) for v in pos): kind for pos, kind in data.get("traps", [])}
 
         self.monsters = []
         for m in data["monsters"]:
-            monster = entities.Monster(m["x"], m["y"], m["kind"], boss=m["boss"])
+            elite = None
+            if m.get("elite_name"):
+                elite = next((e for e in C.ELITE_MODIFIERS if e["name"] == m["elite_name"]), None)
+            monster = entities.Monster(m["x"], m["y"], m["kind"], boss=m["boss"], elite=elite)
             monster.hp = m["hp"]
             monster.awake = m["awake"]
+            monster.is_split_child = m.get("is_split_child", False)
             self.monsters.append(monster)
 
         self.items = []
         for i in data["items"]:
             self.items.append(
-                entities.Item(i["x"], i["y"], i["kind"], i["name"], i["char"], tuple(i["color"]), bonus=i["bonus"])
+                entities.Item(
+                    i["x"], i["y"], i["kind"], i["name"], i["char"], tuple(i["color"]),
+                    bonus=i["bonus"], scroll_type=i.get("scroll_type"),
+                )
             )
+
+        self.merchants = [entities.Merchant(m["x"], m["y"]) for m in data.get("merchants", [])]
 
         self.shake_timer = 0
         self.shake_intensity = 0
@@ -134,6 +158,8 @@ class Game:
         self.move_repeat_timer = 0
         self.move_held = False
         self.new_best = False
+        self.damage_numbers = []
+        self.boss_banner_timer = 0
 
         self._recompute_fov()
         self.add_log("You continue your descent.")
@@ -151,19 +177,26 @@ class Game:
                 "armor_bonus": p.armor_bonus, "armor_name": p.armor_name,
                 "level": p.level, "xp": p.xp, "xp_to_next": p.xp_to_next,
                 "potions": p.potions, "kills": p.kills, "facing": p.facing,
+                "gold": p.gold, "scrolls": dict(p.scrolls), "poison_turns": p.poison_turns,
+                "potions_drunk_this_run": p.potions_drunk_this_run,
             },
             "grid": self.grid,
             "stairs_pos": list(self.stairs_pos),
             "explored": [list(t) for t in self.explored],
+            "traps": [[list(pos), kind] for pos, kind in self.traps.items()],
             "monsters": [
-                {"x": m.x, "y": m.y, "kind": m.kind, "boss": m.is_boss, "hp": m.hp, "awake": m.awake}
+                {
+                    "x": m.x, "y": m.y, "kind": m.kind, "boss": m.is_boss, "hp": m.hp, "awake": m.awake,
+                    "elite_name": m.elite_name, "is_split_child": m.is_split_child,
+                }
                 for m in self.monsters
             ],
             "items": [
                 {"x": i.x, "y": i.y, "kind": i.kind, "name": i.name, "char": i.char,
-                 "color": list(i.color), "bonus": i.bonus}
+                 "color": list(i.color), "bonus": i.bonus, "scroll_type": i.scroll_type}
                 for i in self.items
             ],
+            "merchants": [{"x": m.x, "y": m.y} for m in self.merchants],
         }
 
     def _save_and_quit(self):
@@ -184,13 +217,29 @@ class Game:
 
         self.monsters = []
         self.items = []
+        self.merchants = []
+        self.traps = {}
+        self.damage_numbers = []
         self._populate_level()
 
         self._recompute_fov()
 
+    def _maybe_elite(self):
+        if self.dungeon_level >= 2 and random.random() < C.ELITE_CHANCE:
+            return random.choice(C.ELITE_MODIFIERS)
+        return None
+
     def _populate_level(self):
         monster_kinds = list(C.MONSTER_TYPES.keys())
-        weights = [3, 2 if self.dungeon_level >= 2 else 0.2, 1 if self.dungeon_level >= 3 else 0.05]
+        weights = [
+            3,
+            2 if self.dungeon_level >= 2 else 0.2,
+            1 if self.dungeon_level >= 3 else 0.05,
+            1.5 if self.dungeon_level >= 2 else 0.1,
+            2 if self.dungeon_level >= 1 else 0,
+            1.2 if self.dungeon_level >= 1 else 0,
+            1 if self.dungeon_level >= 3 else 0.05,
+        ]
         num_monsters = min(2 + self.dungeon_level, 12)
 
         spawnable_rooms = self.rooms[1:] or self.rooms
@@ -200,13 +249,12 @@ class Game:
             x, y = self._random_floor_in_room(room)
             if not self._is_occupied(x, y):
                 kind = random.choices(monster_kinds, weights=weights, k=1)[0]
-                self.monsters.append(entities.Monster(x, y, kind))
+                self.monsters.append(entities.Monster(x, y, kind, elite=self._maybe_elite()))
 
         if self.dungeon_level % 5 == 0:
             bx, by = self.stairs_pos
             self.monsters.append(entities.Monster(bx, by, "orc", boss=True))
             self.add_log("A powerful presence guards the stairs...")
-            self.sounds.play("boss")
 
         for _ in range(random.randint(1, 3)):
             self._spawn_item(random.choice(spawnable_rooms), "potion")
@@ -214,6 +262,22 @@ class Game:
             self._spawn_item(random.choice(spawnable_rooms), "weapon")
         if random.random() < 0.7:
             self._spawn_item(random.choice(spawnable_rooms), "armor")
+        for _ in range(random.randint(1, 2)):
+            self._spawn_item(random.choice(spawnable_rooms), "gold")
+        if random.random() < 0.5:
+            self._spawn_item(random.choice(spawnable_rooms), "scroll")
+
+        for room in spawnable_rooms:
+            if random.random() < C.TRAP_CHANCE_PER_ROOM:
+                x, y = self._random_floor_in_room(room)
+                if not self._is_occupied(x, y) and (x, y) != self.stairs_pos and (x, y) not in self.traps:
+                    self.traps[(x, y)] = random.choice(list(C.TRAP_TYPES.keys()))
+
+        if random.random() < C.MERCHANT_CHANCE_PER_LEVEL:
+            room = random.choice(spawnable_rooms)
+            x, y = self._random_floor_in_room(room)
+            if not self._is_occupied(x, y) and (x, y) not in self.traps and (x, y) != self.stairs_pos:
+                self.merchants.append(entities.Merchant(x, y))
 
     def _spawn_item(self, room, kind):
         x, y = self._random_floor_in_room(room)
@@ -232,16 +296,37 @@ class Game:
             tier_max = min(len(C.ARMOR_TYPES) - 1, self.dungeon_level // 2)
             a = C.ARMOR_TYPES[random.randint(0, tier_max)]
             self.items.append(entities.Item(x, y, "armor", a["name"], "[", a["color"], bonus=a["bonus"]))
+        elif kind == "gold":
+            amount = random.randint(5, 15) * self.dungeon_level
+            self.items.append(entities.Item(x, y, "gold", "Gold", "$", C.COLOR_GOLD, bonus=amount))
+        elif kind == "scroll":
+            scroll_type = random.choice(list(C.SCROLL_TYPES.keys()))
+            info = C.SCROLL_TYPES[scroll_type]
+            self.items.append(
+                entities.Item(x, y, "scroll", info["name"], info["char"], info["color"], scroll_type=scroll_type)
+            )
 
     def _random_floor_in_room(self, room):
         x = random.randint(room.x1, room.x2 - 1)
         y = random.randint(room.y1, room.y2 - 1)
         return x, y
 
+    def _random_floor_tile(self):
+        for _ in range(200):
+            x = random.randint(0, C.MAP_WIDTH - 1)
+            y = random.randint(0, C.MAP_HEIGHT - 1)
+            if dungeon.is_walkable(self.grid, x, y) and not self._is_occupied(x, y):
+                return x, y
+        return None
+
     def _is_occupied(self, x, y):
         if (x, y) == (self.player.x, self.player.y):
             return True
-        return any((m.x, m.y) == (x, y) for m in self.monsters)
+        if any((m.x, m.y) == (x, y) for m in self.monsters):
+            return True
+        if any((m.x, m.y) == (x, y) for m in getattr(self, "merchants", [])):
+            return True
+        return False
 
     def _recompute_fov(self):
         self.visible = fov.compute_fov(self.grid, self.player.x, self.player.y, C.FOV_RADIUS)
@@ -306,13 +391,24 @@ class Game:
             self.shake_timer -= 1
         if self.flash_timer > 0:
             self.flash_timer -= 1
+        if self.boss_banner_timer > 0:
+            self.boss_banner_timer -= 1
+        for dn in self.damage_numbers:
+            dn["timer"] -= 1
+        self.damage_numbers = [dn for dn in self.damage_numbers if dn["timer"] > 0]
+
+    def _spawn_damage_number(self, x, y, text, color):
+        self.damage_numbers.append({"x": x, "y": y, "text": text, "color": color, "timer": 30, "max_timer": 30})
 
     def _handle_tap(self, pos):
         if self.state == "stats":
             self.state = self.stats_return_state
             return
+        if self.state in ("achievements", "tutorial"):
+            self.state = "title"
+            return
 
-        if self.state in ("title", "dead"):
+        if self.state in ("title", "dead", "paused", "shop"):
             for rect, key in self._tap_targets:
                 if rect.collidepoint(pos):
                     self._handle_key(key)
@@ -323,11 +419,15 @@ class Game:
             return
 
         if self.save_button.collidepoint(pos):
-            self._save_and_quit()
+            self.state = "paused"
             return
         if self.potion_button.collidepoint(pos):
             self._drink_potion()
             return
+        for name, rect in self.scroll_buttons.items():
+            if rect.collidepoint(pos):
+                self._use_scroll(name)
+                return
         for rect, vector, _label in self.dpad_buttons.values():
             if rect.collidepoint(pos):
                 self.touch_direction = vector
@@ -337,6 +437,9 @@ class Game:
         if self.state == "stats":
             self.state = self.stats_return_state
             return
+        if self.state in ("achievements", "tutorial"):
+            self.state = "title"
+            return
 
         if self.state == "title":
             if key == pygame.K_ESCAPE:
@@ -345,6 +448,10 @@ class Game:
             elif key == pygame.K_s:
                 self.stats_return_state = "title"
                 self.state = "stats"
+            elif key == pygame.K_a:
+                self.state = "achievements"
+            elif key == pygame.K_t:
+                self.state = "tutorial"
             elif key == pygame.K_n:
                 self.start_new_run()
             elif key in (pygame.K_RETURN, pygame.K_SPACE):
@@ -365,16 +472,48 @@ class Game:
                 sys.exit()
             return
 
+        if self.state == "paused":
+            if key == pygame.K_ESCAPE:
+                self.state = "playing"
+            elif key == pygame.K_q:
+                self._save_and_quit()
+            elif key == pygame.K_s:
+                self.stats_return_state = "paused"
+                self.state = "stats"
+            return
+
+        if self.state == "shop":
+            if key == pygame.K_ESCAPE:
+                self.state = "playing"
+            elif pygame.K_1 <= key <= pygame.K_4:
+                self._buy_item(key - pygame.K_1)
+            return
+
         if key == pygame.K_ESCAPE:
-            self._save_and_quit()
+            self.state = "paused"
         elif key == pygame.K_g:
             self._drink_potion()
+        elif key == pygame.K_f:
+            self._use_scroll("fireball")
+        elif key == pygame.K_t:
+            self._use_scroll("teleport")
+        elif key == pygame.K_v:
+            self._use_scroll("reveal")
 
     def _player_turn(self, dx, dy):
+        self._tick_poison()
+        if self.state == "dead":
+            return
+
         if dx != 0:
             self.player.facing = 1 if dx > 0 else -1
 
         target_x, target_y = self.player.x + dx, self.player.y + dy
+
+        target_merchant = next((m for m in self.merchants if m.x == target_x and m.y == target_y), None)
+        if target_merchant:
+            self.state = "shop"
+            return
 
         target_monster = next(
             (m for m in self.monsters if m.x == target_x and m.y == target_y), None
@@ -383,6 +522,11 @@ class Game:
             self._attack(self.player, target_monster)
         elif dungeon.is_walkable(self.grid, target_x, target_y):
             self.player.move(dx, dy)
+            pos = (self.player.x, self.player.y)
+            if pos in self.traps:
+                self._trigger_trap(pos)
+                if self.state == "dead":
+                    return
             item = next((i for i in self.items if i.x == self.player.x and i.y == self.player.y), None)
             if item:
                 self._collect_item(item)
@@ -396,12 +540,53 @@ class Game:
             return
         self._enemy_turn()
         self._recompute_fov()
+        self._check_achievements()
+
+    def _tick_poison(self):
+        if self.player.poison_turns <= 0:
+            return
+        self.player.poison_turns -= 1
+        dmg = C.POISON_DAMAGE_PER_TURN
+        self.player.hp -= dmg
+        self._spawn_damage_number(self.player.x, self.player.y, str(dmg), C.COLOR_POISON)
+        self.add_log(f"Poison deals {dmg} damage.")
+        if self.player.hp <= 0:
+            self.add_log("You succumb to the poison.")
+            self.sounds.play("death")
+            self.state = "dead"
+            self._finalize_run()
+
+    def _trigger_trap(self, pos):
+        kind = self.traps.pop(pos)
+        info = C.TRAP_TYPES[kind]
+        if kind == "spike":
+            dmg = random.randint(info["min_damage"], info["max_damage"])
+            self.player.hp -= dmg
+            self._spawn_damage_number(*pos, str(dmg), C.COLOR_TRAP)
+            self.add_log(f"You trigger a {info['name']}! -{dmg} HP.")
+            self.sounds.play("player_hurt")
+            self.shake_timer = 6
+            self.shake_intensity = 4
+            self.flash_timer = 6
+            if self.player.hp <= 0:
+                self.add_log("The trap finishes you off.")
+                self.sounds.play("death")
+                self.state = "dead"
+                self._finalize_run()
+        elif kind == "poison":
+            self.player.poison_turns = max(self.player.poison_turns, info["poison_turns"])
+            self.add_log(f"You trigger a {info['name']}! You are poisoned.")
+        elif kind == "alarm":
+            self.add_log(f"You trigger a {info['name']}! Monsters awaken!")
+            for m in self.monsters:
+                m.awake = True
 
     def _advance_level(self):
         self.dungeon_level += 1
         self.add_log(f"You descend to level {self.dungeon_level}.")
         self.sounds.play("stairs")
         self.new_level()
+        self._check_achievements()
 
     def _collect_item(self, item):
         if item.kind == "potion":
@@ -424,6 +609,15 @@ class Game:
                 self.sounds.play("equip")
             else:
                 self.add_log(f"You find a {item.name}, but your {self.player.armor_name} is better.")
+        elif item.kind == "gold":
+            self.player.gold += item.bonus
+            self.stats["total_gold_collected"] = self.stats.get("total_gold_collected", 0) + item.bonus
+            self.add_log(f"You pick up {item.bonus} gold.")
+            self.sounds.play("pickup")
+        elif item.kind == "scroll":
+            self.player.scrolls[item.scroll_type] += 1
+            self.add_log(f"You pick up a {item.name}.")
+            self.sounds.play("pickup")
         self.items.remove(item)
 
     def _drink_potion(self):
@@ -437,17 +631,100 @@ class Game:
         healed = min(15, self.player.max_hp - self.player.hp)
         self.player.potions -= 1
         self.player.hp += healed
+        self.player.potions_drunk_this_run += 1
         self.stats["total_potions_drunk"] += 1
         self.add_log(f"You drink a potion and heal {healed} HP.")
         self.sounds.play("pickup")
         self._enemy_turn()
+        self._recompute_fov()
+        self._check_achievements()
+
+    def _buy_item(self, index):
+        if index < 0 or index >= len(C.SHOP_STOCK):
+            return
+        stock = C.SHOP_STOCK[index]
+        if self.player.gold < stock["price"]:
+            self.add_log("Not enough gold.")
+            return
+        self.player.gold -= stock["price"]
+        if stock["kind"] == "potion":
+            self.player.potions += 1
+        elif stock["kind"] == "scroll":
+            self.player.scrolls[stock["scroll_type"]] += 1
+        self.add_log(f"Bought a {stock['name']}.")
+        self.sounds.play("equip")
+
+    def _use_scroll(self, scroll_type):
+        if self.state != "playing":
+            return
+        if self.player.scrolls.get(scroll_type, 0) <= 0:
+            self.add_log(f"You have no {C.SCROLL_TYPES[scroll_type]['name']}.")
+            return
+
+        if scroll_type == "fireball":
+            target = min(
+                (m for m in self.monsters if (m.x, m.y) in self.visible),
+                key=lambda m: abs(m.x - self.player.x) + abs(m.y - self.player.y),
+                default=None,
+            )
+            if target is None:
+                self.add_log("No enemy in sight to target.")
+                return
+            self.player.scrolls[scroll_type] -= 1
+            self.stats["total_scrolls_used"] = self.stats.get("total_scrolls_used", 0) + 1
+            affected = [target] + [
+                m for m in self.monsters
+                if m is not target and abs(m.x - target.x) <= 1 and abs(m.y - target.y) <= 1
+            ]
+            dmg = 10 + self.player.level * 2
+            for m in affected:
+                m.hp -= dmg
+                self._spawn_damage_number(m.x, m.y, str(dmg), (255, 140, 40))
+            self.add_log(f"The scroll erupts in fire, hitting {len(affected)} enemies!")
+            self.sounds.play("hit")
+            for m in list(affected):
+                if m.hp <= 0 and m in self.monsters:
+                    self._on_monster_death(m)
+            self._enemy_turn()
+            self._recompute_fov()
+
+        elif scroll_type == "teleport":
+            spot = self._random_floor_tile()
+            self.player.scrolls[scroll_type] -= 1
+            self.stats["total_scrolls_used"] = self.stats.get("total_scrolls_used", 0) + 1
+            if spot:
+                self.player.x, self.player.y = spot
+                self.player.snap()
+                self.add_log("You blink to a new location!")
+                self._recompute_fov()
+            self._enemy_turn()
+
+        elif scroll_type == "reveal":
+            self.player.scrolls[scroll_type] -= 1
+            self.stats["total_scrolls_used"] = self.stats.get("total_scrolls_used", 0) + 1
+            self.explored |= {
+                (x, y) for y in range(C.MAP_HEIGHT) for x in range(C.MAP_WIDTH)
+                if self.grid[y][x] != dungeon.WALL
+            }
+            self.add_log("The level layout is revealed!")
+
+        self._check_achievements()
 
     def _attack(self, attacker, defender):
+        crit = attacker is self.player and random.random() < self.player.crit_chance
         damage = max(1, attacker.power - defender.defense)
+        if crit:
+            damage *= 2
         defender.hp -= damage
         attacker_name = "You" if attacker is self.player else f"The {attacker.name}"
         defender_name = "you" if defender is self.player else f"the {defender.name}"
-        self.add_log(f"{attacker_name} hit {defender_name} for {damage}.")
+        if crit:
+            self.add_log(f"Critical hit! {attacker_name} hit {defender_name} for {damage}.")
+        else:
+            self.add_log(f"{attacker_name} hit {defender_name} for {damage}.")
+
+        number_color = C.COLOR_CRIT if crit else ((255, 255, 255) if attacker is self.player else (255, 120, 120))
+        self._spawn_damage_number(defender.x, defender.y, f"{damage}{'!' if crit else ''}", number_color)
 
         if attacker is self.player:
             self.sounds.play("hit")
@@ -457,6 +734,10 @@ class Game:
             self.shake_intensity = 4
             self.flash_timer = 6
 
+        if getattr(attacker, "poisons_on_hit", False) and defender is self.player and defender.hp > 0:
+            defender.poison_turns = max(defender.poison_turns, 5)
+            self.add_log("The bite poisons you!")
+
         if defender.hp <= 0:
             if defender is self.player:
                 self.add_log("You have died.")
@@ -464,19 +745,73 @@ class Game:
                 self.state = "dead"
                 self._finalize_run()
             else:
-                self.add_log(f"The {defender.name} dies. (+{defender.xp_reward} XP)")
-                self.sounds.play("monster_death")
-                self.monsters.remove(defender)
-                self.player.kills += 1
-                self._record_kill(defender)
-                if self.player.gain_xp(defender.xp_reward):
-                    self.add_log(f"You reach level {self.player.level}!")
-                    self.sounds.play("levelup")
+                self._on_monster_death(defender)
+
+    def _on_monster_death(self, monster):
+        self.add_log(f"The {monster.name} dies. (+{monster.xp_reward} XP)")
+        self.sounds.play("monster_death")
+        if monster in self.monsters:
+            self.monsters.remove(monster)
+        self.player.kills += 1
+        self._record_kill(monster)
+        if monster.splits and not monster.is_split_child:
+            self._spawn_slime_children(monster)
+        if self.player.gain_xp(monster.xp_reward):
+            self.add_log(f"You reach level {self.player.level}!")
+            self.sounds.play("levelup")
+
+    def _spawn_slime_children(self, parent):
+        spots = [
+            (parent.x + 1, parent.y), (parent.x - 1, parent.y),
+            (parent.x, parent.y + 1), (parent.x, parent.y - 1),
+        ]
+        spawned = 0
+        for x, y in spots:
+            if spawned >= 2:
+                break
+            if not dungeon.is_walkable(self.grid, x, y) or self._is_occupied(x, y):
+                continue
+            child = entities.Monster(x, y, parent.kind)
+            child.max_hp = max(1, parent.max_hp // 2)
+            child.hp = child.max_hp
+            child.power = parent.power
+            child.defense = parent.defense
+            child.xp_reward = max(1, parent.xp_reward // 3)
+            child.is_split_child = True
+            child.awake = True
+            self.monsters.append(child)
+            spawned += 1
 
     def _record_kill(self, monster):
         key = "boss" if monster.is_boss else monster.kind
         self.stats["kills_by_monster"][key] = self.stats["kills_by_monster"].get(key, 0) + 1
         self.stats["total_kills"] += 1
+
+    def _check_achievements(self):
+        unlocked = self.stats.setdefault("achievements_unlocked", [])
+        s = self.stats
+        p = self.player
+        checks = {
+            "first_blood": s["total_kills"] >= 1,
+            "survivor": p.level >= 5,
+            "veteran": p.level >= 10,
+            "deep_delver": self.dungeon_level >= 5,
+            "spelunker": self.dungeon_level >= 10,
+            "boss_slayer": s["kills_by_monster"].get("boss", 0) >= 1,
+            "rich": p.gold >= 100,
+            "hoarder": s.get("total_gold_collected", 0) >= 500,
+            "well_read": s.get("total_scrolls_used", 0) >= 10,
+            "persistent": s["deaths"] >= 5,
+            "centurion": s["total_kills"] >= 100,
+            "untouchable": self.dungeon_level >= 3 and p.potions_drunk_this_run == 0,
+        }
+        for ach_id, name, _desc in C.ACHIEVEMENTS:
+            if ach_id in unlocked:
+                continue
+            if checks.get(ach_id):
+                unlocked.append(ach_id)
+                self.add_log(f"Achievement unlocked: {name}!")
+                self.sounds.play("levelup")
 
     def _finalize_run(self):
         new_best = (
@@ -489,6 +824,7 @@ class Game:
         self.stats["most_kills_in_a_run"] = max(self.stats["most_kills_in_a_run"], self.player.kills)
         self.stats["highest_character_level"] = max(self.stats["highest_character_level"], self.player.level)
         self.new_best = new_best
+        self._check_achievements()
 
         persistence.save_stats(self.stats)
         persistence.delete_save()
@@ -502,21 +838,55 @@ class Game:
             if not monster.is_alive():
                 continue
             if (monster.x, monster.y) in self.visible:
+                was_asleep = not monster.awake
                 monster.awake = True
+                if was_asleep and monster.is_boss:
+                    self.boss_banner_timer = 90
+                    self.sounds.play("boss")
             if not monster.awake:
                 continue
 
-            dx = self.player.x - monster.x
-            dy = self.player.y - monster.y
-            if abs(dx) <= 1 and abs(dy) <= 1 and (dx, dy) != (0, 0):
-                self._attack(monster, self.player)
+            for _ in range(monster.speed):
+                if not monster.is_alive() or self.state == "dead":
+                    break
+                self._monster_act(monster)
                 if self.state == "dead":
                     return
-                continue
 
-            step_x = (dx > 0) - (dx < 0)
-            step_y = (dy > 0) - (dy < 0)
-            self._move_monster_toward(monster, step_x, step_y)
+            if monster.regen and monster.is_alive() and monster.hp < monster.max_hp:
+                monster.hp = min(monster.max_hp, monster.hp + monster.regen)
+
+    def _monster_act(self, monster):
+        dx = self.player.x - monster.x
+        dy = self.player.y - monster.y
+        if abs(dx) <= 1 and abs(dy) <= 1 and (dx, dy) != (0, 0):
+            self._attack(monster, self.player)
+            return
+
+        if monster.ranged:
+            dist = abs(dx) + abs(dy)
+            if dist <= C.FOV_RADIUS and self._cardinal_line_clear(monster.x, monster.y, self.player.x, self.player.y):
+                self._attack(monster, self.player)
+                return
+
+        step_x = (dx > 0) - (dx < 0)
+        step_y = (dy > 0) - (dy < 0)
+        self._move_monster_toward(monster, step_x, step_y)
+
+    def _cardinal_line_clear(self, x1, y1, x2, y2):
+        if x1 == x2 and y1 != y2:
+            step = 1 if y2 > y1 else -1
+            for y in range(y1 + step, y2, step):
+                if not dungeon.is_walkable(self.grid, x1, y):
+                    return False
+            return True
+        if y1 == y2 and x1 != x2:
+            step = 1 if x2 > x1 else -1
+            for x in range(x1 + step, x2, step):
+                if not dungeon.is_walkable(self.grid, x, y1):
+                    return False
+            return True
+        return False
 
     def _move_monster_toward(self, monster, step_x, step_y):
         for nx, ny in (
@@ -554,11 +924,35 @@ class Game:
             pygame.display.flip()
             return
 
+        if self.state == "achievements":
+            self._render_achievements()
+            pygame.display.flip()
+            return
+
+        if self.state == "tutorial":
+            self._render_tutorial()
+            pygame.display.flip()
+            return
+
+        if self.state == "shop":
+            self._render_shop()
+            pygame.display.flip()
+            return
+
+        if self.state == "paused":
+            self._render_pause()
+            pygame.display.flip()
+            return
+
         self.screen.fill(C.COLOR_BG)
         ox, oy = self._shake_offset()
         self._render_map(ox, oy)
         self._render_entities(ox, oy)
+        self._render_damage_numbers(ox, oy)
         self._render_flash()
+        self._render_minimap()
+        self._render_boss_bar()
+        self._render_boss_banner()
         self._render_hud()
         self._render_touch_controls()
 
@@ -589,8 +983,8 @@ class Game:
             self.screen.blit(self.player_sprite_large, sprite_rect)
 
         lines = [
-            "Move: WASD / Arrow keys / on-screen D-pad      Attack: walk into enemy",
-            "Drink potion: G / HEAL button      Save & quit: ESC / SAVE button      Stats: S",
+            "Move: WASD / Arrows / D-pad      Fight: walk into enemy      Shop: walk into merchant",
+            "New: gold, scrolls, traps, elites, poison, crits - see the Tutorial for details",
             "",
             f"Deepest level: {self.stats['deepest_level_ever']}      Most kills in a run: {self.stats['most_kills_in_a_run']}",
             "",
@@ -610,10 +1004,11 @@ class Game:
         if self.save_data:
             self._draw_tap_button((cx - 160, button_y, 150, 44), "CONTINUE", pygame.K_RETURN)
             self._draw_tap_button((cx + 10, button_y, 150, 44), "NEW RUN", pygame.K_n)
-            self._draw_tap_button((cx - 75, button_y + 54, 150, 44), "STATS", pygame.K_s)
         else:
             self._draw_tap_button((cx - 75, button_y, 150, 44), "START", pygame.K_RETURN)
-            self._draw_tap_button((cx - 75, button_y + 54, 150, 44), "STATS", pygame.K_s)
+        self._draw_tap_button((cx - 235, button_y + 54, 150, 44), "TUTORIAL", pygame.K_t)
+        self._draw_tap_button((cx - 75, button_y + 54, 150, 44), "STATS", pygame.K_s)
+        self._draw_tap_button((cx + 85, button_y + 54, 150, 44), "ACHIEVEMENTS", pygame.K_a)
 
     def _render_stats(self):
         self.screen.fill(C.COLOR_BG)
@@ -648,6 +1043,160 @@ class Game:
         back_text = self.font.render("BACK", True, C.COLOR_HUD_TEXT)
         self.screen.blit(back_text, back_text.get_rect(center=back_rect.center))
 
+    def _render_achievements(self):
+        self.screen.fill(C.COLOR_BG)
+        title = self.big_font.render("ACHIEVEMENTS", True, (230, 200, 60))
+        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, 50)))
+
+        unlocked = set(self.stats.get("achievements_unlocked", []))
+        for i, (ach_id, name, desc) in enumerate(C.ACHIEVEMENTS):
+            y = 100 + i * 32
+            done = ach_id in unlocked
+            color = (255, 215, 0) if done else (95, 95, 105)
+            mark = "[X]" if done else "[ ]"
+            surf = self.font.render(f"{mark} {name} - {desc}", True, color)
+            self.screen.blit(surf, (60, y))
+
+        footer = self.font.render("Press any key or tap to go back", True, C.COLOR_HUD_TEXT)
+        y = 100 + len(C.ACHIEVEMENTS) * 32 + 30
+        self.screen.blit(footer, footer.get_rect(center=(C.SCREEN_WIDTH // 2, y)))
+
+    def _render_tutorial(self):
+        self.screen.fill(C.COLOR_BG)
+        title = self.big_font.render("HOW TO PLAY", True, (230, 200, 60))
+        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, 40)))
+
+        sections = [
+            ("Movement & Combat", [
+                "Move with WASD / Arrow keys / on-screen D-pad (hold to keep moving).",
+                "Walk into a monster to attack it. Walk into the '>' stairs to descend.",
+                "Your crit chance grows with level; a critical hit deals double damage.",
+            ]),
+            ("Survival", [
+                "G / HEAL button: drink a potion. Potions heal 15 HP.",
+                "Poison (from spiders or poison traps) deals damage each turn until it wears off.",
+                "ESC / MENU button: pause, save & quit, or check stats without dying.",
+            ]),
+            ("Monsters", [
+                "r rat, g goblin, o orc, s skeleton (shoots from range), z slime (splits when killed),",
+                "b bat (fast, moves twice), x spider (poisons on hit).",
+                "Colour-tinted 'elite' monsters are tougher but drop much more XP.",
+                "Every 5th dungeon level a boss guards the stairs - watch its health bar at the top.",
+            ]),
+            ("Loot & Gold", [
+                "$  gold - spend it with merchants (walk into the cyan 'M').",
+                "/  weapons and [  armor auto-equip if they're an upgrade.",
+                "?  scrolls: F = Fireball (damages nearby enemies), T = Teleport (random blink),",
+                "   V = Reveal (shows the full level map).",
+            ]),
+            ("Hazards & Progress", [
+                "Hidden traps trigger when stepped on: spikes, poison gas, or alarms that wake monsters.",
+                "Save & Quit in the pause menu saves your run - resume it from the title screen.",
+                "Lifetime Stats and Achievements are tracked across every run, even after you die.",
+            ]),
+        ]
+
+        y = 90
+        for heading, body_lines in sections:
+            heading_surf = self.font.render(heading, True, (120, 200, 255))
+            self.screen.blit(heading_surf, (50, y))
+            y += 24
+            for line in body_lines:
+                surf = self.font.render(line, True, C.COLOR_HUD_TEXT)
+                self.screen.blit(surf, (70, y))
+                y += 20
+            y += 8
+
+        footer = self.font.render("Press any key or tap to go back", True, C.COLOR_HELP_TEXT)
+        self.screen.blit(footer, footer.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT - 20)))
+
+    def _render_pause(self):
+        self.screen.fill(C.COLOR_BG)
+        self._render_map(0, 0)
+        self._render_entities(0, 0)
+        self._render_hud()
+
+        overlay = pygame.Surface((C.SCREEN_WIDTH, C.SCREEN_HEIGHT))
+        overlay.set_alpha(190)
+        overlay.fill((0, 0, 0))
+        self.screen.blit(overlay, (0, 0))
+
+        self._tap_targets = []
+        title = self.big_font.render("PAUSED", True, (230, 200, 60))
+        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - 110)))
+
+        cx = C.SCREEN_WIDTH // 2
+        self._draw_tap_button((cx - 75, C.SCREEN_HEIGHT // 2 - 30, 150, 44), "RESUME", pygame.K_ESCAPE)
+        self._draw_tap_button((cx - 75, C.SCREEN_HEIGHT // 2 + 24, 150, 44), "STATS", pygame.K_s)
+        self._draw_tap_button((cx - 75, C.SCREEN_HEIGHT // 2 + 78, 150, 44), "SAVE & QUIT", pygame.K_q)
+
+    def _render_shop(self):
+        self.screen.fill(C.COLOR_BG)
+        self._tap_targets = []
+        title = self.big_font.render("MERCHANT", True, C.COLOR_MERCHANT)
+        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, 80)))
+        gold_text = self.font.render(f"Your gold: {self.player.gold}", True, C.COLOR_GOLD)
+        self.screen.blit(gold_text, gold_text.get_rect(center=(C.SCREEN_WIDTH // 2, 126)))
+
+        keys = [pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4]
+        for i, stock in enumerate(C.SHOP_STOCK):
+            y = 180 + i * 60
+            label = f"{i + 1}. {stock['name']} - {stock['price']} gold"
+            surf = self.font.render(label, True, C.COLOR_HUD_TEXT)
+            self.screen.blit(surf, (C.SCREEN_WIDTH // 2 - 260, y + 8))
+            self._draw_tap_button((C.SCREEN_WIDTH // 2 + 120, y - 6, 100, 40), "BUY", keys[i])
+
+        leave_y = 180 + len(C.SHOP_STOCK) * 60 + 20
+        self._draw_tap_button((C.SCREEN_WIDTH // 2 - 75, leave_y, 150, 44), "LEAVE", pygame.K_ESCAPE)
+
+    def _render_minimap(self):
+        mini_x, mini_y, scale = 8, 8, 3
+        w, h = C.MAP_WIDTH * scale, C.MAP_HEIGHT * scale
+        panel = pygame.Surface((w + 4, h + 4), pygame.SRCALPHA)
+        panel.fill((10, 10, 16, 170))
+        self.screen.blit(panel, (mini_x, mini_y))
+        for (x, y) in self.explored:
+            color = (90, 90, 100) if self.grid[y][x] == dungeon.WALL else (55, 55, 65)
+            pygame.draw.rect(self.screen, color, (mini_x + 2 + x * scale, mini_y + 2 + y * scale, scale, scale))
+        if self.stairs_pos in self.explored:
+            sx, sy = self.stairs_pos
+            pygame.draw.rect(self.screen, C.COLOR_STAIRS, (mini_x + 2 + sx * scale, mini_y + 2 + sy * scale, scale, scale))
+        px, py = self.player.x, self.player.y
+        pygame.draw.rect(self.screen, (255, 255, 255), (mini_x + 2 + px * scale, mini_y + 2 + py * scale, scale, scale))
+
+    def _render_boss_bar(self):
+        boss = next((m for m in self.monsters if m.is_boss and m.awake and m.is_alive()), None)
+        if boss is None:
+            return
+        bar_w, bar_h = 400, 22
+        x, y = C.SCREEN_WIDTH // 2 - bar_w // 2, 10
+        pygame.draw.rect(self.screen, (40, 10, 40), (x, y, bar_w, bar_h))
+        ratio = max(0, boss.hp / boss.max_hp)
+        pygame.draw.rect(self.screen, C.COLOR_BOSS, (x, y, int(bar_w * ratio), bar_h))
+        pygame.draw.rect(self.screen, (200, 200, 210), (x, y, bar_w, bar_h), width=2)
+        name_text = self.font.render(f"{boss.name.upper()}  {max(0, boss.hp)}/{boss.max_hp}", True, (255, 255, 255))
+        self.screen.blit(name_text, name_text.get_rect(center=(C.SCREEN_WIDTH // 2, y + bar_h // 2)))
+
+    def _render_boss_banner(self):
+        if self.boss_banner_timer <= 0:
+            return
+        ratio = min(1.0, (self.boss_banner_timer / 90) * 2)
+        text = self.big_font.render("BOSS APPEARS", True, C.COLOR_BOSS)
+        text.set_alpha(int(255 * ratio))
+        self.screen.blit(text, text.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - 250)))
+
+    def _render_damage_numbers(self, ox=0, oy=0):
+        for dn in self.damage_numbers:
+            ratio = dn["timer"] / dn["max_timer"]
+            rise = (1 - ratio) * 22
+            surf = self.font.render(dn["text"], True, dn["color"])
+            surf.set_alpha(int(255 * ratio))
+            center = (
+                int(dn["x"] * C.TILE_SIZE + C.TILE_SIZE // 2 + ox),
+                int(dn["y"] * C.TILE_SIZE + C.TILE_SIZE // 2 + oy - rise),
+            )
+            self.screen.blit(surf, surf.get_rect(center=center))
+
     def _render_map(self, ox=0, oy=0):
         for y in range(C.MAP_HEIGHT):
             for x in range(C.MAP_WIDTH):
@@ -668,6 +1217,10 @@ class Game:
         for item in self.items:
             if (item.x, item.y) in self.visible:
                 self._draw_char(item.char, item.x, item.y, item.color, ox, oy)
+
+        for merchant in self.merchants:
+            if (merchant.x, merchant.y) in self.visible:
+                self._draw_char(merchant.char, merchant.x, merchant.y, merchant.color, ox, oy)
 
         for monster in self.monsters:
             if (monster.x, monster.y) in self.visible:
@@ -731,18 +1284,22 @@ class Game:
             f"Dungeon Lv {self.dungeon_level}    Weapon: {self.player.weapon_name} (+{self.player.weapon_bonus})"
             f"    Armor: {self.player.armor_name} (+{self.player.armor_bonus})"
         )
-        line_b = f"Potions: {self.player.potions}    Kills: {self.player.kills}"
+        line_b = f"Potions: {self.player.potions}    Gold: {self.player.gold}    Kills: {self.player.kills}"
         self.screen.blit(self.font.render(line_a, True, C.COLOR_HUD_TEXT), (10, hud_y + 34))
         self.screen.blit(self.font.render(line_b, True, C.COLOR_HUD_TEXT), (10, hud_y + 54))
 
-        help_text = self.font.render(
-            "Move: WASD/Arrows/D-pad   Drink potion: G/HEAL   Save & quit: ESC/SAVE", True, C.COLOR_HELP_TEXT
+        scrolls = self.player.scrolls
+        scroll_line = (
+            f"Scrolls - Fire(F):{scrolls['fireball']}  Teleport(T):{scrolls['teleport']}  "
+            f"Reveal(V):{scrolls['reveal']}    ESC: Menu"
         )
-        self.screen.blit(help_text, (10, hud_y + 78))
+        poison_suffix = "    POISONED" if self.player.poison_turns > 0 else ""
+        scroll_color = C.COLOR_POISON if self.player.poison_turns > 0 else C.COLOR_HELP_TEXT
+        self.screen.blit(self.font.render(scroll_line + poison_suffix, True, scroll_color), (10, hud_y + 74))
 
         for i, message in enumerate(self.log):
             msg_surf = self.font.render(message, True, C.COLOR_LOG_TEXT)
-            self.screen.blit(msg_surf, (10, hud_y + 100 + i * 18))
+            self.screen.blit(msg_surf, (10, hud_y + 96 + i * 18))
 
     def _draw_touch_button(self, rect, label, active=False):
         overlay = pygame.Surface(rect.size, pygame.SRCALPHA)
@@ -757,7 +1314,10 @@ class Game:
         for name, (rect, vector, label) in self.dpad_buttons.items():
             self._draw_touch_button(rect, label, active=(self.touch_direction == vector))
         self._draw_touch_button(self.potion_button, "HEAL")
-        self._draw_touch_button(self.save_button, "SAVE")
+        self._draw_touch_button(self.save_button, "MENU")
+        scroll_labels = {"fireball": "F", "teleport": "T", "reveal": "V"}
+        for name, rect in self.scroll_buttons.items():
+            self._draw_touch_button(rect, scroll_labels[name])
 
     def _render_game_over(self):
         self._tap_targets = []
