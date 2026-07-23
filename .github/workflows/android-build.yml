@@ -12,7 +12,10 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # python-for-android's libffi recipe fails to autoreconf on Ubuntu 24.04
+    # ("possibly undefined macro: LT_SYS_SYMBOL_USCORE") due to newer autotools.
+    # Pin to 22.04 until upstream recipes catch up.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
