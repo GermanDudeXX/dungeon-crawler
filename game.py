@@ -39,6 +39,9 @@ class Game:
         self.state = "title"
         self.stats_return_state = "title"
         self.new_best = False
+        self.touch_direction = None
+        self._tap_targets = []
+        self._setup_touch_controls()
 
     def _load_player_sprite(self):
         try:
@@ -51,6 +54,18 @@ class Game:
         left = pygame.transform.flip(right, True, False)
         large = pygame.transform.smoothscale(image, (width * 2, height * 2))
         return right, left, large
+
+    def _setup_touch_controls(self):
+        s, g = 44, 6
+        dpad_cx, dpad_cy = 875, 520
+        self.dpad_buttons = {
+            "up": (pygame.Rect(dpad_cx - s // 2, dpad_cy - s - g, s, s), (0, -1), "^"),
+            "down": (pygame.Rect(dpad_cx - s // 2, dpad_cy + g, s, s), (0, 1), "v"),
+            "left": (pygame.Rect(dpad_cx - s - g - s // 2, dpad_cy - s // 2, s, s), (-1, 0), "<"),
+            "right": (pygame.Rect(dpad_cx + g + s // 2, dpad_cy - s // 2, s, s), (1, 0), ">"),
+        }
+        self.potion_button = pygame.Rect(712, 492, 56, 56)
+        self.save_button = pygame.Rect(895, 8, 58, 30)
 
     def start_new_run(self):
         persistence.delete_save()
@@ -246,6 +261,10 @@ class Game:
                     sys.exit()
                 if event.type == pygame.KEYDOWN:
                     self._handle_key(event.key)
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    self._handle_tap(event.pos)
+                elif event.type == pygame.MOUSEBUTTONUP:
+                    self.touch_direction = None
 
             if self.state == "playing":
                 self._handle_movement_repeat()
@@ -261,6 +280,9 @@ class Game:
             if keys[key]:
                 dx, dy = vector
                 break
+
+        if dx == 0 and dy == 0 and self.touch_direction:
+            dx, dy = self.touch_direction
 
         if dx == 0 and dy == 0:
             self.move_repeat_timer = 0
@@ -284,6 +306,32 @@ class Game:
             self.shake_timer -= 1
         if self.flash_timer > 0:
             self.flash_timer -= 1
+
+    def _handle_tap(self, pos):
+        if self.state == "stats":
+            self.state = self.stats_return_state
+            return
+
+        if self.state in ("title", "dead"):
+            for rect, key in self._tap_targets:
+                if rect.collidepoint(pos):
+                    self._handle_key(key)
+                    return
+            return
+
+        if self.state != "playing":
+            return
+
+        if self.save_button.collidepoint(pos):
+            self._save_and_quit()
+            return
+        if self.potion_button.collidepoint(pos):
+            self._drink_potion()
+            return
+        for rect, vector, _label in self.dpad_buttons.values():
+            if rect.collidepoint(pos):
+                self.touch_direction = vector
+                return
 
     def _handle_key(self, key):
         if self.state == "stats":
@@ -512,14 +560,24 @@ class Game:
         self._render_entities(ox, oy)
         self._render_flash()
         self._render_hud()
+        self._render_touch_controls()
 
         if self.state == "dead":
             self._render_game_over()
 
         pygame.display.flip()
 
+    def _draw_tap_button(self, rect, label, key):
+        rect = pygame.Rect(rect)
+        pygame.draw.rect(self.screen, (45, 45, 58), rect, border_radius=8)
+        pygame.draw.rect(self.screen, (130, 130, 150), rect, width=2, border_radius=8)
+        text = self.font.render(label, True, C.COLOR_HUD_TEXT)
+        self.screen.blit(text, text.get_rect(center=rect.center))
+        self._tap_targets.append((rect, key))
+
     def _render_title(self):
         self.screen.fill(C.COLOR_BG)
+        self._tap_targets = []
         title = self.big_font.render("DUNGEON CRAWLER", True, (230, 200, 60))
         rect = title.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - 160))
         self.screen.blit(title, rect)
@@ -531,8 +589,8 @@ class Game:
             self.screen.blit(self.player_sprite_large, sprite_rect)
 
         lines = [
-            "Move: WASD / Arrow keys      Attack: walk into enemy",
-            "Drink potion: G      Save & quit: ESC      Stats: S",
+            "Move: WASD / Arrow keys / on-screen D-pad      Attack: walk into enemy",
+            "Drink potion: G / HEAL button      Save & quit: ESC / SAVE button      Stats: S",
             "",
             f"Deepest level: {self.stats['deepest_level_ever']}      Most kills in a run: {self.stats['most_kills_in_a_run']}",
             "",
@@ -540,15 +598,22 @@ class Game:
         if self.save_data:
             saved_level = self.save_data["dungeon_level"]
             saved_char_level = self.save_data["player"]["level"]
-            lines.append(f"Press ENTER to continue  (Dungeon Lv {saved_level}, Character Lv {saved_char_level})")
-            lines.append("Press N to start a new run")
-        else:
-            lines.append("Press ENTER or SPACE to start")
+            lines.append(f"Dungeon Lv {saved_level}, Character Lv {saved_char_level} saved")
 
         for i, line in enumerate(lines):
             surf = self.font.render(line, True, C.COLOR_HUD_TEXT)
             r = surf.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 + 20 + i * 26))
             self.screen.blit(surf, r)
+
+        button_y = C.SCREEN_HEIGHT // 2 + 20 + len(lines) * 26 + 14
+        cx = C.SCREEN_WIDTH // 2
+        if self.save_data:
+            self._draw_tap_button((cx - 160, button_y, 150, 44), "CONTINUE", pygame.K_RETURN)
+            self._draw_tap_button((cx + 10, button_y, 150, 44), "NEW RUN", pygame.K_n)
+            self._draw_tap_button((cx - 75, button_y + 54, 150, 44), "STATS", pygame.K_s)
+        else:
+            self._draw_tap_button((cx - 75, button_y, 150, 44), "START", pygame.K_RETURN)
+            self._draw_tap_button((cx - 75, button_y + 54, 150, 44), "STATS", pygame.K_s)
 
     def _render_stats(self):
         self.screen.fill(C.COLOR_BG)
@@ -570,12 +635,18 @@ class Game:
             f"Rats: {kb.get('rat', 0)}   Goblins: {kb.get('goblin', 0)}   "
             f"Orcs: {kb.get('orc', 0)}   Bosses: {kb.get('boss', 0)}",
             "",
-            "Press any key to go back",
+            "Press any key or tap BACK to go back",
         ]
         for i, line in enumerate(lines):
             surf = self.font.render(line, True, C.COLOR_HUD_TEXT)
             r = surf.get_rect(center=(C.SCREEN_WIDTH // 2, 180 + i * 30))
             self.screen.blit(surf, r)
+
+        back_rect = pygame.Rect(C.SCREEN_WIDTH // 2 - 75, 180 + len(lines) * 30 + 10, 150, 44)
+        pygame.draw.rect(self.screen, (45, 45, 58), back_rect, border_radius=8)
+        pygame.draw.rect(self.screen, (130, 130, 150), back_rect, width=2, border_radius=8)
+        back_text = self.font.render("BACK", True, C.COLOR_HUD_TEXT)
+        self.screen.blit(back_text, back_text.get_rect(center=back_rect.center))
 
     def _render_map(self, ox=0, oy=0):
         for y in range(C.MAP_HEIGHT):
@@ -664,14 +735,32 @@ class Game:
         self.screen.blit(self.font.render(line_a, True, C.COLOR_HUD_TEXT), (10, hud_y + 34))
         self.screen.blit(self.font.render(line_b, True, C.COLOR_HUD_TEXT), (10, hud_y + 54))
 
-        help_text = self.font.render("Move: WASD/Arrows   Drink potion: G   Save & quit: ESC", True, C.COLOR_HELP_TEXT)
+        help_text = self.font.render(
+            "Move: WASD/Arrows/D-pad   Drink potion: G/HEAL   Save & quit: ESC/SAVE", True, C.COLOR_HELP_TEXT
+        )
         self.screen.blit(help_text, (10, hud_y + 78))
 
         for i, message in enumerate(self.log):
             msg_surf = self.font.render(message, True, C.COLOR_LOG_TEXT)
             self.screen.blit(msg_surf, (10, hud_y + 100 + i * 18))
 
+    def _draw_touch_button(self, rect, label, active=False):
+        overlay = pygame.Surface(rect.size, pygame.SRCALPHA)
+        fill = (90, 90, 110, 170) if active else (40, 40, 50, 130)
+        overlay.fill(fill)
+        self.screen.blit(overlay, rect.topleft)
+        pygame.draw.rect(self.screen, (150, 150, 170, 200), rect, width=2, border_radius=6)
+        text = self.font.render(label, True, C.COLOR_HUD_TEXT)
+        self.screen.blit(text, text.get_rect(center=rect.center))
+
+    def _render_touch_controls(self):
+        for name, (rect, vector, label) in self.dpad_buttons.items():
+            self._draw_touch_button(rect, label, active=(self.touch_direction == vector))
+        self._draw_touch_button(self.potion_button, "HEAL")
+        self._draw_touch_button(self.save_button, "SAVE")
+
     def _render_game_over(self):
+        self._tap_targets = []
         overlay = pygame.Surface((C.SCREEN_WIDTH, C.SCREEN_HEIGHT))
         overlay.set_alpha(210)
         overlay.fill((0, 0, 0))
@@ -686,10 +775,15 @@ class Game:
         ]
         if self.new_best:
             lines.append("NEW BEST RUN!")
-        lines.append("Press R to restart   -   S for stats   -   ESC to quit")
 
         for i, line in enumerate(lines):
             color = (255, 215, 0) if line == "NEW BEST RUN!" else C.COLOR_HUD_TEXT
             surf = self.font.render(line, True, color)
             r = surf.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - 10 + i * 28))
             self.screen.blit(surf, r)
+
+        button_y = C.SCREEN_HEIGHT // 2 - 10 + len(lines) * 28 + 20
+        cx = C.SCREEN_WIDTH // 2
+        self._draw_tap_button((cx - 235, button_y, 150, 44), "RESTART", pygame.K_r)
+        self._draw_tap_button((cx - 75, button_y, 150, 44), "STATS", pygame.K_s)
+        self._draw_tap_button((cx + 85, button_y, 150, 44), "QUIT", pygame.K_ESCAPE)
