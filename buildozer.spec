@@ -13,7 +13,7 @@ fullscreen = 1
 
 android.permissions =
 android.api = 34
-android.minapi = 21
+android.minapi = 24
 android.ndk = 25b
 android.accept_sdk_license = True
 android.archs = arm64-v8a, armeabi-v7a
