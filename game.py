@@ -62,6 +62,7 @@ class Game:
         self.settings = persistence.load_settings()
         self.sounds = sound.Sounds(volume=self.settings.get("volume", sound.MASTER_VOLUME))
         self.player_sprite_right, self.player_sprite_left, self.player_sprite_large = self._load_player_sprite()
+        self.monster_sprites = self._load_monster_sprites()
         self.state = "title"
         self.stats_return_state = "title"
         self.settings_return_state = "title"
@@ -82,6 +83,19 @@ class Game:
         left = pygame.transform.flip(right, True, False)
         large = pygame.transform.smoothscale(image, (width * 2, height * 2))
         return right, left, large
+
+    def _load_monster_sprites(self):
+        sprites = {}
+        for kind in C.MONSTER_TYPES:
+            path = os.path.join(C.MONSTER_SPRITE_DIR, f"{kind}.png")
+            try:
+                image = pygame.image.load(path).convert_alpha()
+            except (pygame.error, FileNotFoundError):
+                continue
+            height = C.MONSTER_SPRITE_HEIGHT
+            width = int(image.get_width() * (height / image.get_height()))
+            sprites[kind] = pygame.transform.smoothscale(image, (width, height))
+        return sprites
 
     def _setup_touch_controls(self):
         # Classic two-thumb mobile layout: movement bottom-left, actions
@@ -1601,7 +1615,7 @@ class Game:
 
         for monster in self.monsters:
             if (monster.x, monster.y) in self.visible:
-                self._draw_char(monster.char, monster.render_x, monster.render_y, monster.color, ox, oy)
+                self._draw_monster(monster, ox, oy)
                 self._record_bestiary(monster.kind)
 
         self._draw_player(ox, oy)
@@ -1615,6 +1629,35 @@ class Game:
         tile_center_x = self.player.render_x * C.TILE_SIZE + C.TILE_SIZE // 2 + ox
         tile_bottom_y = self.player.render_y * C.TILE_SIZE + C.TILE_SIZE + oy
         rect = sprite.get_rect(midbottom=(int(tile_center_x), int(tile_bottom_y) + 2))
+        self.screen.blit(sprite, rect)
+
+    def _draw_monster(self, monster, ox=0, oy=0):
+        sprite = self.monster_sprites.get(monster.kind)
+        if sprite is None:
+            self._draw_char(monster.char, monster.render_x, monster.render_y, monster.color, ox, oy)
+            return
+
+        scale = 1.0
+        if monster.is_boss:
+            scale = C.BOSS_SPRITE_SCALE
+        elif monster.is_split_child:
+            scale = C.SPLIT_CHILD_SPRITE_SCALE
+        if scale != 1.0:
+            w, h = sprite.get_size()
+            sprite = pygame.transform.smoothscale(sprite, (max(1, int(w * scale)), max(1, int(h * scale))))
+
+        tile_center_x = monster.render_x * C.TILE_SIZE + C.TILE_SIZE // 2 + ox
+        tile_bottom_y = monster.render_y * C.TILE_SIZE + C.TILE_SIZE + oy
+        rect = sprite.get_rect(midbottom=(int(tile_center_x), int(tile_bottom_y) + 2))
+
+        if monster.elite_name:
+            # Soft colour-matched halo (same blended colour already used
+            # for the elite's HP/name tint) instead of recolouring the
+            # sprite itself - cheap and reads as "special" at a glance.
+            glow = pygame.Surface((int(sprite.get_width() * 1.3), int(sprite.get_height() * 1.3)), pygame.SRCALPHA)
+            pygame.draw.ellipse(glow, (*monster.color, 100), glow.get_rect())
+            self.screen.blit(glow, glow.get_rect(center=rect.center))
+
         self.screen.blit(sprite, rect)
 
     def _draw_char(self, char, x, y, color, ox=0, oy=0):
