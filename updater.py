@@ -64,6 +64,22 @@ def download_update(url, dest_path, progress_cb=None):
                 done += len(chunk)
                 if progress_cb:
                     progress_cb(done, total)
+
+    # Verify the file actually landed intact before anything downstream
+    # treats it as good. Real trigger for adding this: a user's antivirus
+    # flagged the built .exe as a (false-positive) trojan and interfered
+    # with the self-update download, leaving a truncated file that then
+    # got swapped into place and failed to start ("failed to load Python
+    # DLL") - this check turns that into a clear error instead of a
+    # silently broken install.
+    actual_size = os.path.getsize(tmp_path)
+    if total and actual_size != total:
+        os.remove(tmp_path)
+        raise RuntimeError(
+            f"download incomplete ({actual_size} of {total} bytes) - "
+            "antivirus software may have removed or altered it"
+        )
+
     os.replace(tmp_path, dest_path)
     return dest_path
 
@@ -74,7 +90,7 @@ def can_self_update():
     return ON_ANDROID or getattr(sys, "frozen", False)
 
 
-def apply_update_pc(new_exe_path):
+def apply_update_pc(new_exe_path, expected_size=None):
     current_exe = os.path.abspath(sys.executable)
     exe_name = os.path.basename(current_exe)
     exe_dir = os.path.dirname(current_exe)
@@ -91,6 +107,21 @@ def apply_update_pc(new_exe_path):
     # idiom, used here instead of timeout.exe specifically because
     # timeout.exe can refuse to run at all without a real console attached
     # to stdin, which a hidden/no-window process may not reliably have.
+    #
+    # The file-size check right before the move is a second line of
+    # defense on top of download_update()'s own size check: antivirus
+    # software can quarantine/truncate a file *after* Python already
+    # verified it and moved on, in the window while this script is still
+    # waiting for the old process to exit. Skipping the move (and just
+    # relaunching the still-intact old exe) if the new file looks wrong
+    # beats swapping in a broken one that fails to start at all.
+    size_check = ""
+    if expected_size:
+        size_check = (
+            f'set NEWSIZE=0\r\n'
+            f'for %%A in ("{new_exe_path}") do set NEWSIZE=%%~zA\r\n'
+            f'if not "%NEWSIZE%"=="{expected_size}" goto skip_move\r\n'
+        )
     script = (
         "@echo off\r\n"
         "setlocal\r\n"
@@ -102,7 +133,10 @@ def apply_update_pc(new_exe_path):
         "  goto wait\r\n"
         ")\r\n"
         "%SystemRoot%\\System32\\PING.EXE -n 2 127.0.0.1 >NUL\r\n"
+        f'if not exist "{new_exe_path}" goto skip_move\r\n'
+        f"{size_check}"
         f'move /y "{new_exe_path}" "{current_exe}" >NUL\r\n'
+        ":skip_move\r\n"
         f'start "" "{current_exe}"\r\n'
         'del "%~f0"\r\n'
     )

@@ -3,16 +3,55 @@ import os
 import sys
 
 # A PyInstaller-frozen exe's __file__ resolves inside its temporary
-# extraction dir (sys._MEIPASS), which gets wiped on exit - save data
-# written there would vanish every run. Use the actual exe's directory
-# instead so saves/stats persist next to it, like a normal portable app.
+# extraction dir (sys._MEIPASS), which gets wiped on exit, so save data
+# can't live there. Earlier this wrote next to the .exe itself instead -
+# works, but leaves stats.json/save.json/settings.json sitting in plain
+# sight in whatever folder the user put the .exe (typically Downloads).
+# Windows' own per-user AppData folder is the conventional place for this
+# kind of data and is hidden from Explorer by default, so use that
+# instead - %APPDATA%\DungeonCrawler\. Not applicable on Android (no
+# sys.frozen there either way; p4a's own app-private storage already
+# keeps this out of casual sight without any special-casing here) or
+# when running from source (kept next to the .py files for dev
+# convenience, matching how the test scripts already expect it).
 if getattr(sys, "frozen", False):
-    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    _appdata = os.environ.get("APPDATA")
+    if _appdata:
+        BASE_DIR = os.path.join(_appdata, "DungeonCrawler")
+        os.makedirs(BASE_DIR, exist_ok=True)
+    else:
+        BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATS_PATH = os.path.join(BASE_DIR, "stats.json")
 SAVE_PATH = os.path.join(BASE_DIR, "save.json")
 SETTINGS_PATH = os.path.join(BASE_DIR, "settings.json")
+
+
+def _migrate_legacy_files():
+    """Copies any stats/save/settings files an earlier build left next to
+    the .exe into the new AppData location, once, then removes the old
+    copies - so switching locations doesn't look like lost progress to
+    someone who already has real save data sitting next to their .exe."""
+    if not getattr(sys, "frozen", False):
+        return
+    legacy_dir = os.path.dirname(os.path.abspath(sys.executable))
+    if os.path.abspath(legacy_dir) == os.path.abspath(BASE_DIR):
+        return
+    for name, dest in (("stats.json", STATS_PATH), ("save.json", SAVE_PATH), ("settings.json", SETTINGS_PATH)):
+        legacy_path = os.path.join(legacy_dir, name)
+        if os.path.exists(legacy_path) and not os.path.exists(dest):
+            try:
+                with open(legacy_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                with open(dest, "w", encoding="utf-8") as f:
+                    f.write(content)
+                os.remove(legacy_path)
+            except OSError:
+                pass
+
+
+_migrate_legacy_files()
 
 DEFAULT_SETTINGS = {
     "language": "en",

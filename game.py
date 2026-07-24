@@ -551,7 +551,7 @@ class Game:
                 self.update_phase = "needs_permission" if result == "needs_permission" else "launched"
             elif updater.can_self_update():
                 self.update_phase = "restarting"
-                updater.apply_update_pc(dest_path)
+                updater.apply_update_pc(dest_path, expected_size=info["size"])
                 # Hard-exit from this worker thread rather than pygame.quit()
                 # (an SDL call, unsafe off the main thread) - the relaunch
                 # batch script is already waiting for this process to die.
