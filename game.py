@@ -94,7 +94,9 @@ class Game:
                 continue
             height = C.MONSTER_SPRITE_HEIGHT
             width = int(image.get_width() * (height / image.get_height()))
-            sprites[kind] = pygame.transform.smoothscale(image, (width, height))
+            right = pygame.transform.smoothscale(image, (width, height))
+            left = pygame.transform.flip(right, True, False)
+            sprites[kind] = (right, left)
         return sprites
 
     def _setup_touch_controls(self):
@@ -1112,6 +1114,8 @@ class Game:
     def _monster_act(self, monster):
         dx = self.player.x - monster.x
         dy = self.player.y - monster.y
+        if dx != 0:
+            monster.facing = 1 if dx > 0 else -1
         if abs(dx) <= 1 and abs(dy) <= 1 and (dx, dy) != (0, 0):
             self._attack(monster, self.player)
             return
@@ -1632,10 +1636,11 @@ class Game:
         self.screen.blit(sprite, rect)
 
     def _draw_monster(self, monster, ox=0, oy=0):
-        sprite = self.monster_sprites.get(monster.kind)
-        if sprite is None:
+        variants = self.monster_sprites.get(monster.kind)
+        if variants is None:
             self._draw_char(monster.char, monster.render_x, monster.render_y, monster.color, ox, oy)
             return
+        sprite = variants[1] if monster.facing < 0 else variants[0]
 
         scale = 1.0
         if monster.is_boss:

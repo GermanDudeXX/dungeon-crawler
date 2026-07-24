@@ -98,6 +98,7 @@ class Monster(Entity):
 
         super().__init__(x, y, char, color, name)
         self.kind = kind
+        self.facing = 1
         multiplier = 3 if boss else 1
         base_hp = stats["hp"] * multiplier
         base_power = stats["power"] + (stats["power"] // 2 if boss else 0)
