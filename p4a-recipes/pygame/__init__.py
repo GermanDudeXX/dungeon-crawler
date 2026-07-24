@@ -37,20 +37,26 @@ class Pygame2Recipe(CompiledComponentsPythonRecipe):
        from pygame's own buildconfig/Setup.Android.SDL2.in template. That
        template lists the `surface` module's sources as exactly
        `src_c/surface.c src_c/alphablit.c src_c/surface_fill.c` - it
-       predates pygame's SIMD blitter file, src_c/simd_blitters_sse2.c,
-       and was never updated to include it. alphablit.c calls SIMD blit
-       functions like alphablit_alpha_sse2_argb_surf_alpha (declared in
-       simd_blitters.h, which alphablit.c includes) but since
-       simd_blitters_sse2.c - the file that actually *defines* them - is
+       predates pygame's SIMD blitter files (src_c/simd_blitters_sse2.c,
+       src_c/simd_blitters_avx2.c) and was never updated to include them.
+       alphablit.c calls SIMD blit functions (e.g.
+       alphablit_alpha_sse2_argb_surf_alpha) and the always-defined
+       pg_has_avx2()/pg_avx2_at_runtime_but_uncompiled() runtime-detection
+       helpers, all declared in simd_blitters.h (which alphablit.c
+       includes) - but since the two files that actually *define* them are
        never compiled at all, they end up permanently undefined in
        surface.so, regardless of any SSE2/NEON compiler flag or macro.
        That's an unconditional dlopen-time relocation failure (the
-       functions are called through a dispatch table, not a lazily-bound
-       plain call site), so it crashes on every launch on every device,
-       arm64 or armv7, no exceptions to catch on the Python side - this
-       is what NEON alone (fix 2) could never have fixed. prebuild_arch
-       patches the Setup-file text to add the missing source file to the
-       surface module's line before it's written out.
+       functions are referenced through dispatch tables/direct calls, not
+       lazily-bound plain call sites), so it crashes on every launch on
+       every device, arm64 or armv7, no exceptions to catch on the Python
+       side - this is what NEON alone (fix 2) could never have fixed.
+       prebuild_arch patches the Setup-file text to add both missing
+       source files to the surface module's line before it's written out.
+       simd_blitters_avx2.c compiles cleanly on ARM as-is: its actual AVX2
+       intrinsics are self-guarded behind __AVX2__/HAVE_IMMINTRIN_H (never
+       true here), it just always needs to be *compiled*, same as the
+       SSE2 file.
 
     .. warning:: Some pygame functionality is still untested, and some
         dependencies like freetype, postmidi and libjpeg are currently
@@ -73,15 +79,22 @@ class Pygame2Recipe(CompiledComponentsPythonRecipe):
         super().prebuild_arch(arch)
         with current_directory(self.get_build_dir(arch.arch)):
             setup_template = open(join("buildconfig", "Setup.Android.SDL2.in")).read()
-            missing_simd_source = "src_c/simd_blitters_sse2.c"
+            # simd_blitters_avx2.c self-guards its actual AVX2 code behind
+            # __AVX2__/HAVE_IMMINTRIN_H (never true on ARM) but always
+            # defines pg_has_avx2()/pg_avx2_at_runtime_but_uncompiled(),
+            # which alphablit.c calls unconditionally - same missing-file,
+            # same undefined-symbol pattern as simd_blitters_sse2.c, just
+            # for a second, independent SIMD tier. Compiles clean on ARM.
+            missing_simd_sources = ["src_c/simd_blitters_sse2.c", "src_c/simd_blitters_avx2.c"]
             surface_sources = "src_c/surface.c src_c/alphablit.c src_c/surface_fill.c"
-            if missing_simd_source not in setup_template:
+            addition = " ".join(s for s in missing_simd_sources if s not in setup_template)
+            if addition:
                 assert surface_sources in setup_template, (
                     "pygame's Setup.Android.SDL2.in template changed - "
-                    "update the simd_blitters_sse2.c patch in p4a-recipes/pygame"
+                    "update the simd_blitters patch in p4a-recipes/pygame"
                 )
                 setup_template = setup_template.replace(
-                    surface_sources, surface_sources + " " + missing_simd_source
+                    surface_sources, surface_sources + " " + addition
                 )
             env = self.get_recipe_env(arch)
             env['ANDROID_ROOT'] = join(self.ctx.ndk.sysroot, 'usr')
