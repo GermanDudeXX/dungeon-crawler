@@ -24,11 +24,23 @@ jobs:
         with:
           python-version: "3.11"
 
+      # ubuntu-22.04 runners ship several JDKs (8/11/17/21/25) with JAVA_HOME
+      # defaulting to 11. The Android Gradle Plugin (via buildozer's gradlew
+      # step) requires 17+; apt-installing openjdk-17-jdk alone doesn't
+      # change JAVA_HOME, so gradlew fails with "requires Java 17 ... You
+      # are currently using Java 11". setup-java points JAVA_HOME at 17 for
+      # every later step.
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            git zip unzip openjdk-17-jdk python3-pip autoconf libtool \
+            git zip unzip python3-pip autoconf libtool \
             pkg-config zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev \
             build-essential ccache automake
 
