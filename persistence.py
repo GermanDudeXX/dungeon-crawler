@@ -1,7 +1,15 @@
 import json
 import os
+import sys
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# A PyInstaller-frozen exe's __file__ resolves inside its temporary
+# extraction dir (sys._MEIPASS), which gets wiped on exit - save data
+# written there would vanish every run. Use the actual exe's directory
+# instead so saves/stats persist next to it, like a normal portable app.
+if getattr(sys, "frozen", False):
+    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATS_PATH = os.path.join(BASE_DIR, "stats.json")
 SAVE_PATH = os.path.join(BASE_DIR, "save.json")
 SETTINGS_PATH = os.path.join(BASE_DIR, "settings.json")

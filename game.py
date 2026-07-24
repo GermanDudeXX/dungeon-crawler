@@ -63,6 +63,7 @@ class Game:
         self.settings_return_state = "title"
         self.new_best = False
         self.touch_direction = None
+        self.touch_warning_timer = 0
         self._tap_targets = []
         self._setup_touch_controls()
 
@@ -80,10 +81,11 @@ class Game:
 
     def _setup_touch_controls(self):
         # Classic two-thumb mobile layout: movement bottom-left, actions
-        # bottom-right, both overlaid on the map view (the HUD strip below
-        # is already packed with text, no room for big buttons there).
-        s, g = 44, 6
-        dpad_cx, dpad_cy = 95, 520
+        # bottom-right, each fully inside its own side gutter (not overlaid
+        # on the map view) so they're big enough to actually hit and never
+        # obscure the dungeon.
+        s, g = 64, 8
+        dpad_cx, dpad_cy = C.GUTTER_WIDTH // 2, 480
         self.dpad_buttons = {
             "up": (pygame.Rect(dpad_cx - s // 2, dpad_cy - s - g, s, s), (0, -1), "^"),
             "down": (pygame.Rect(dpad_cx - s // 2, dpad_cy + g, s, s), (0, 1), "v"),
@@ -92,21 +94,24 @@ class Game:
         }
 
         action_right_edge = C.SCREEN_WIDTH - 16
-        self.potion_button = pygame.Rect(action_right_edge - 56, 492, 56, 56)
+        potion_size = 76
+        self.potion_button = pygame.Rect(action_right_edge - potion_size, 500, potion_size, potion_size)
 
-        scroll_size = 40
-        scroll_y = 492 - 6 - scroll_size
-        scroll_row_width = 3 * scroll_size + 2 * 4
+        scroll_size = 52
+        scroll_gap = 8
+        scroll_y = 500 - scroll_gap - scroll_size
+        scroll_row_width = 3 * scroll_size + 2 * scroll_gap
         scroll_start_x = action_right_edge - scroll_row_width
         self.scroll_buttons = {
             "fireball": pygame.Rect(scroll_start_x, scroll_y, scroll_size, scroll_size),
-            "teleport": pygame.Rect(scroll_start_x + (scroll_size + 4), scroll_y, scroll_size, scroll_size),
-            "reveal": pygame.Rect(scroll_start_x + 2 * (scroll_size + 4), scroll_y, scroll_size, scroll_size),
+            "teleport": pygame.Rect(scroll_start_x + (scroll_size + scroll_gap), scroll_y, scroll_size, scroll_size),
+            "reveal": pygame.Rect(scroll_start_x + 2 * (scroll_size + scroll_gap), scroll_y, scroll_size, scroll_size),
         }
 
         # Bigger and pinned to the top-right corner so it's always easy to
-        # find and tap - this is the only touch way back to the pause menu.
-        self.save_button = pygame.Rect(C.SCREEN_WIDTH - 96, 8, 88, 40)
+        # find and tap - this is the only touch way back to the pause menu,
+        # and it stays visible even when show_touch_controls is off.
+        self.save_button = pygame.Rect(C.SCREEN_WIDTH - 140, 8, 124, 52)
 
     def start_new_run(self):
         persistence.delete_save()
@@ -393,6 +398,18 @@ class Game:
         self.settings["show_touch_controls"] = not self.settings.get("show_touch_controls", True)
         persistence.save_settings(self.settings)
 
+    def _request_toggle_touch_controls(self):
+        # Turning controls back ON, or toggling on PC (keyboard is always
+        # there), is safe to do instantly. Turning them OFF on Android
+        # removes the only way to move/act on a touchscreen, so gate it
+        # behind a mandatory-wait confirmation instead of a plain toggle.
+        currently_on = self.settings.get("show_touch_controls", True)
+        if currently_on and ON_ANDROID:
+            self.touch_warning_timer = 300
+            self.state = "confirm_disable_touch"
+        else:
+            self._toggle_touch_controls()
+
     def _toggle_language(self):
         self.settings["language"] = "de" if self._lang() == "en" else "en"
         persistence.save_settings(self.settings)
@@ -467,6 +484,8 @@ class Game:
             if self.state == "playing":
                 self._handle_movement_repeat()
                 self._update_animations()
+            elif self.state == "confirm_disable_touch" and self.touch_warning_timer > 0:
+                self.touch_warning_timer -= 1
 
             self.render()
             self.clock.tick(30)
@@ -521,7 +540,7 @@ class Game:
             self.state = "title"
             return
 
-        if self.state in ("title", "dead", "paused", "shop", "settings", "levelup_choice"):
+        if self.state in ("title", "dead", "paused", "shop", "settings", "levelup_choice", "confirm_disable_touch"):
             for rect, key in self._tap_targets:
                 if rect.collidepoint(pos):
                     self._handle_key(key)
@@ -531,12 +550,15 @@ class Game:
         if self.state != "playing":
             return
 
-        if not self.settings.get("show_touch_controls", True):
-            return
-
+        # The menu button always works, even with show_touch_controls off -
+        # see _render_touch_controls for why.
         if self.save_button.collidepoint(pos):
             self.state = "paused"
             return
+
+        if not self.settings.get("show_touch_controls", True):
+            return
+
         if self.potion_button.collidepoint(pos):
             self._drink_potion()
             return
@@ -561,9 +583,17 @@ class Game:
             if key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_SPACE):
                 self.state = self.settings_return_state
             elif key == pygame.K_c:
-                self._toggle_touch_controls()
+                self._request_toggle_touch_controls()
             elif key == pygame.K_l:
                 self._toggle_language()
+            return
+
+        if self.state == "confirm_disable_touch":
+            if key == pygame.K_ESCAPE:
+                self.state = "settings"
+            elif key == pygame.K_RETURN and self.touch_warning_timer <= 0:
+                self._toggle_touch_controls()
+                self.state = "settings"
             return
 
         if self.state == "title":
@@ -1096,10 +1126,12 @@ class Game:
             return
 
     def _shake_offset(self):
+        # C.MAP_OFFSET_X is the base offset that keeps the map centered
+        # between the two control gutters - not just a screen-shake delta.
         if self.shake_timer <= 0:
-            return 0, 0
+            return C.MAP_OFFSET_X, 0
         return (
-            random.randint(-self.shake_intensity, self.shake_intensity),
+            C.MAP_OFFSET_X + random.randint(-self.shake_intensity, self.shake_intensity),
             random.randint(-self.shake_intensity, self.shake_intensity),
         )
 
@@ -1136,6 +1168,11 @@ class Game:
 
         if self.state == "levelup_choice":
             self._render_levelup_choice()
+            pygame.display.flip()
+            return
+
+        if self.state == "confirm_disable_touch":
+            self._render_confirm_disable_touch()
             pygame.display.flip()
             return
 
@@ -1343,8 +1380,8 @@ class Game:
 
     def _render_pause(self):
         self.screen.fill(C.COLOR_BG)
-        self._render_map(0, 0)
-        self._render_entities(0, 0)
+        self._render_map(C.MAP_OFFSET_X, 0)
+        self._render_entities(C.MAP_OFFSET_X, 0)
         self._render_hud()
 
         overlay = pygame.Surface((C.SCREEN_WIDTH, C.SCREEN_HEIGHT))
@@ -1385,10 +1422,41 @@ class Game:
         hint = self.font.render(self.t("settings_hint"), True, C.COLOR_HELP_TEXT)
         self.screen.blit(hint, hint.get_rect(center=(cx, C.SCREEN_HEIGHT - 30)))
 
+    def _render_confirm_disable_touch(self):
+        self.screen.fill(C.COLOR_BG)
+        self._tap_targets = []
+        cx = C.SCREEN_WIDTH // 2
+
+        title = self.big_font.render(self.t("touch_warn_title"), True, (230, 80, 80))
+        self.screen.blit(title, title.get_rect(center=(cx, C.SCREEN_HEIGHT // 2 - 140)))
+
+        y = C.SCREEN_HEIGHT // 2 - 70
+        for key in ("touch_warn_line1", "touch_warn_line2"):
+            surf = self.font.render(self.t(key), True, C.COLOR_HUD_TEXT)
+            self.screen.blit(surf, surf.get_rect(center=(cx, y)))
+            y += 26
+
+        ready = self.touch_warning_timer <= 0
+        seconds_left = (self.touch_warning_timer + 29) // 30
+
+        button_y = y + 40
+        self._draw_tap_button((cx - 160, button_y, 150, 44), self.t("btn_cancel"), pygame.K_ESCAPE)
+
+        confirm_rect = pygame.Rect(cx + 10, button_y, 150, 44)
+        if ready:
+            self._draw_tap_button(confirm_rect, self.t("btn_confirm"), pygame.K_RETURN)
+        else:
+            # Not a registered tap target yet - visibly disabled until the
+            # wait is over, showing the countdown instead of a label.
+            pygame.draw.rect(self.screen, (30, 30, 36), confirm_rect, border_radius=8)
+            pygame.draw.rect(self.screen, (70, 70, 80), confirm_rect, width=2, border_radius=8)
+            label = self.font.render(f"{self.t('btn_confirm')} ({seconds_left})", True, (110, 110, 120))
+            self.screen.blit(label, label.get_rect(center=confirm_rect.center))
+
     def _render_levelup_choice(self):
         self.screen.fill(C.COLOR_BG)
-        self._render_map(0, 0)
-        self._render_entities(0, 0)
+        self._render_map(C.MAP_OFFSET_X, 0)
+        self._render_entities(C.MAP_OFFSET_X, 0)
         self._render_hud()
 
         overlay = pygame.Surface((C.SCREEN_WIDTH, C.SCREEN_HEIGHT))
@@ -1540,22 +1608,28 @@ class Game:
         overlay = pygame.Surface((C.MAP_WIDTH * C.TILE_SIZE, C.MAP_HEIGHT * C.TILE_SIZE))
         overlay.set_alpha(int(90 * (self.flash_timer / 6)))
         overlay.fill((200, 30, 30))
-        self.screen.blit(overlay, (0, 0))
+        self.screen.blit(overlay, (C.MAP_OFFSET_X, 0))
 
     def _render_hud(self):
         hud_y = C.MAP_HEIGHT * C.TILE_SIZE
         pygame.draw.rect(self.screen, C.COLOR_HUD_BG, (0, hud_y, C.SCREEN_WIDTH, C.HUD_HEIGHT))
 
+        # Content stays aligned under the map itself (offset by the same
+        # gutter width), not spread across the full HUD strip - the gutters
+        # below the D-pad/action buttons stay empty here, which is fine
+        # since they visually "belong" to those buttons above.
+        ox = C.MAP_OFFSET_X
+
         bar_width, bar_height = 180, 16
-        pygame.draw.rect(self.screen, C.COLOR_HP_BAR_BG, (10, hud_y + 10, bar_width, bar_height))
+        pygame.draw.rect(self.screen, C.COLOR_HP_BAR_BG, (ox + 10, hud_y + 10, bar_width, bar_height))
         hp_ratio = max(0, self.player.hp / self.player.max_hp)
         pygame.draw.rect(
-            self.screen, C.COLOR_HP_BAR_FG, (10, hud_y + 10, int(bar_width * hp_ratio), bar_height)
+            self.screen, C.COLOR_HP_BAR_FG, (ox + 10, hud_y + 10, int(bar_width * hp_ratio), bar_height)
         )
         hp_text = self.font.render(f"HP {max(0, self.player.hp)}/{self.player.max_hp}", True, C.COLOR_HUD_TEXT)
-        self.screen.blit(hp_text, (200, hud_y + 8))
+        self.screen.blit(hp_text, (ox + 200, hud_y + 8))
 
-        xp_bar_x = 340
+        xp_bar_x = ox + 340
         pygame.draw.rect(self.screen, C.COLOR_XP_BAR_BG, (xp_bar_x, hud_y + 10, bar_width, bar_height))
         xp_ratio = self.player.xp / self.player.xp_to_next
         pygame.draw.rect(
@@ -1570,7 +1644,7 @@ class Game:
         # left column is equipment, right column is resources. Icons reuse
         # the same glyph+colour already used for these items on the map,
         # so the legend is consistent everywhere.
-        left_x, right_x = 10, 340
+        left_x, right_x = ox + 10, ox + 340
         row_y = hud_y + 34
         row_h = 18
 
@@ -1596,11 +1670,11 @@ class Game:
         )
         poison_suffix = f"    {self.t('hud_poisoned')}" if self.player.poison_turns > 0 else ""
         scroll_color = C.COLOR_POISON if self.player.poison_turns > 0 else C.COLOR_HELP_TEXT
-        self.screen.blit(self.font.render(scroll_line + poison_suffix, True, scroll_color), (10, hud_y + 92))
+        self.screen.blit(self.font.render(scroll_line + poison_suffix, True, scroll_color), (ox + 10, hud_y + 92))
 
         for i, message in enumerate(self.log[-4:]):
             msg_surf = self.font.render(message, True, C.COLOR_LOG_TEXT)
-            self.screen.blit(msg_surf, (10, hud_y + 112 + i * 16))
+            self.screen.blit(msg_surf, (ox + 10, hud_y + 112 + i * 16))
 
     def _hud_icon_row(self, x, y, char, color, text):
         icon = self.font.render(char, True, color)
@@ -1618,12 +1692,16 @@ class Game:
         self.screen.blit(text, text.get_rect(center=rect.center))
 
     def _render_touch_controls(self):
+        # The menu button is the only touch path to the pause menu (and
+        # from there, to re-enabling everything else), so it always draws
+        # regardless of show_touch_controls - only the movement/action
+        # buttons are optional.
+        self._draw_touch_button(self.save_button, self.t("touch_menu"))
         if not self.settings.get("show_touch_controls", True):
             return
         for name, (rect, vector, label) in self.dpad_buttons.items():
             self._draw_touch_button(rect, label, active=(self.touch_direction == vector))
         self._draw_touch_button(self.potion_button, self.t("touch_heal"))
-        self._draw_touch_button(self.save_button, self.t("touch_menu"))
         scroll_labels = {"fireball": "F", "teleport": "T", "reveal": "V"}
         for name, rect in self.scroll_buttons.items():
             self._draw_touch_button(rect, scroll_labels[name])

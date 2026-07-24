@@ -1,14 +1,29 @@
 import os
+import sys
 
 TILE_SIZE = 24
 MAP_WIDTH = 40
 MAP_HEIGHT = 25
 
 HUD_HEIGHT = 190
-SCREEN_WIDTH = MAP_WIDTH * TILE_SIZE
+MAP_PIXEL_WIDTH = MAP_WIDTH * TILE_SIZE
+# Extra space on each side of the map, reserved for touch controls so they
+# sit next to the dungeon view instead of floating on top of it, and so
+# there's room for buttons big enough to actually hit on a phone. On a
+# typical widescreen phone in landscape this also puts the game closer to
+# actually filling the display instead of being letterboxed down to a
+# narrow strip in the middle.
+GUTTER_WIDTH = 260
+MAP_OFFSET_X = GUTTER_WIDTH
+SCREEN_WIDTH = MAP_PIXEL_WIDTH + 2 * GUTTER_WIDTH
 SCREEN_HEIGHT = MAP_HEIGHT * TILE_SIZE + HUD_HEIGHT
 
-ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+# Bundled read-only assets: a PyInstaller onefile exe unpacks these into
+# sys._MEIPASS at startup, not next to the .exe itself (unlike save data,
+# see persistence.py - these are read-only and fine to live in the
+# temporary extraction dir for the process's lifetime).
+_BASE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+ASSETS_DIR = os.path.join(_BASE_DIR, "assets")
 PLAYER_SPRITE_PATH = os.path.join(ASSETS_DIR, "player.png")
 PLAYER_SPRITE_HEIGHT = int(TILE_SIZE * 1.8)
 

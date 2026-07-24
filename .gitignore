@@ -2,3 +2,9 @@ __pycache__/
 *.pyc
 stats.json
 save.json
+settings.json
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec

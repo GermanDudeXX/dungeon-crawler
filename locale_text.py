@@ -100,6 +100,19 @@ STRINGS = {
     "lang_en": {"en": "English", "de": "English"},
     "lang_de": {"en": "Deutsch", "de": "Deutsch"},
 
+    # --- disable-touch-controls warning (Android only) ---
+    "touch_warn_title": {"en": "WAIT!", "de": "WARTE!"},
+    "touch_warn_line1": {
+        "en": "Turning off on-screen controls removes your only way to move and act on a touchscreen.",
+        "de": "Bildschirm-Tasten auszuschalten entfernt deine einzige Moeglichkeit, dich auf dem Touchscreen zu bewegen.",
+    },
+    "touch_warn_line2": {
+        "en": "Only the MENU button still works - turn it back on there if you change your mind.",
+        "de": "Nur der MENUE-Button funktioniert dann noch - dort kannst du es wieder einschalten.",
+    },
+    "btn_cancel": {"en": "CANCEL", "de": "ABBRECHEN"},
+    "btn_confirm": {"en": "TURN OFF", "de": "AUSSCHALTEN"},
+
     # --- HUD ---
     "hud_weapon": {"en": "Weapon:", "de": "Waffe:"},
     "hud_armor": {"en": "Armor:", "de": "Ruestung:"},
