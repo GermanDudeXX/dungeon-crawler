@@ -1,3 +1,4 @@
+import os
 import random
 import sys
 
@@ -10,6 +11,8 @@ import fov
 import locale_text as loc
 import persistence
 import sound
+
+ON_ANDROID = "ANDROID_ARGUMENT" in os.environ
 
 MOVE_KEYS = (
     (pygame.K_UP, (0, -1)),
@@ -29,7 +32,18 @@ class Game:
     def __init__(self):
         pygame.init()
         pygame.display.set_caption("Dungeon Crawler")
-        self.screen = pygame.display.set_mode((C.SCREEN_WIDTH, C.SCREEN_HEIGHT))
+        # Without SCALED, SDL renders our fixed logical resolution into the
+        # top-left corner of the real (much larger) device screen and
+        # leaves the rest black. SCALED stretches the same fixed-size
+        # surface to fill whatever window/screen it ends up in - on
+        # Android that's the full display, on desktop it's a no-op since
+        # the window is created at exactly the requested size anyway.
+        # FULLSCREEN is only forced on Android; a desktop dev session
+        # should stay in a normal window.
+        flags = pygame.SCALED
+        if ON_ANDROID:
+            flags |= pygame.FULLSCREEN
+        self.screen = pygame.display.set_mode((C.SCREEN_WIDTH, C.SCREEN_HEIGHT), flags)
         self.clock = pygame.time.Clock()
         # pygame.font.SysFont looks up a named font through the OS's font
         # system, which crashes on Android (no such font, no font-listing
