@@ -90,14 +90,16 @@ android.allow_backup = True
 # the workflow) instead of a conflicting install.
 android.numeric_version = 1
 
-# FileProvider setup so updater.py can hand the downloaded APK to the
-# system installer via a content:// URI (required since Android N - a
-# plain file:// URI to another app is blocked). See android/file_paths.xml
-# and android/extra_manifest_application_arguments.xml.
-android.enable_androidx = True
-android.gradle_dependencies = androidx.core:core:1.12.0
-android.add_resources = android/file_paths.xml:xml/file_paths.xml
-android.extra_manifest_application_arguments = android/extra_manifest_application_arguments.xml
+# No FileProvider/manifest customization needed for the in-app updater:
+# earlier attempt declared a <provider> via android.extra_manifest_-
+# application_arguments, but that option's insertion point (confirmed by
+# reading p4a's actual AndroidManifest.tmpl.xml) is *inside* the opening
+# <application ...> tag's attribute list, not a child-element position -
+# a <provider> element dropped there is not well-formed XML and broke
+# Gradle's manifest merger. updater.py instead publishes the downloaded
+# APK into the public Downloads collection via MediaStore (Android 10+),
+# which hands back a usable content:// URI with no manifest changes and
+# no extra permission needed at all.
 
 [buildozer]
 log_level = 2

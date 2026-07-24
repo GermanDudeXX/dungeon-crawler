@@ -126,6 +126,52 @@ def android_download_dir():
     return activity.getExternalFilesDir(None).getAbsolutePath()
 
 
+def _publish_to_downloads(local_path, display_name):
+    """Copies a local file into the public Downloads collection via
+    MediaStore (Android 10+) and returns its content:// Uri. Deliberately
+    NOT using a custom FileProvider: an earlier attempt needed a <provider>
+    manifest entry, but p4a's AndroidManifest template only exposes an
+    insertion point *inside* the <application ...> opening tag's attribute
+    list (confirmed by reading the actual template source) - a child
+    element dropped there is not well-formed XML and broke Gradle's
+    manifest merger. MediaStore needs no manifest changes and no storage
+    permission at all: apps can always contribute their own files to
+    shared collections like Downloads under scoped storage."""
+    from jnius import autoclass
+
+    VersionCls = autoclass("android.os.Build$VERSION")
+    if VersionCls.SDK_INT < 29:
+        raise RuntimeError("in-app update needs Android 10 or newer")
+
+    PythonActivity = autoclass("org.kivy.android.PythonActivity")
+    ContentValues = autoclass("android.content.ContentValues")
+    MediaStoreDownloads = autoclass("android.provider.MediaStore$Downloads")
+
+    activity = PythonActivity.mActivity
+    resolver = activity.getContentResolver()
+
+    values = ContentValues()
+    values.put("_display_name", display_name)
+    values.put("mime_type", "application/vnd.android.package-archive")
+
+    item_uri = resolver.insert(MediaStoreDownloads.EXTERNAL_CONTENT_URI, values)
+    if item_uri is None:
+        raise RuntimeError("could not create a Downloads entry")
+
+    out_stream = resolver.openOutputStream(item_uri)
+    try:
+        with open(local_path, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                out_stream.write(chunk)
+    finally:
+        out_stream.close()
+
+    return item_uri
+
+
 def apply_update_android(apk_path):
     """Launches the system package installer for apk_path. Returns
     "launched" on success, or "needs_permission" if the user first has to
@@ -135,8 +181,6 @@ def apply_update_android(apk_path):
 
     PythonActivity = autoclass("org.kivy.android.PythonActivity")
     Intent = autoclass("android.content.Intent")
-    FileProviderCls = autoclass("androidx.core.content.FileProvider")
-    JFile = autoclass("java.io.File")
     VersionCls = autoclass("android.os.Build$VERSION")
 
     activity = PythonActivity.mActivity
@@ -151,8 +195,7 @@ def apply_update_android(apk_path):
             activity.startActivity(redirect)
             return "needs_permission"
 
-    authority = package_name + ".fileprovider"
-    uri = FileProviderCls.getUriForFile(activity, authority, JFile(apk_path))
+    uri = _publish_to_downloads(apk_path, os.path.basename(apk_path))
 
     intent = Intent(Intent.ACTION_VIEW)
     intent.setDataAndType(uri, "application/vnd.android.package-archive")
