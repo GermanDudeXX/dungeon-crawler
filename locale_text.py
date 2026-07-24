@@ -90,9 +90,10 @@ STRINGS = {
     "settings_title": {"en": "SETTINGS", "de": "EINSTELLUNGEN"},
     "settings_touch_label": {"en": "On-screen touch buttons: {state}", "de": "Bildschirm-Tasten: {state}"},
     "settings_lang_label": {"en": "Language: {state}", "de": "Sprache: {state}"},
+    "settings_volume_label": {"en": "Sound volume: {state}", "de": "Lautstaerke: {state}"},
     "settings_hint": {
-        "en": "Tap TOGGLE or press C (controls) / L (language)      ESC: back",
-        "de": "Tippe UMSCHALTEN oder druecke C (Tasten) / L (Sprache)      ESC: zurueck",
+        "en": "Tap TOGGLE or press C (controls) / L (language) / V (volume)      ESC: back",
+        "de": "Tippe UMSCHALTEN oder druecke C (Tasten) / L (Sprache) / V (Lautstaerke)      ESC: zurueck",
     },
     "btn_toggle": {"en": "TOGGLE", "de": "UMSCHALTEN"},
     "on": {"en": "ON", "de": "AN"},

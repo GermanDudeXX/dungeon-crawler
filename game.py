@@ -38,12 +38,16 @@ class Game:
         # surface to fill whatever window/screen it ends up in - on
         # Android that's the full display, on desktop it's a no-op since
         # the window is created at exactly the requested size anyway.
-        # FULLSCREEN is only forced on Android; a desktop dev session
-        # should stay in a normal window.
-        flags = pygame.SCALED
-        if ON_ANDROID:
-            flags |= pygame.FULLSCREEN
-        self.screen = pygame.display.set_mode((C.SCREEN_WIDTH, C.SCREEN_HEIGHT), flags)
+        #
+        # Deliberately NOT also passing pygame.FULLSCREEN on Android:
+        # buildozer.spec's own fullscreen=1 + orientation=landscape already
+        # lock that at the manifest/native level. Adding FULLSCREEN here
+        # too made SDL2-for-Android's SDLActivity.setOrientation() re-derive
+        # the requested orientation from the *actual* window dimensions it
+        # ends up creating instead of trusting the manifest - which flipped
+        # the app into portrait on a real device once the window was wider
+        # than it was tall in a way that tripped its w>h heuristic.
+        self.screen = pygame.display.set_mode((C.SCREEN_WIDTH, C.SCREEN_HEIGHT), pygame.SCALED)
         self.clock = pygame.time.Clock()
         # pygame.font.SysFont looks up a named font through the OS's font
         # system, which crashes on Android (no such font, no font-listing
@@ -53,10 +57,10 @@ class Game:
         self.font = pygame.font.Font(None, 18)
         self.big_font = pygame.font.Font(None, 40)
         self.big_font.set_bold(True)
-        self.sounds = sound.Sounds()
         self.stats = persistence.load_stats()
         self.save_data = persistence.load_save()
         self.settings = persistence.load_settings()
+        self.sounds = sound.Sounds(volume=self.settings.get("volume", sound.MASTER_VOLUME))
         self.player_sprite_right, self.player_sprite_left, self.player_sprite_large = self._load_player_sprite()
         self.state = "title"
         self.stats_return_state = "title"
@@ -414,6 +418,19 @@ class Game:
         self.settings["language"] = "de" if self._lang() == "en" else "en"
         persistence.save_settings(self.settings)
 
+    VOLUME_LEVELS = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+
+    def _cycle_volume(self):
+        current = self.settings.get("volume", sound.MASTER_VOLUME)
+        idx = min(range(len(self.VOLUME_LEVELS)), key=lambda i: abs(self.VOLUME_LEVELS[i] - current))
+        idx = (idx + 1) % len(self.VOLUME_LEVELS)
+        new_volume = self.VOLUME_LEVELS[idx]
+        self.settings["volume"] = new_volume
+        self.sounds.set_volume(new_volume)
+        persistence.save_settings(self.settings)
+        if new_volume > 0:
+            self.sounds.play("equip")
+
     def _monster_gender(self, monster):
         if monster.is_boss:
             return loc.BOSS_GENDER_DE.get(monster.kind, "m")
@@ -586,6 +603,8 @@ class Game:
                 self._request_toggle_touch_controls()
             elif key == pygame.K_l:
                 self._toggle_language()
+            elif key == pygame.K_v:
+                self._cycle_volume()
             return
 
         if self.state == "confirm_disable_touch":
@@ -1417,7 +1436,12 @@ class Game:
         self.screen.blit(row2, row2.get_rect(center=(cx, 300)))
         self._draw_tap_button((cx - 100, 330, 200, 44), self.t("btn_toggle"), pygame.K_l)
 
-        self._draw_tap_button((cx - 75, 410, 150, 44), self.t("btn_back"), pygame.K_ESCAPE)
+        volume = self.settings.get("volume", sound.MASTER_VOLUME)
+        row3 = self.font.render(self.t("settings_volume_label", state=f"{int(round(volume * 100))}%"), True, C.COLOR_HUD_TEXT)
+        self.screen.blit(row3, row3.get_rect(center=(cx, 410)))
+        self._draw_tap_button((cx - 100, 440, 200, 44), self.t("btn_toggle"), pygame.K_v)
+
+        self._draw_tap_button((cx - 75, 520, 150, 44), self.t("btn_back"), pygame.K_ESCAPE)
 
         hint = self.font.render(self.t("settings_hint"), True, C.COLOR_HELP_TEXT)
         self.screen.blit(hint, hint.get_rect(center=(cx, C.SCREEN_HEIGHT - 30)))

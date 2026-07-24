@@ -4,6 +4,10 @@ from array import array
 import pygame
 
 SAMPLE_RATE = 44100
+# Applied to every generated sound on top of its own per-tone volume - the
+# raw square waves clip loud/harsh even at a "moderate" per-tone volume, so
+# this is the single knob to turn everything down or up together.
+MASTER_VOLUME = 0.4
 
 
 def _tone_samples(freq_start, freq_end=None, duration=0.1, volume=0.35, wave="square"):
@@ -38,11 +42,18 @@ def _to_sound(mono_samples):
 
 
 class Sounds:
-    def __init__(self):
+    SOUND_NAMES = (
+        "hit", "player_hurt", "monster_death", "pickup", "equip",
+        "stairs", "levelup", "boss", "death",
+    )
+
+    def __init__(self, volume=MASTER_VOLUME):
         self.enabled = True
+        self.volume = volume
         try:
             pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=2)
             self._build()
+            self.set_volume(self.volume)
         except Exception:
             self.enabled = False
 
@@ -66,6 +77,13 @@ class Sounds:
             _tone_samples(200, 60, 0.3, 0.4),
             _tone_samples(150, 40, 0.4, 0.35),
         ))
+
+    def set_volume(self, volume):
+        self.volume = volume
+        if not self.enabled:
+            return
+        for name in self.SOUND_NAMES:
+            getattr(self, name).set_volume(volume)
 
     def play(self, name):
         if not self.enabled:

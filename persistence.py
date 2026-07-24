@@ -17,6 +17,7 @@ SETTINGS_PATH = os.path.join(BASE_DIR, "settings.json")
 DEFAULT_SETTINGS = {
     "language": "en",
     "show_touch_controls": True,
+    "volume": 0.4,
 }
 
 DEFAULT_STATS = {
