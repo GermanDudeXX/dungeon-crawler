@@ -1,5 +1,6 @@
 from os.path import join
 
+from pythonforandroid.logger import info, shprint
 from pythonforandroid.recipe import CompiledComponentsPythonRecipe
 from pythonforandroid.toolchain import current_directory
 
@@ -29,6 +30,13 @@ class Pygame2Recipe(CompiledComponentsPythonRecipe):
        which crashed the app shortly after (those modules never finish
        initializing, and Game.__init__'s very first real call is
        pygame.display.set_mode()).
+
+       setup_extra_args is also spread into PythonRecipe.install_python_package's
+       final `pip install .` call, not just `setup.py build_ext` - pip doesn't
+       understand -enable-arm-neon and errors out ("not a valid editable
+       requirement"). install_python_package is overridden below to an exact
+       copy of upstream's minus that spread, so the flag only reaches the
+       setup.py invocation it's actually meant for.
 
     .. warning:: Some pygame functionality is still untested, and some
         dependencies like freetype, postmidi and libjpeg are currently
@@ -91,6 +99,23 @@ class Pygame2Recipe(CompiledComponentsPythonRecipe):
         env["PYGAME_CROSS_COMPILE"] = "TRUE"
         env["PYGAME_ANDROID"] = "TRUE"
         return env
+
+    def install_python_package(self, arch, name=None, env=None, is_dir=True):
+        # Exact copy of PythonRecipe.install_python_package minus spreading
+        # setup_extra_args into the pip call - see class docstring.
+        if name is None:
+            name = self.name
+        if env is None:
+            env = self.get_recipe_env(arch)
+
+        info('Installing {} into site-packages'.format(self.name))
+
+        hpenv = env.copy()
+        with current_directory(self.get_build_dir(arch.arch)):
+            shprint(self._host_recipe.pip, 'install', '.',
+                    '--compile', '--target',
+                    self.ctx.get_python_install_dir(arch.arch),
+                    _env=hpenv)
 
 
 recipe = Pygame2Recipe()
