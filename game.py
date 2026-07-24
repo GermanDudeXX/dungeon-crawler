@@ -31,8 +31,14 @@ class Game:
         pygame.display.set_caption("Dungeon Crawler")
         self.screen = pygame.display.set_mode((C.SCREEN_WIDTH, C.SCREEN_HEIGHT))
         self.clock = pygame.time.Clock()
-        self.font = pygame.font.SysFont("consolas", 18)
-        self.big_font = pygame.font.SysFont("consolas", 40, bold=True)
+        # pygame.font.SysFont looks up a named font through the OS's font
+        # system, which crashes on Android (no such font, no font-listing
+        # tools like fc-list in the sandbox). pygame.font.Font(None, size)
+        # uses pygame's own bundled default font instead - no OS lookup,
+        # works identically on every platform.
+        self.font = pygame.font.Font(None, 18)
+        self.big_font = pygame.font.Font(None, 40)
+        self.big_font.set_bold(True)
         self.sounds = sound.Sounds()
         self.stats = persistence.load_stats()
         self.save_data = persistence.load_save()
