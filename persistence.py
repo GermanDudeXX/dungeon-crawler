@@ -4,6 +4,12 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATS_PATH = os.path.join(BASE_DIR, "stats.json")
 SAVE_PATH = os.path.join(BASE_DIR, "save.json")
+SETTINGS_PATH = os.path.join(BASE_DIR, "settings.json")
+
+DEFAULT_SETTINGS = {
+    "language": "en",
+    "show_touch_controls": True,
+}
 
 DEFAULT_STATS = {
     "games_played": 0,
@@ -68,3 +74,21 @@ def save_run(data):
 def delete_save():
     if os.path.exists(SAVE_PATH):
         os.remove(SAVE_PATH)
+
+
+def load_settings():
+    if not os.path.exists(SETTINGS_PATH):
+        return dict(DEFAULT_SETTINGS)
+    try:
+        with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return dict(DEFAULT_SETTINGS)
+    merged = dict(DEFAULT_SETTINGS)
+    merged.update(data)
+    return merged
+
+
+def save_settings(data):
+    with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f)
