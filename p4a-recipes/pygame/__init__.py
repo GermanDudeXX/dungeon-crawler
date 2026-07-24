@@ -8,14 +8,27 @@ class Pygame2Recipe(CompiledComponentsPythonRecipe):
     """
     Recipe to build apps based on SDL2-based pygame.
 
-    Local override of p4a's bundled pygame recipe: adds `cython` to
-    hostpython_prerequisites. Upstream's recipe never sets this (unlike
-    e.g. its own kivy recipe, which does), so pygame >= 2.5.2 - which
-    ships _sdl2 as .pyx and needs Cython to run `setup.py build_ext` in
-    hostpython3 - fails with "You need cython" even when `cython` is
-    listed in buildozer.spec's app-level requirements (that builds an
-    ARM-cross-compiled target recipe, useless to the host-native
-    hostpython3 interpreter that actually runs setup.py).
+    Local override of p4a's bundled pygame recipe, two fixes:
+
+    1. Adds `cython` to hostpython_prerequisites. Upstream's recipe never
+       sets this (unlike e.g. its own kivy recipe, which does), so
+       pygame >= 2.5.2 - which ships _sdl2 as .pyx and needs Cython to run
+       `setup.py build_ext` in hostpython3 - fails with "You need cython"
+       even when `cython` is listed in buildozer.spec's app-level
+       requirements (that builds an ARM-cross-compiled target recipe,
+       useless to the host-native hostpython3 interpreter that actually
+       runs setup.py).
+
+    2. Passes -enable-arm-neon to setup.py. Without it, pygame's SIMD
+       blitters are built with neither SSE2 (correctly absent - the NDK's
+       arm64/armv7 clang doesn't define __SSE2__) nor NEON (needs this
+       explicit opt-in flag - pygame doesn't auto-detect ARM cross-builds).
+       On a real device this surfaced as `dlopen failed: cannot locate
+       symbol "alphablit_alpha_sse2_argb_surf_alpha"` for pygame.display,
+       draw, image, transform and other core submodules at import time,
+       which crashed the app shortly after (those modules never finish
+       initializing, and Game.__init__'s very first real call is
+       pygame.display.set_mode()).
 
     .. warning:: Some pygame functionality is still untested, and some
         dependencies like freetype, postmidi and libjpeg are currently
@@ -32,6 +45,7 @@ class Pygame2Recipe(CompiledComponentsPythonRecipe):
     call_hostpython_via_targetpython = False  # Due to setuptools
     install_in_hostpython = False
     hostpython_prerequisites = ['setuptools', 'cython==0.29.36']
+    setup_extra_args = ['-enable-arm-neon']
 
     def prebuild_arch(self, arch):
         super().prebuild_arch(arch)
