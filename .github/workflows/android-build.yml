@@ -10,8 +10,14 @@ on:
       - "buildozer.spec"
       - ".github/workflows/android-build.yml"
 
+# A declared `permissions:` block replaces the token's default scopes with
+# exactly what's listed - contents:write alone (added for the release step)
+# silently revoked actions:write, which actions/cache@v4 needs to save (not
+# just restore) the cache, so every build since has likely been rebuilding
+# from scratch without erroring about it.
 permissions:
   contents: write
+  actions: write
 
 jobs:
   build:
