@@ -79,24 +79,34 @@ class Game:
         return right, left, large
 
     def _setup_touch_controls(self):
+        # Classic two-thumb mobile layout: movement bottom-left, actions
+        # bottom-right, both overlaid on the map view (the HUD strip below
+        # is already packed with text, no room for big buttons there).
         s, g = 44, 6
-        dpad_cx, dpad_cy = 875, 520
+        dpad_cx, dpad_cy = 95, 520
         self.dpad_buttons = {
             "up": (pygame.Rect(dpad_cx - s // 2, dpad_cy - s - g, s, s), (0, -1), "^"),
             "down": (pygame.Rect(dpad_cx - s // 2, dpad_cy + g, s, s), (0, 1), "v"),
             "left": (pygame.Rect(dpad_cx - s - g - s // 2, dpad_cy - s // 2, s, s), (-1, 0), "<"),
             "right": (pygame.Rect(dpad_cx + g + s // 2, dpad_cy - s // 2, s, s), (1, 0), ">"),
         }
-        self.potion_button = pygame.Rect(712, 492, 56, 56)
-        self.save_button = pygame.Rect(895, 8, 58, 30)
+
+        action_right_edge = C.SCREEN_WIDTH - 16
+        self.potion_button = pygame.Rect(action_right_edge - 56, 492, 56, 56)
 
         scroll_size = 40
         scroll_y = 492 - 6 - scroll_size
+        scroll_row_width = 3 * scroll_size + 2 * 4
+        scroll_start_x = action_right_edge - scroll_row_width
         self.scroll_buttons = {
-            "fireball": pygame.Rect(712, scroll_y, scroll_size, scroll_size),
-            "teleport": pygame.Rect(712 + (scroll_size + 4), scroll_y, scroll_size, scroll_size),
-            "reveal": pygame.Rect(712 + 2 * (scroll_size + 4), scroll_y, scroll_size, scroll_size),
+            "fireball": pygame.Rect(scroll_start_x, scroll_y, scroll_size, scroll_size),
+            "teleport": pygame.Rect(scroll_start_x + (scroll_size + 4), scroll_y, scroll_size, scroll_size),
+            "reveal": pygame.Rect(scroll_start_x + 2 * (scroll_size + 4), scroll_y, scroll_size, scroll_size),
         }
+
+        # Bigger and pinned to the top-right corner so it's always easy to
+        # find and tap - this is the only touch way back to the pause menu.
+        self.save_button = pygame.Rect(C.SCREEN_WIDTH - 96, 8, 88, 40)
 
     def start_new_run(self):
         persistence.delete_save()
@@ -1556,16 +1566,28 @@ class Game:
         )
         self.screen.blit(xp_text, (xp_bar_x + bar_width + 10, hud_y + 8))
 
-        line_a = (
-            f"Dungeon Lv {self.dungeon_level}    {self.t('hud_weapon')} {self.tn(self.player.weapon_name)} (+{self.player.weapon_bonus})"
-            f"    {self.t('hud_armor')} {self.tn(self.player.armor_name)} (+{self.player.armor_bonus})"
-        )
-        line_b = (
-            f"{self.t('hud_potions')} {self.player.potions}    {self.t('hud_gold')} {self.player.gold}"
-            f"    {self.t('hud_kills')} {self.player.kills}"
-        )
-        self.screen.blit(self.font.render(line_a, True, C.COLOR_HUD_TEXT), (10, hud_y + 34))
-        self.screen.blit(self.font.render(line_b, True, C.COLOR_HUD_TEXT), (10, hud_y + 54))
+        # Two-column icon+label overview instead of one dense wall of text -
+        # left column is equipment, right column is resources. Icons reuse
+        # the same glyph+colour already used for these items on the map,
+        # so the legend is consistent everywhere.
+        left_x, right_x = 10, 340
+        row_y = hud_y + 34
+        row_h = 18
+
+        self._hud_icon_row(left_x, row_y, "/", (215, 215, 230),
+                            f"{self.tn(self.player.weapon_name)} (+{self.player.weapon_bonus})")
+        self._hud_icon_row(right_x, row_y, "!", C.COLOR_POTION,
+                            f"{self.t('hud_potions')} {self.player.potions}")
+
+        self._hud_icon_row(left_x, row_y + row_h, "[", (170, 170, 185),
+                            f"{self.tn(self.player.armor_name)} (+{self.player.armor_bonus})")
+        self._hud_icon_row(right_x, row_y + row_h, "$", C.COLOR_GOLD,
+                            f"{self.t('hud_gold')} {self.player.gold}")
+
+        dlvl_text = self.font.render(f"Dungeon Lv {self.dungeon_level}", True, C.COLOR_HUD_TEXT)
+        self.screen.blit(dlvl_text, (left_x, row_y + 2 * row_h))
+        kills_text = self.font.render(f"{self.t('hud_kills')} {self.player.kills}", True, C.COLOR_HUD_TEXT)
+        self.screen.blit(kills_text, (right_x, row_y + 2 * row_h))
 
         scrolls = self.player.scrolls
         scroll_line = (
@@ -1574,11 +1596,17 @@ class Game:
         )
         poison_suffix = f"    {self.t('hud_poisoned')}" if self.player.poison_turns > 0 else ""
         scroll_color = C.COLOR_POISON if self.player.poison_turns > 0 else C.COLOR_HELP_TEXT
-        self.screen.blit(self.font.render(scroll_line + poison_suffix, True, scroll_color), (10, hud_y + 74))
+        self.screen.blit(self.font.render(scroll_line + poison_suffix, True, scroll_color), (10, hud_y + 92))
 
-        for i, message in enumerate(self.log):
+        for i, message in enumerate(self.log[-4:]):
             msg_surf = self.font.render(message, True, C.COLOR_LOG_TEXT)
-            self.screen.blit(msg_surf, (10, hud_y + 96 + i * 18))
+            self.screen.blit(msg_surf, (10, hud_y + 112 + i * 16))
+
+    def _hud_icon_row(self, x, y, char, color, text):
+        icon = self.font.render(char, True, color)
+        self.screen.blit(icon, (x, y))
+        label = self.font.render(text, True, C.COLOR_HUD_TEXT)
+        self.screen.blit(label, (x + 16, y))
 
     def _draw_touch_button(self, rect, label, active=False):
         overlay = pygame.Surface(rect.size, pygame.SRCALPHA)
