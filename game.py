@@ -67,6 +67,9 @@ class Game:
         self.sounds = sound.Sounds(volume=self.settings.get("volume", sound.MASTER_VOLUME))
         self.player_sprite_right, self.player_sprite_left, self.player_sprite_large = self._load_player_sprite()
         self.monster_sprites = self._load_monster_sprites()
+        self.item_sprites = self._load_item_sprites()
+        self.ladder_sprite = self._load_scaled_sprite(C.LADDER_SPRITE_PATH, C.LADDER_SPRITE_HEIGHT)
+        self.merchant_sprite = self._load_scaled_sprite(C.MERCHANT_SPRITE_PATH, C.MERCHANT_SPRITE_HEIGHT)
         self.state = "title"
         self.stats_return_state = "title"
         self.settings_return_state = "title"
@@ -138,6 +141,23 @@ class Game:
             right = pygame.transform.smoothscale(image, (width, height))
             left = pygame.transform.flip(right, True, False)
             sprites[kind] = (right, left)
+        return sprites
+
+    def _load_scaled_sprite(self, path, height):
+        try:
+            image = pygame.image.load(path).convert_alpha()
+        except (pygame.error, FileNotFoundError):
+            return None
+        width = int(image.get_width() * (height / image.get_height()))
+        return pygame.transform.smoothscale(image, (width, height))
+
+    def _load_item_sprites(self):
+        sprites = {}
+        for kind in ("weapon", "armor", "potion", "scroll", "gold"):
+            path = os.path.join(C.ITEM_SPRITE_DIR, f"{kind}.png")
+            sprite = self._load_scaled_sprite(path, C.ITEM_SPRITE_HEIGHT)
+            if sprite is not None:
+                sprites[kind] = sprite
         return sprites
 
     def _setup_touch_controls(self):
@@ -1843,16 +1863,16 @@ class Game:
                 pygame.draw.rect(self.screen, color, rect)
 
         if self.stairs_pos in self.explored:
-            self._draw_char(">", *self.stairs_pos, C.COLOR_STAIRS, ox, oy)
+            self._draw_ladder(*self.stairs_pos, ox, oy)
 
     def _render_entities(self, ox=0, oy=0):
         for item in self.items:
             if (item.x, item.y) in self.visible:
-                self._draw_char(item.char, item.x, item.y, item.color, ox, oy)
+                self._draw_item(item, ox, oy)
 
         for merchant in self.merchants:
             if (merchant.x, merchant.y) in self.visible:
-                self._draw_char(merchant.char, merchant.x, merchant.y, merchant.color, ox, oy)
+                self._draw_merchant(merchant, ox, oy)
 
         for monster in self.monsters:
             if (monster.x, monster.y) in self.visible:
@@ -1901,6 +1921,51 @@ class Game:
             self.screen.blit(glow, glow.get_rect(center=rect.center))
 
         self.screen.blit(sprite, rect)
+
+    # Tiered pickups (rarer weapon/armor, or scroll type) share one image
+    # per kind rather than art per tier - same halo trick as elite
+    # monsters, tinted with the item's own already-defined tier color,
+    # keeps the tier/type cue that colored ASCII glyphs used to carry.
+    _HALO_ITEM_KINDS = ("weapon", "armor", "scroll")
+
+    def _draw_item(self, item, ox=0, oy=0):
+        sprite = self.item_sprites.get(item.kind)
+        if sprite is None:
+            self._draw_char(item.char, item.x, item.y, item.color, ox, oy)
+            return
+
+        center = (
+            int(item.x * C.TILE_SIZE + C.TILE_SIZE // 2 + ox),
+            int(item.y * C.TILE_SIZE + C.TILE_SIZE // 2 + oy),
+        )
+        rect = sprite.get_rect(center=center)
+
+        if item.kind in self._HALO_ITEM_KINDS:
+            glow = pygame.Surface((int(sprite.get_width() * 1.3), int(sprite.get_height() * 1.3)), pygame.SRCALPHA)
+            pygame.draw.ellipse(glow, (*item.color, 100), glow.get_rect())
+            self.screen.blit(glow, glow.get_rect(center=center))
+
+        self.screen.blit(sprite, rect)
+
+    def _draw_ladder(self, x, y, ox=0, oy=0):
+        if self.ladder_sprite is None:
+            self._draw_char(">", x, y, C.COLOR_STAIRS, ox, oy)
+            return
+        center = (
+            int(x * C.TILE_SIZE + C.TILE_SIZE // 2 + ox),
+            int(y * C.TILE_SIZE + C.TILE_SIZE // 2 + oy),
+        )
+        rect = self.ladder_sprite.get_rect(center=center)
+        self.screen.blit(self.ladder_sprite, rect)
+
+    def _draw_merchant(self, merchant, ox=0, oy=0):
+        if self.merchant_sprite is None:
+            self._draw_char(merchant.char, merchant.x, merchant.y, merchant.color, ox, oy)
+            return
+        tile_center_x = merchant.x * C.TILE_SIZE + C.TILE_SIZE // 2 + ox
+        tile_bottom_y = merchant.y * C.TILE_SIZE + C.TILE_SIZE + oy
+        rect = self.merchant_sprite.get_rect(midbottom=(int(tile_center_x), int(tile_bottom_y) + 2))
+        self.screen.blit(self.merchant_sprite, rect)
 
     def _draw_char(self, char, x, y, color, ox=0, oy=0):
         surf = self.font.render(char, True, color)

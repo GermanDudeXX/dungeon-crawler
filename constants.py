@@ -45,6 +45,18 @@ MONSTER_SPRITE_HEIGHT = int(TILE_SIZE * 1.5)
 BOSS_SPRITE_SCALE = 1.8
 SPLIT_CHILD_SPRITE_SCALE = 0.65
 
+# Ground items (weapon/armor/potion/scroll/gold) and the stairs' ladder -
+# smaller than monster sprites since these are single-tile pickups, not
+# standing creatures. One image per item *kind*, not per tier/type - tier
+# color (weapon/armor rarity, scroll type) is shown the same way elite
+# monsters are: a tinted glow behind the sprite, not a recolor of it.
+ITEM_SPRITE_DIR = os.path.join(ASSETS_DIR, "items")
+ITEM_SPRITE_HEIGHT = int(TILE_SIZE * 1.1)
+LADDER_SPRITE_PATH = os.path.join(ITEM_SPRITE_DIR, "ladder.png")
+LADDER_SPRITE_HEIGHT = int(TILE_SIZE * 1.3)
+MERCHANT_SPRITE_PATH = os.path.join(ASSETS_DIR, "merchant.png")
+MERCHANT_SPRITE_HEIGHT = int(TILE_SIZE * 1.6)
+
 # Written fresh before every build (CI for Android, the local PyInstaller
 # command for Windows) with that build's git commit count - never committed
 # to the repo itself. Lets a running build compare itself against the
