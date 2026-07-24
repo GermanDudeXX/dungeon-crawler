@@ -23,7 +23,13 @@ version = 0.1
 # repeated source of unrelated build breakage (minapi requirements, NDK
 # libc++ compile errors, git-tag version format, and finally a pip resolver
 # that can't find numpy==1.26.4 at all in this build sandbox). Not needed.
-requirements = python3,pygame==2.6.1
+#
+# cython required: pygame 2.5.2+ ships _sdl2 as a .pyx that p4a's hostpython3
+# (its own internally-built Python, separate from the CI runner's system
+# Python) must compile via `setup.py build_ext`, which fails with "You need
+# cython" if it isn't present in that environment. Listing it here makes p4a
+# pip-install it into hostpython3 before building pygame.
+requirements = python3,cython,pygame==2.6.1
 
 orientation = landscape
 fullscreen = 1
