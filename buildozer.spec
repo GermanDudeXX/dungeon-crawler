@@ -59,6 +59,10 @@ version = 0.1
 # pyjnius listed explicitly (not just relying on it coming along for the
 # ride as a bootstrap dependency) since app code now imports it directly
 # (updater.py) to open the system package installer for in-app updates.
+# Its own p4a recipe depends on "six", which has no p4a recipe of its own -
+# see p4a-recipes/six below for why that combination broke the build and
+# needed a local recipe rather than just letting p4a's normal pip fallback
+# handle it.
 requirements = python3==3.11.15,hostpython3==3.11.15,setuptools==69.5.1,pygame==2.6.1,pyjnius
 
 p4a.local_recipes = ./p4a-recipes
