@@ -114,6 +114,37 @@ STRINGS = {
     "btn_cancel": {"en": "CANCEL", "de": "ABBRECHEN"},
     "btn_confirm": {"en": "TURN OFF", "de": "AUSSCHALTEN"},
 
+    # --- update screen ---
+    "settings_update_label": {"en": "Version: Build {build}", "de": "Version: Build {build}"},
+    "btn_check_update": {"en": "CHECK FOR UPDATES", "de": "NACH UPDATES SUCHEN"},
+    "update_title": {"en": "UPDATE", "de": "UPDATE"},
+    "update_checking": {"en": "Checking for updates...", "de": "Suche nach Updates..."},
+    "update_error_prefix": {"en": "Error: {error}", "de": "Fehler: {error}"},
+    "update_up_to_date": {
+        "en": "You already have the latest version (Build {build}).",
+        "de": "Du hast bereits die neueste Version (Build {build}).",
+    },
+    "update_available": {
+        "en": "Update available: Build {build} ({size} MB)",
+        "de": "Update verfuegbar: Build {build} ({size} MB)",
+    },
+    "btn_download_install": {"en": "DOWNLOAD & INSTALL", "de": "HERUNTERLADEN & INSTALLIEREN"},
+    "update_downloading": {"en": "Downloading... {percent}%", "de": "Lade herunter... {percent}%"},
+    "update_restarting": {"en": "Installing update, restarting...", "de": "Update wird installiert, Neustart..."},
+    "update_needs_permission": {
+        "en": "Please allow 'install unknown apps' for this app in the Settings screen that just opened, then tap Retry.",
+        "de": "Bitte erlaube 'Unbekannte Apps installieren' fuer diese App in den geoeffneten Einstellungen und tippe dann auf Wiederholen.",
+    },
+    "update_launched": {
+        "en": "Installer opened - confirm the install, the app will restart.",
+        "de": "Installer geoeffnet - bestaetige die Installation, die App startet danach neu.",
+    },
+    "update_dev_mode": {
+        "en": "Self-update only works in the built app, not when running from source.",
+        "de": "Selbst-Update funktioniert nur in der gebauten App, nicht im Quellcode-Modus.",
+    },
+    "btn_retry": {"en": "RETRY", "de": "WIEDERHOLEN"},
+
     # --- HUD ---
     "hud_weapon": {"en": "Weapon:", "de": "Waffe:"},
     "hud_armor": {"en": "Armor:", "de": "Ruestung:"},

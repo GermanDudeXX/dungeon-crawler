@@ -1,6 +1,7 @@
 import os
 import random
 import sys
+import threading
 
 import pygame
 
@@ -11,6 +12,7 @@ import fov
 import locale_text as loc
 import persistence
 import sound
+import updater
 
 ON_ANDROID = "ANDROID_ARGUMENT" in os.environ
 
@@ -71,6 +73,14 @@ class Game:
         self.touch_warning_timer = 0
         self._tap_targets = []
         self._setup_touch_controls()
+
+        self.update_return_state = "settings"
+        self.update_phase = "idle"
+        self.update_info = None
+        self.update_error = None
+        self.update_progress = (0, 0)
+        self._update_thread = None
+        self._update_download_path = None
 
     def _load_player_sprite(self):
         try:
@@ -447,6 +457,97 @@ class Game:
         if new_volume > 0:
             self.sounds.play("equip")
 
+    def _open_update_screen(self, return_state):
+        self.update_return_state = return_state
+        self.update_phase = "idle"
+        self.update_info = None
+        self.update_error = None
+        self.state = "update"
+
+    def _start_update_check(self):
+        if self.update_phase == "checking":
+            return
+        self.update_phase = "checking"
+        self.update_error = None
+
+        def worker():
+            try:
+                info = updater.check_for_update()
+            except Exception as exc:
+                self.update_error = str(exc)
+                self.update_phase = "error"
+                return
+            if info is None:
+                self.update_phase = "up_to_date"
+            else:
+                self.update_info = info
+                self.update_phase = "available"
+
+        self._update_thread = threading.Thread(target=worker, daemon=True)
+        self._update_thread.start()
+
+    def _start_update_download(self):
+        if self.update_phase == "downloading" or self.update_info is None:
+            return
+        self.update_phase = "downloading"
+        self.update_progress = (0, self.update_info["size"])
+        info = self.update_info
+
+        def progress_cb(done, total):
+            self.update_progress = (done, total or info["size"])
+
+        def worker():
+            try:
+                if ON_ANDROID:
+                    dest_dir = updater.android_download_dir()
+                else:
+                    dest_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
+                dest_path = os.path.join(dest_dir, info["name"])
+                updater.download_update(info["url"], dest_path, progress_cb)
+                self._update_download_path = dest_path
+            except Exception as exc:
+                self.update_error = str(exc)
+                self.update_phase = "error"
+                return
+
+            if ON_ANDROID:
+                try:
+                    result = updater.apply_update_android(dest_path)
+                except Exception as exc:
+                    self.update_error = str(exc)
+                    self.update_phase = "error"
+                    return
+                self.update_phase = "needs_permission" if result == "needs_permission" else "launched"
+            elif updater.can_self_update():
+                self.update_phase = "restarting"
+                updater.apply_update_pc(dest_path)
+                # Hard-exit from this worker thread rather than pygame.quit()
+                # (an SDL call, unsafe off the main thread) - the relaunch
+                # batch script is already waiting for this process to die.
+                os._exit(0)
+            else:
+                self.update_phase = "dev_mode"
+
+        self._update_thread = threading.Thread(target=worker, daemon=True)
+        self._update_thread.start()
+
+    def _retry_apply_update_android(self):
+        if not self._update_download_path:
+            return
+        self.update_phase = "checking"
+
+        def worker():
+            try:
+                result = updater.apply_update_android(self._update_download_path)
+            except Exception as exc:
+                self.update_error = str(exc)
+                self.update_phase = "error"
+                return
+            self.update_phase = "needs_permission" if result == "needs_permission" else "launched"
+
+        self._update_thread = threading.Thread(target=worker, daemon=True)
+        self._update_thread.start()
+
     def _monster_gender(self, monster):
         if monster.is_boss:
             return loc.BOSS_GENDER_DE.get(monster.kind, "m")
@@ -573,7 +674,7 @@ class Game:
             self.state = "title"
             return
 
-        if self.state in ("title", "dead", "paused", "shop", "settings", "levelup_choice", "confirm_disable_touch"):
+        if self.state in ("title", "dead", "paused", "shop", "settings", "levelup_choice", "confirm_disable_touch", "update"):
             for rect, key in self._tap_targets:
                 if rect.collidepoint(pos):
                     self._handle_key(key)
@@ -621,6 +722,20 @@ class Game:
                 self._toggle_language()
             elif key == pygame.K_v:
                 self._cycle_volume()
+            elif key == pygame.K_u:
+                self._open_update_screen("settings")
+                self._start_update_check()
+            return
+
+        if self.state == "update":
+            if key == pygame.K_ESCAPE:
+                self.state = self.update_return_state
+            elif key == pygame.K_RETURN and self.update_phase == "available":
+                self._start_update_download()
+            elif key == pygame.K_r and self.update_phase == "error":
+                self._start_update_check()
+            elif key == pygame.K_r and self.update_phase == "needs_permission":
+                self._retry_apply_update_android()
             return
 
         if self.state == "confirm_disable_touch":
@@ -1213,6 +1328,11 @@ class Game:
             pygame.display.flip()
             return
 
+        if self.state == "update":
+            self._render_update()
+            pygame.display.flip()
+            return
+
         if self.state == "shop":
             self._render_shop()
             pygame.display.flip()
@@ -1459,7 +1579,11 @@ class Game:
         self.screen.blit(row3, row3.get_rect(center=(cx, 410)))
         self._draw_tap_button((cx - 100, 440, 200, 44), self.t("btn_toggle"), pygame.K_v)
 
-        self._draw_tap_button((cx - 75, 520, 150, 44), self.t("btn_back"), pygame.K_ESCAPE)
+        row4 = self.font.render(self.t("settings_update_label", build=updater.current_build()), True, C.COLOR_HUD_TEXT)
+        self.screen.blit(row4, row4.get_rect(center=(cx, 520)))
+        self._draw_tap_button((cx - 130, 550, 260, 44), self.t("btn_check_update"), pygame.K_u)
+
+        self._draw_tap_button((cx - 75, 630, 150, 44), self.t("btn_back"), pygame.K_ESCAPE)
 
         hint = self.font.render(self.t("settings_hint"), True, C.COLOR_HELP_TEXT)
         self.screen.blit(hint, hint.get_rect(center=(cx, C.SCREEN_HEIGHT - 30)))
@@ -1494,6 +1618,88 @@ class Game:
             pygame.draw.rect(self.screen, (70, 70, 80), confirm_rect, width=2, border_radius=8)
             label = self.font.render(f"{self.t('btn_confirm')} ({seconds_left})", True, (110, 110, 120))
             self.screen.blit(label, label.get_rect(center=confirm_rect.center))
+
+    def _render_update(self):
+        self.screen.fill(C.COLOR_BG)
+        self._tap_targets = []
+        cx = C.SCREEN_WIDTH // 2
+        cy = C.SCREEN_HEIGHT // 2
+
+        title = self.big_font.render(self.t("update_title"), True, (230, 200, 60))
+        self.screen.blit(title, title.get_rect(center=(cx, cy - 150)))
+
+        phase = self.update_phase
+        body_y = cy - 70
+
+        if phase == "checking":
+            body = self.t("update_checking")
+        elif phase == "error":
+            body = self.t("update_error_prefix", error=self.update_error or "?")
+        elif phase == "up_to_date":
+            body = self.t("update_up_to_date", build=updater.current_build())
+        elif phase == "available":
+            size_mb = self.update_info["size"] / (1024 * 1024)
+            body = self.t("update_available", build=self.update_info["build"], size=f"{size_mb:.1f}")
+        elif phase == "downloading":
+            done, total = self.update_progress
+            percent = int(done * 100 / total) if total else 0
+            body = self.t("update_downloading", percent=percent)
+        elif phase == "restarting":
+            body = self.t("update_restarting")
+        elif phase == "needs_permission":
+            body = self.t("update_needs_permission")
+        elif phase == "launched":
+            body = self.t("update_launched")
+        elif phase == "dev_mode":
+            body = self.t("update_dev_mode")
+        else:
+            body = ""
+
+        if body:
+            max_width = C.SCREEN_WIDTH - 2 * C.GUTTER_WIDTH
+            for line in self._wrap_text(body, self.font, max_width):
+                surf = self.font.render(line, True, C.COLOR_HUD_TEXT)
+                self.screen.blit(surf, surf.get_rect(center=(cx, body_y)))
+                body_y += 24
+
+        if phase == "downloading":
+            done, total = self.update_progress
+            bar_w, bar_h = 320, 20
+            bar_rect = pygame.Rect(cx - bar_w // 2, body_y + 10, bar_w, bar_h)
+            pygame.draw.rect(self.screen, (40, 40, 48), bar_rect, border_radius=6)
+            if total:
+                fill_w = int(bar_w * min(1.0, done / total))
+                pygame.draw.rect(self.screen, (90, 180, 90), (bar_rect.x, bar_rect.y, fill_w, bar_h), border_radius=6)
+            pygame.draw.rect(self.screen, (70, 70, 80), bar_rect, width=2, border_radius=6)
+            body_y = bar_rect.bottom + 10
+
+        button_y = max(body_y + 30, cy + 60)
+        if phase == "available":
+            self._draw_tap_button((cx - 155, button_y, 310, 44), self.t("btn_download_install"), pygame.K_RETURN)
+        elif phase == "error":
+            self._draw_tap_button((cx - 155, button_y, 150, 44), self.t("btn_retry"), pygame.K_r)
+        elif phase == "needs_permission":
+            self._draw_tap_button((cx - 155, button_y, 310, 44), self.t("btn_retry"), pygame.K_r)
+
+        if phase not in ("downloading", "restarting"):
+            back_y = button_y + 60
+            self._draw_tap_button((cx - 75, back_y, 150, 44), self.t("btn_back"), pygame.K_ESCAPE)
+
+    def _wrap_text(self, text, font, max_width):
+        words = text.split(" ")
+        lines = []
+        current = ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if font.size(candidate)[0] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines
 
     def _render_levelup_choice(self):
         self.screen.fill(C.COLOR_BG)

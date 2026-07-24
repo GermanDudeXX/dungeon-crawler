@@ -3,7 +3,7 @@ title = Dungeon Crawler
 package.name = dungeoncrawler
 package.domain = com.germandudexx
 source.dir = .
-source.include_exts = py,png,jpg,jpeg,ttf,json
+source.include_exts = py,png,jpg,jpeg,ttf,json,txt
 source.exclude_dirs = p4a-recipes
 version = 0.1
 
@@ -55,20 +55,45 @@ version = 0.1
 # setuptools pinned to 69.5.1: recurring community recommendation alongside
 # Cython 0.29.x, since newer setuptools drops the legacy distutils shims
 # that build leans on. Not confirmed in p4a source, but cheap to pin.
-requirements = python3==3.11.15,hostpython3==3.11.15,setuptools==69.5.1,pygame==2.6.1
+#
+# pyjnius listed explicitly (not just relying on it coming along for the
+# ride as a bootstrap dependency) since app code now imports it directly
+# (updater.py) to open the system package installer for in-app updates.
+requirements = python3==3.11.15,hostpython3==3.11.15,setuptools==69.5.1,pygame==2.6.1,pyjnius
 
 p4a.local_recipes = ./p4a-recipes
 
 orientation = landscape
 fullscreen = 1
 
-android.permissions =
+# INTERNET: the in-app updater fetches release info from the GitHub API.
+# REQUEST_INSTALL_PACKAGES: lets the app launch the system installer with
+# a freshly-downloaded APK (Android 8+) instead of the user having to find
+# it in a file manager - still needs one tap in the system installer UI,
+# Android does not allow a fully silent self-update from app code.
+android.permissions = android.permission.INTERNET, android.permission.REQUEST_INSTALL_PACKAGES
 android.api = 34
 android.minapi = 24
 android.ndk = 25b
 android.accept_sdk_license = True
 android.archs = arm64-v8a, armeabi-v7a
 android.allow_backup = True
+
+# Overwritten at CI time (sed, see android-build.yml) with the git commit
+# count so every build has a strictly higher versionCode than the last -
+# required for Android to treat a freshly-installed APK as an update to
+# the existing app (same signing key, see the debug-keystore caching in
+# the workflow) instead of a conflicting install.
+android.numeric_version = 1
+
+# FileProvider setup so updater.py can hand the downloaded APK to the
+# system installer via a content:// URI (required since Android N - a
+# plain file:// URI to another app is blocked). See android/file_paths.xml
+# and android/extra_manifest_application_arguments.xml.
+android.enable_androidx = True
+android.gradle_dependencies = androidx.core:core:1.12.0
+android.add_resources = android/file_paths.xml:xml/file_paths.xml
+android.extra_manifest_application_arguments = android/extra_manifest_application_arguments.xml
 
 [buildozer]
 log_level = 2

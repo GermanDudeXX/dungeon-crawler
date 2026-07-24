@@ -32,6 +32,13 @@ MONSTER_SPRITE_HEIGHT = int(TILE_SIZE * 1.5)
 BOSS_SPRITE_SCALE = 1.8
 SPLIT_CHILD_SPRITE_SCALE = 0.65
 
+# Written fresh before every build (CI for Android, the local PyInstaller
+# command for Windows) with that build's git commit count - never committed
+# to the repo itself. Lets a running build compare itself against the
+# commit count baked into the latest GitHub release to know if it's stale.
+BUILD_VERSION_PATH = os.path.join(ASSETS_DIR, "build_version.txt")
+GITHUB_REPO = "GermanDudeXX/dungeon-crawler"
+
 FOV_RADIUS = 8
 
 COLOR_BG = (10, 10, 14)

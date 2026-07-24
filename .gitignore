@@ -8,3 +8,8 @@ settings.json
 build/
 dist/
 *.spec
+
+# Written fresh before every build with that build's commit count, never
+# committed - see constants.BUILD_VERSION_PATH / updater.py.
+assets/build_version.txt
+_update.bat
