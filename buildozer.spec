@@ -4,6 +4,7 @@ package.name = dungeoncrawler
 package.domain = com.germandudexx
 source.dir = .
 source.include_exts = py,png,jpg,jpeg,ttf,json
+source.exclude_dirs = p4a-recipes
 version = 0.1
 
 # pygame pinned to 2.6.1: p4a's bundled pygame recipe (recipes/pygame in
@@ -27,11 +28,17 @@ version = 0.1
 # "from versions: none" was pip correctly reporting that, not a sandbox bug.
 # Not needed either way since it's gone from the code now.
 #
-# cython required: pygame 2.5.2+ ships _sdl2 as a .pyx that p4a's hostpython3
-# (its own internally-built Python, separate from the CI runner's system
-# Python) must compile via `setup.py build_ext`, which fails with "You need
-# cython" if it isn't present in that environment. Listing it here makes p4a
-# pip-install it into hostpython3 before building pygame.
+# cython is NOT listed here (tried that, see p4a-recipes/pygame below for
+# why it doesn't work): p4a's bundled pygame recipe never puts Cython into
+# hostpython3 (the separate, host-native Python p4a builds fresh from
+# source to run recipes' setup.py scripts) - only into the ARM-cross-
+# compiled target build, which hostpython3 can't import at all. Its own
+# kivy recipe sets `hostpython_prerequisites = ["cython>=0.29.1,<=3.0.12"]`
+# for exactly this reason; the pygame recipe just never got the same fix
+# (confirmed against pythonforandroid/recipes/pygame/__init__.py on
+# GitHub - no hostpython_prerequisites override, so it inherits the
+# PythonRecipe default of just ['setuptools']). p4a.local_recipes below
+# points at a local copy of that recipe with the missing line added.
 #
 # python3 + hostpython3 pinned to 3.11.15: p4a's python3 recipe currently
 # defaults to CPython 3.14.2 (confirmed in its recipe source), a version
@@ -48,7 +55,9 @@ version = 0.1
 # setuptools pinned to 69.5.1: recurring community recommendation alongside
 # Cython 0.29.x, since newer setuptools drops the legacy distutils shims
 # that build leans on. Not confirmed in p4a source, but cheap to pin.
-requirements = python3==3.11.15,hostpython3==3.11.15,setuptools==69.5.1,cython==0.29.36,pygame==2.6.1
+requirements = python3==3.11.15,hostpython3==3.11.15,setuptools==69.5.1,pygame==2.6.1
+
+p4a.local_recipes = ./p4a-recipes
 
 orientation = landscape
 fullscreen = 1
