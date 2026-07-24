@@ -84,17 +84,26 @@ jobs:
           key: debug-keystore-v1
 
       # Baked into the app bundle (assets/) so a running build can compare
-      # itself against the commit count in the latest GitHub release's
+      # itself against the build number in the latest GitHub release's
       # notes to know if it's stale - see updater.py. Also used as
-      # android.numeric_version (Android's versionCode): it must strictly
-      # increase for an update install to be accepted at all, and a raw
-      # commit count trivially guarantees that forever.
+      # android.numeric_version (Android's versionCode), which must
+      # strictly increase for an update install to be accepted at all.
+      #
+      # github.run_number, NOT a git commit count: actions/checkout@v4
+      # defaults to a shallow clone (fetch-depth: 1), so `git rev-list
+      # --count HEAD` silently always returns 1 here regardless of real
+      # history (confirmed - an earlier version of this step did exactly
+      # that and every build stamped itself "Build: 1"), which would have
+      # made every future update permanently invisible to itself.
+      # run_number is a plain per-workflow counter GitHub tracks itself,
+      # monotonic forever, no git history needed.
       - name: Stamp build version
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
         run: |
-          COMMIT_COUNT=$(git rev-list --count HEAD)
-          echo "$COMMIT_COUNT" > assets/build_version.txt
-          sed -i "s/^android.numeric_version = .*/android.numeric_version = $COMMIT_COUNT/" buildozer.spec
-          echo "COMMIT_COUNT=$COMMIT_COUNT" >> "$GITHUB_ENV"
+          echo "$BUILD_NUMBER" > assets/build_version.txt
+          sed -i "s/^android.numeric_version = .*/android.numeric_version = $BUILD_NUMBER/" buildozer.spec
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
 
       - name: Build APK
         run: |
@@ -117,7 +126,7 @@ jobs:
         run: |
           NOTES="Latest Android debug build, auto-updated by CI on every push to master. Download the .apk below and install it on your device (allow installs from unknown sources if prompted).
 
-          Build: $COMMIT_COUNT"
+          Build: $BUILD_NUMBER"
           if ! gh release view android-latest >/dev/null 2>&1; then
             gh release create android-latest \
               --title "Dungeon Crawler - Android (latest)" \

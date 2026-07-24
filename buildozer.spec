@@ -83,11 +83,11 @@ android.accept_sdk_license = True
 android.archs = arm64-v8a, armeabi-v7a
 android.allow_backup = True
 
-# Overwritten at CI time (sed, see android-build.yml) with the git commit
-# count so every build has a strictly higher versionCode than the last -
-# required for Android to treat a freshly-installed APK as an update to
-# the existing app (same signing key, see the debug-keystore caching in
-# the workflow) instead of a conflicting install.
+# Overwritten at CI time (sed, see android-build.yml) with the GitHub
+# Actions run number so every build has a strictly higher versionCode
+# than the last - required for Android to treat a freshly-installed APK
+# as an update to the existing app (same signing key, see the debug-
+# keystore caching in the workflow) instead of a conflicting install.
 android.numeric_version = 1
 
 # No FileProvider/manifest customization needed for the in-app updater:
