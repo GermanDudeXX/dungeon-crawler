@@ -26,7 +26,17 @@ STRINGS = {
     "btn_stats": {"en": "STATS", "de": "STATISTIK"},
     "btn_achievements": {"en": "ACHIEVEMENTS", "de": "ERFOLGE"},
     "btn_settings": {"en": "SETTINGS", "de": "EINSTELLUNGEN"},
+    "btn_bestiary": {"en": "BESTIARY", "de": "BESTIARIUM"},
     "btn_back": {"en": "BACK", "de": "ZURUECK"},
+
+    # --- bestiary screen ---
+    "bestiary_title": {"en": "BESTIARY", "de": "BESTIARIUM"},
+    "bestiary_stats": {"en": "HP {hp}  PWR {power}  DEF {defense}", "de": "HP {hp}  ANG {power}  VER {defense}"},
+    "bestiary_undiscovered": {"en": "not yet discovered", "de": "noch nicht entdeckt"},
+    "tag_ranged": {"en": "ranged", "de": "Fernkampf"},
+    "tag_splits": {"en": "splits", "de": "teilt sich"},
+    "tag_fast": {"en": "fast", "de": "schnell"},
+    "tag_poison": {"en": "poisons", "de": "vergiftet"},
 
     # --- stats screen ---
     "stats_title": {"en": "STATISTICS", "de": "STATISTIK"},
@@ -70,6 +80,11 @@ STRINGS = {
     "gold_word": {"en": "gold", "de": "Gold"},
     "btn_buy": {"en": "BUY", "de": "KAUFEN"},
     "btn_leave": {"en": "LEAVE", "de": "VERLASSEN"},
+
+    # --- level-up perk choice ---
+    "levelup_title": {"en": "LEVEL UP! Choose a bonus", "de": "LEVEL AUF! Waehle einen Bonus"},
+    "levelup_hint": {"en": "Press 1 or 2, or tap CHOOSE", "de": "Druecke 1 oder 2, oder tippe WAEHLEN"},
+    "btn_choose": {"en": "CHOOSE", "de": "WAEHLEN"},
 
     # --- settings screen ---
     "settings_title": {"en": "SETTINGS", "de": "EINSTELLUNGEN"},
@@ -144,6 +159,15 @@ STRINGS = {
     "log_monster_dies": {"en": "{monster} dies. (+{xp} XP)", "de": "{monster} stirbt. (+{xp} XP)"},
     "log_level_up": {"en": "You reach level {level}!", "de": "Du erreichst Level {level}!"},
     "log_achievement_unlocked": {"en": "Achievement unlocked: {name}!", "de": "Erfolg freigeschaltet: {name}!"},
+    "log_perk_chosen": {"en": "You gain: {perk}.", "de": "Du erhaeltst: {perk}."},
+}
+
+# perk id -> (name_de, desc_de)
+PERK_DE = {
+    "power": ("Rohe Staerke", "+2 Angriff"),
+    "defense": ("Eisenhaut", "+2 Verteidigung"),
+    "vitality": ("Vitalitaet", "+10 Max-HP"),
+    "precision": ("Praezision", "+5% Krit-Chance"),
 }
 
 # English display name -> German display name, for items/weapons/armor/scrolls.
@@ -206,6 +230,20 @@ ELITE_NAME_DE = {
     "Regenerating": "Regenerierend",
 }
 
+BOSS_TITLE_DE = {
+    "orc": "Haeuptling",
+    "skeleton": "Koenig",
+    "spider": "Koenigin",
+    "slime": "Koloss",
+}
+
+BOSS_GENDER_DE = {
+    "orc": "m",
+    "skeleton": "m",
+    "spider": "f",
+    "slime": "m",
+}
+
 TRAP_NAME_DE = {
     "spike": "Stachelfalle",
     "poison": "Giftfalle",
@@ -234,6 +272,7 @@ TUTORIAL_SECTIONS = {
             "Move with WASD / Arrow keys / on-screen D-pad (hold to keep moving).",
             "Walk into a monster to attack it. Walk into the '>' stairs to descend.",
             "Your crit chance grows with level; a critical hit deals double damage.",
+            "On level up, pick a permanent bonus: power, defense, vitality, or crit.",
         ]),
         ("Survival", [
             "G / HEAL button: drink a potion. Potions heal 15 HP.",
@@ -245,6 +284,7 @@ TUTORIAL_SECTIONS = {
             "b bat (fast, moves twice), x spider (poisons on hit).",
             "Colour-tinted 'elite' monsters are tougher but drop much more XP.",
             "Every 5th dungeon level a boss guards the stairs - watch its health bar at the top.",
+            "Discovered monsters are recorded in the Bestiary (title screen).",
         ]),
         ("Loot & Gold", [
             "$  gold - spend it with merchants (walk into the cyan 'M').",
@@ -264,6 +304,7 @@ TUTORIAL_SECTIONS = {
             "Bewege dich mit WASD / Pfeiltasten / D-Pad (gedrueckt halten zum Weiterlaufen).",
             "Laufe in ein Monster, um es anzugreifen. Laufe auf die Treppe '>', um abzusteigen.",
             "Deine Krit-Chance waechst mit dem Level; ein Krit verursacht doppelten Schaden.",
+            "Bei Levelaufstieg waehlst du einen dauerhaften Bonus aus zwei Optionen.",
         ]),
         ("Ueberleben", [
             "G / HEILEN-Taste: trinke einen Trank. Traenke heilen 15 HP.",
@@ -276,6 +317,7 @@ TUTORIAL_SECTIONS = {
             "b Fledermaus (schnell, zieht doppelt), x Spinne (vergiftet bei Treffer).",
             "Farblich markierte 'Elite'-Monster sind staerker, geben aber deutlich mehr XP.",
             "Alle 5 Dungeon-Ebenen bewacht ein Boss die Treppe - beachte seine Lebensleiste oben.",
+            "Entdeckte Monster werden im Bestiarium gespeichert (Titelbildschirm).",
         ]),
         ("Beute & Gold", [
             "$  Gold - gib es bei Haendlern aus (laufe in das cyanfarbene 'M').",

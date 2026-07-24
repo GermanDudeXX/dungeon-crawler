@@ -93,6 +93,8 @@ class Game:
         self.new_best = False
         self.damage_numbers = []
         self.boss_banner_timer = 0
+        self.pending_perk_count = 0
+        self.perk_choices = []
         self.new_level()
         self.add_log(self.t("log_descend_dungeon"))
         self.state = "playing"
@@ -126,6 +128,7 @@ class Game:
         player.scrolls = dict(p.get("scrolls", {"fireball": 0, "teleport": 0, "reveal": 0}))
         player.poison_turns = p.get("poison_turns", 0)
         player.potions_drunk_this_run = p.get("potions_drunk_this_run", 0)
+        player.bonus_crit_chance = p.get("bonus_crit_chance", 0.0)
         self.player = player
 
         self.grid = data["grid"]
@@ -163,6 +166,8 @@ class Game:
         self.new_best = False
         self.damage_numbers = []
         self.boss_banner_timer = 0
+        self.pending_perk_count = 0
+        self.perk_choices = []
 
         self._recompute_fov()
         self.add_log(self.t("log_continue_descent"))
@@ -182,6 +187,7 @@ class Game:
                 "potions": p.potions, "kills": p.kills, "facing": p.facing,
                 "gold": p.gold, "scrolls": dict(p.scrolls), "poison_turns": p.poison_turns,
                 "potions_drunk_this_run": p.potions_drunk_this_run,
+                "bonus_crit_chance": p.bonus_crit_chance,
             },
             "grid": self.grid,
             "stairs_pos": list(self.stairs_pos),
@@ -256,7 +262,9 @@ class Game:
 
         if self.dungeon_level % 5 == 0:
             bx, by = self.stairs_pos
-            self.monsters.append(entities.Monster(bx, by, "orc", boss=True))
+            tier = (self.dungeon_level // 5 - 1) % len(C.BOSS_KIND_CYCLE)
+            boss_kind = C.BOSS_KIND_CYCLE[tier]
+            self.monsters.append(entities.Monster(bx, by, boss_kind, boss=True))
             self.add_log(self.t("log_boss_guards"))
 
         for _ in range(random.randint(1, 3)):
@@ -361,7 +369,7 @@ class Game:
 
     def _monster_gender(self, monster):
         if monster.is_boss:
-            return "m"
+            return loc.BOSS_GENDER_DE.get(monster.kind, "m")
         return loc.MONSTER_GENDER_DE.get(monster.kind, "m")
 
     def _monster_article(self, monster, case="nom"):
@@ -374,7 +382,8 @@ class Game:
         base = loc.MONSTER_NAME_DE.get(monster.kind, monster.kind)
         gender = self._monster_gender(monster)
         if monster.is_boss:
-            base = f"{base}-Hauptling"
+            title = loc.BOSS_TITLE_DE.get(monster.kind, "Haeuptling")
+            base = f"{base}-{title}"
         if monster.elite_name:
             elite_stem = loc.ELITE_NAME_DE.get(monster.elite_name, monster.elite_name)
             ending = loc.ADJ_ENDING_DE.get(gender, "er")
@@ -399,6 +408,11 @@ class Game:
         if self._lang() == "de" and ach_id in loc.ACHIEVEMENT_DE:
             return loc.ACHIEVEMENT_DE[ach_id][0]
         return fallback
+
+    def _record_bestiary(self, kind):
+        seen = self.stats.setdefault("bestiary_seen", [])
+        if kind not in seen:
+            seen.append(kind)
 
     def _achievement_desc(self, ach_id, fallback):
         if self._lang() == "de" and ach_id in loc.ACHIEVEMENT_DE:
@@ -473,11 +487,11 @@ class Game:
         if self.state == "stats":
             self.state = self.stats_return_state
             return
-        if self.state in ("achievements", "tutorial"):
+        if self.state in ("achievements", "tutorial", "bestiary"):
             self.state = "title"
             return
 
-        if self.state in ("title", "dead", "paused", "shop", "settings"):
+        if self.state in ("title", "dead", "paused", "shop", "settings", "levelup_choice"):
             for rect, key in self._tap_targets:
                 if rect.collidepoint(pos):
                     self._handle_key(key)
@@ -509,7 +523,7 @@ class Game:
         if self.state == "stats":
             self.state = self.stats_return_state
             return
-        if self.state in ("achievements", "tutorial"):
+        if self.state in ("achievements", "tutorial", "bestiary"):
             self.state = "title"
             return
 
@@ -533,6 +547,8 @@ class Game:
                 self.state = "achievements"
             elif key == pygame.K_t:
                 self.state = "tutorial"
+            elif key == pygame.K_b:
+                self.state = "bestiary"
             elif key == pygame.K_o:
                 self.settings_return_state = "title"
                 self.state = "settings"
@@ -574,6 +590,13 @@ class Game:
                 self.state = "playing"
             elif pygame.K_1 <= key <= pygame.K_4:
                 self._buy_item(key - pygame.K_1)
+            return
+
+        if self.state == "levelup_choice":
+            if key == pygame.K_1 and len(self.perk_choices) > 0:
+                self._apply_perk(self.perk_choices[0])
+            elif key == pygame.K_2 and len(self.perk_choices) > 1:
+                self._apply_perk(self.perk_choices[1])
             return
 
         if key == pygame.K_ESCAPE:
@@ -628,6 +651,7 @@ class Game:
         self._enemy_turn()
         self._recompute_fov()
         self._check_achievements()
+        self._maybe_show_levelup_choice()
 
     def _tick_poison(self):
         if self.player.poison_turns <= 0:
@@ -675,6 +699,7 @@ class Game:
         self.sounds.play("stairs")
         self.new_level()
         self._check_achievements()
+        self._maybe_show_levelup_choice()
 
     def _collect_item(self, item):
         if item.kind == "potion":
@@ -726,6 +751,7 @@ class Game:
         self._enemy_turn()
         self._recompute_fov()
         self._check_achievements()
+        self._maybe_show_levelup_choice()
 
     def _buy_item(self, index):
         if index < 0 or index >= len(C.SHOP_STOCK):
@@ -797,6 +823,7 @@ class Game:
             self.add_log(self.t("log_reveal"))
 
         self._check_achievements()
+        self._maybe_show_levelup_choice()
 
     def _attack(self, attacker, defender):
         crit = attacker is self.player and random.random() < self.player.crit_chance
@@ -854,9 +881,11 @@ class Game:
         self._record_kill(monster)
         if monster.splits and not monster.is_split_child:
             self._spawn_slime_children(monster)
-        if self.player.gain_xp(monster.xp_reward):
+        levels = self.player.gain_xp(monster.xp_reward)
+        if levels:
             self.add_log(self.t("log_level_up", level=self.player.level))
             self.sounds.play("levelup")
+            self.pending_perk_count += levels
 
     def _spawn_slime_children(self, parent):
         spots = [
@@ -910,6 +939,39 @@ class Game:
                 unlocked.append(ach_id)
                 self.add_log(self.t("log_achievement_unlocked", name=self._achievement_name(ach_id, name)))
                 self.sounds.play("levelup")
+
+    def _maybe_show_levelup_choice(self):
+        if self.pending_perk_count > 0 and self.state == "playing":
+            self._roll_perk_choices()
+            self.state = "levelup_choice"
+
+    def _roll_perk_choices(self):
+        self.perk_choices = random.sample(C.PERKS, 2)
+
+    def _perk_name(self, perk):
+        if self._lang() == "de" and perk["id"] in loc.PERK_DE:
+            return loc.PERK_DE[perk["id"]][0]
+        return perk["name"]
+
+    def _perk_desc(self, perk):
+        if self._lang() == "de" and perk["id"] in loc.PERK_DE:
+            return loc.PERK_DE[perk["id"]][1]
+        return perk["desc"]
+
+    def _apply_perk(self, perk):
+        self.player.base_power += perk.get("power", 0)
+        self.player.base_defense += perk.get("defense", 0)
+        if perk.get("hp"):
+            self.player.max_hp += perk["hp"]
+            self.player.hp += perk["hp"]
+        self.player.bonus_crit_chance += perk.get("crit_bonus", 0.0)
+        self.add_log(self.t("log_perk_chosen", perk=self._perk_name(perk)))
+        self.pending_perk_count = max(0, self.pending_perk_count - 1)
+        if self.pending_perk_count > 0:
+            self._roll_perk_choices()
+        else:
+            self.perk_choices = []
+            self.state = "playing"
 
     def _finalize_run(self):
         new_best = (
@@ -1037,6 +1099,16 @@ class Game:
             pygame.display.flip()
             return
 
+        if self.state == "bestiary":
+            self._render_bestiary()
+            pygame.display.flip()
+            return
+
+        if self.state == "levelup_choice":
+            self._render_levelup_choice()
+            pygame.display.flip()
+            return
+
         if self.state == "shop":
             self._render_shop()
             pygame.display.flip()
@@ -1112,7 +1184,8 @@ class Game:
         self._draw_tap_button((cx - 235, button_y + 54, 150, 44), self.t("btn_tutorial"), pygame.K_t)
         self._draw_tap_button((cx - 75, button_y + 54, 150, 44), self.t("btn_stats"), pygame.K_s)
         self._draw_tap_button((cx + 85, button_y + 54, 150, 44), self.t("btn_achievements"), pygame.K_a)
-        self._draw_tap_button((cx - 75, button_y + 108, 150, 44), self.t("btn_settings"), pygame.K_o)
+        self._draw_tap_button((cx - 160, button_y + 108, 150, 44), self.t("btn_settings"), pygame.K_o)
+        self._draw_tap_button((cx + 10, button_y + 108, 150, 44), self.t("btn_bestiary"), pygame.K_b)
 
     def _render_stats(self):
         self.screen.fill(C.COLOR_BG)
@@ -1169,6 +1242,53 @@ class Game:
         footer = self.font.render(self.t("achievements_footer"), True, C.COLOR_HUD_TEXT)
         y = 100 + len(C.ACHIEVEMENTS) * 32 + 30
         self.screen.blit(footer, footer.get_rect(center=(C.SCREEN_WIDTH // 2, y)))
+
+    def _render_bestiary(self):
+        self.screen.fill(C.COLOR_BG)
+        title = self.big_font.render(self.t("bestiary_title"), True, (230, 200, 60))
+        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, 50)))
+
+        seen = set(self.stats.get("bestiary_seen", []))
+        y = 110
+        for kind, stats in C.MONSTER_TYPES.items():
+            discovered = kind in seen
+            color = stats["color"] if discovered else (80, 80, 90)
+            char = stats["char"] if discovered else "?"
+            if discovered:
+                name = loc.MONSTER_NAME_DE.get(kind, kind) if self._lang() == "de" else stats["name"]
+            else:
+                name = "???"
+
+            char_surf = self.font.render(char, True, color)
+            self.screen.blit(char_surf, (60, y))
+            name_color = color if discovered else (110, 110, 120)
+            name_surf = self.font.render(name, True, name_color)
+            self.screen.blit(name_surf, (90, y))
+
+            if discovered:
+                tags = []
+                if stats.get("ranged"):
+                    tags.append(self.t("tag_ranged"))
+                if stats.get("splits"):
+                    tags.append(self.t("tag_splits"))
+                if stats.get("speed", 1) > 1:
+                    tags.append(self.t("tag_fast"))
+                if stats.get("poisons"):
+                    tags.append(self.t("tag_poison"))
+                info = self.t("bestiary_stats", hp=stats["hp"], power=stats["power"], defense=stats["defense"])
+                if tags:
+                    info += "  [" + ", ".join(tags) + "]"
+                info_color = C.COLOR_HELP_TEXT
+            else:
+                info = self.t("bestiary_undiscovered")
+                info_color = (80, 80, 90)
+
+            info_surf = self.font.render(info, True, info_color)
+            self.screen.blit(info_surf, (320, y))
+            y += 34
+
+        footer = self.font.render(self.t("achievements_footer"), True, C.COLOR_HUD_TEXT)
+        self.screen.blit(footer, footer.get_rect(center=(C.SCREEN_WIDTH // 2, y + 20)))
 
     def _render_tutorial(self):
         self.screen.fill(C.COLOR_BG)
@@ -1234,6 +1354,35 @@ class Game:
 
         hint = self.font.render(self.t("settings_hint"), True, C.COLOR_HELP_TEXT)
         self.screen.blit(hint, hint.get_rect(center=(cx, C.SCREEN_HEIGHT - 30)))
+
+    def _render_levelup_choice(self):
+        self.screen.fill(C.COLOR_BG)
+        self._render_map(0, 0)
+        self._render_entities(0, 0)
+        self._render_hud()
+
+        overlay = pygame.Surface((C.SCREEN_WIDTH, C.SCREEN_HEIGHT))
+        overlay.set_alpha(190)
+        overlay.fill((0, 0, 0))
+        self.screen.blit(overlay, (0, 0))
+
+        self._tap_targets = []
+        title = self.big_font.render(self.t("levelup_title"), True, (230, 200, 60))
+        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - 150)))
+
+        cx = C.SCREEN_WIDTH // 2
+        keys = [pygame.K_1, pygame.K_2]
+        for i, perk in enumerate(self.perk_choices):
+            x = cx - 320 + i * 340
+            y = C.SCREEN_HEIGHT // 2 - 60
+            name_surf = self.font.render(f"{i + 1}. {self._perk_name(perk)}", True, (255, 255, 255))
+            self.screen.blit(name_surf, name_surf.get_rect(center=(x + 150, y)))
+            desc_surf = self.font.render(self._perk_desc(perk), True, C.COLOR_HUD_TEXT)
+            self.screen.blit(desc_surf, desc_surf.get_rect(center=(x + 150, y + 26)))
+            self._draw_tap_button((x + 50, y + 50, 200, 44), self.t("btn_choose"), keys[i])
+
+        hint = self.font.render(self.t("levelup_hint"), True, C.COLOR_HELP_TEXT)
+        self.screen.blit(hint, hint.get_rect(center=(cx, C.SCREEN_HEIGHT // 2 + 140)))
 
     def _render_shop(self):
         self.screen.fill(C.COLOR_BG)
@@ -1331,6 +1480,7 @@ class Game:
         for monster in self.monsters:
             if (monster.x, monster.y) in self.visible:
                 self._draw_char(monster.char, monster.render_x, monster.render_y, monster.color, ox, oy)
+                self._record_bestiary(monster.kind)
 
         self._draw_player(ox, oy)
 

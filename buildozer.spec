@@ -6,10 +6,6 @@ source.dir = .
 source.include_exts = py,png,jpg,jpeg,ttf,json
 version = 0.1
 
-# numpy pinned: newer numpy's unique.cpp fails to compile under the NDK's
-# libc++ (missing <unordered_map> include upstream, exposed as a hard error
-# there). 1.26.4 predates that file and builds cleanly under p4a.
-#
 # pygame pinned to 2.6.1: p4a's bundled pygame recipe (recipes/pygame in
 # kivy/python-for-android) hardcodes version 2.1.0 unless overridden here.
 # Both 2.1.0 and 2.5.0's checked-in src_c/_sdl2/sdl2.c contain an unqualified
@@ -21,7 +17,13 @@ version = 0.1
 # for 2.5.2, 2.6.0, 2.6.1 and main). Pinning to 2.6.1 here sets p4a's
 # VERSION_pygame env var, which the recipe's `version` property reads and
 # substitutes into its {version}-templated download URL.
-requirements = python3,pygame==2.6.1,numpy==v1.26.4
+#
+# numpy removed entirely: it was only used by sound.py's tone generator
+# (rewritten to pure-Python `array`/`math`), and its Android recipe was a
+# repeated source of unrelated build breakage (minapi requirements, NDK
+# libc++ compile errors, git-tag version format, and finally a pip resolver
+# that can't find numpy==1.26.4 at all in this build sandbox). Not needed.
+requirements = python3,pygame==2.6.1
 
 orientation = landscape
 fullscreen = 1

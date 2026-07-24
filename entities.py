@@ -50,6 +50,7 @@ class Player(Entity):
         self.scrolls = {"fireball": 0, "teleport": 0, "reveal": 0}
         self.poison_turns = 0
         self.potions_drunk_this_run = 0
+        self.bonus_crit_chance = 0.0
 
     @property
     def power(self):
@@ -61,14 +62,14 @@ class Player(Entity):
 
     @property
     def crit_chance(self):
-        return min(0.35, 0.05 + self.level * 0.02)
+        return min(0.5, 0.05 + self.level * 0.02 + self.bonus_crit_chance)
 
     def is_alive(self):
         return self.hp > 0
 
     def gain_xp(self, amount):
         self.xp += amount
-        leveled_up = False
+        levels_gained = 0
         while self.xp >= self.xp_to_next:
             self.xp -= self.xp_to_next
             self.level += 1
@@ -78,8 +79,8 @@ class Player(Entity):
             if self.level % 2 == 0:
                 self.base_defense += 1
             self.hp = self.max_hp
-            leveled_up = True
-        return leveled_up
+            levels_gained += 1
+        return levels_gained
 
 
 class Monster(Entity):
@@ -87,7 +88,8 @@ class Monster(Entity):
         stats = C.MONSTER_TYPES[kind]
         char = stats["char"].upper() if boss else stats["char"]
         color = C.COLOR_BOSS if boss else stats["color"]
-        name = f"{stats['name']} chieftain" if boss else stats["name"]
+        title = C.BOSS_TITLES.get(kind, "chieftain")
+        name = f"{stats['name']} {title}" if boss else stats["name"]
 
         self.elite_name = elite["name"] if elite else None
         if elite:

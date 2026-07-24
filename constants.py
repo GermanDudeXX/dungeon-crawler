@@ -59,6 +59,14 @@ MONSTER_TYPES = {
     },
 }
 
+BOSS_KIND_CYCLE = ["orc", "skeleton", "spider", "slime"]
+BOSS_TITLES = {
+    "orc": "chieftain",
+    "skeleton": "king",
+    "spider": "queen",
+    "slime": "colossus",
+}
+
 ELITE_MODIFIERS = [
     {"name": "Fast", "hp_mult": 1.0, "power_mult": 1.1, "defense_mult": 1.0, "speed_bonus": 1, "color": (255, 215, 0)},
     {"name": "Vicious", "hp_mult": 1.2, "power_mult": 1.6, "defense_mult": 1.0, "color": (255, 80, 80)},
@@ -67,6 +75,13 @@ ELITE_MODIFIERS = [
 ]
 ELITE_CHANCE = 0.10
 ELITE_XP_MULT = 2.5
+
+PERKS = [
+    {"id": "power", "name": "Brute Strength", "desc": "+2 Power", "power": 2},
+    {"id": "defense", "name": "Iron Skin", "desc": "+2 Defense", "defense": 2},
+    {"id": "vitality", "name": "Vitality", "desc": "+10 Max HP", "hp": 10},
+    {"id": "precision", "name": "Precision", "desc": "+5% Crit Chance", "crit_bonus": 0.05},
+]
 
 WEAPON_TYPES = [
     {"name": "Dagger", "bonus": 2, "color": (200, 200, 210)},

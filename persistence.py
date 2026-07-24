@@ -26,6 +26,7 @@ DEFAULT_STATS = {
     "total_gold_collected": 0,
     "total_scrolls_used": 0,
     "achievements_unlocked": [],
+    "bestiary_seen": [],
 }
 
 
@@ -33,6 +34,7 @@ def _default_stats():
     stats = dict(DEFAULT_STATS)
     stats["kills_by_monster"] = dict(DEFAULT_STATS["kills_by_monster"])
     stats["achievements_unlocked"] = list(DEFAULT_STATS["achievements_unlocked"])
+    stats["bestiary_seen"] = list(DEFAULT_STATS["bestiary_seen"])
     return stats
 
 
