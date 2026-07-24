@@ -20,23 +20,37 @@ class Pygame2Recipe(CompiledComponentsPythonRecipe):
        useless to the host-native hostpython3 interpreter that actually
        runs setup.py).
 
-    2. Passes -enable-arm-neon to setup.py. Without it, pygame's SIMD
-       blitters are built with neither SSE2 (correctly absent - the NDK's
-       arm64/armv7 clang doesn't define __SSE2__) nor NEON (needs this
-       explicit opt-in flag - pygame doesn't auto-detect ARM cross-builds).
-       On a real device this surfaced as `dlopen failed: cannot locate
-       symbol "alphablit_alpha_sse2_argb_surf_alpha"` for pygame.display,
-       draw, image, transform and other core submodules at import time,
-       which crashed the app shortly after (those modules never finish
-       initializing, and Game.__init__'s very first real call is
-       pygame.display.set_mode()).
+    2. Passes -enable-arm-neon to setup.py, needed on armeabi-v7a (32-bit
+       ARM doesn't auto-define PG_ENABLE_ARM_NEON the way arm64 does - see
+       fix 3). setup_extra_args is also spread into
+       PythonRecipe.install_python_package's final `pip install .` call,
+       not just `setup.py build_ext` - pip doesn't understand
+       -enable-arm-neon and errors out ("not a valid editable
+       requirement"). install_python_package is overridden below to an
+       exact copy of upstream's minus that spread, so the flag only
+       reaches the setup.py invocation it's actually meant for.
 
-       setup_extra_args is also spread into PythonRecipe.install_python_package's
-       final `pip install .` call, not just `setup.py build_ext` - pip doesn't
-       understand -enable-arm-neon and errors out ("not a valid editable
-       requirement"). install_python_package is overridden below to an exact
-       copy of upstream's minus that spread, so the flag only reaches the
-       setup.py invocation it's actually meant for.
+    3. The actual root cause of a real device crash (confirmed by pulling
+       the built surface.so off a real phone via `adb shell run-as` and
+       inspecting its ELF symbol table): this recipe builds pygame via a
+       legacy distutils "Setup" file (see prebuild_arch below), generated
+       from pygame's own buildconfig/Setup.Android.SDL2.in template. That
+       template lists the `surface` module's sources as exactly
+       `src_c/surface.c src_c/alphablit.c src_c/surface_fill.c` - it
+       predates pygame's SIMD blitter file, src_c/simd_blitters_sse2.c,
+       and was never updated to include it. alphablit.c calls SIMD blit
+       functions like alphablit_alpha_sse2_argb_surf_alpha (declared in
+       simd_blitters.h, which alphablit.c includes) but since
+       simd_blitters_sse2.c - the file that actually *defines* them - is
+       never compiled at all, they end up permanently undefined in
+       surface.so, regardless of any SSE2/NEON compiler flag or macro.
+       That's an unconditional dlopen-time relocation failure (the
+       functions are called through a dispatch table, not a lazily-bound
+       plain call site), so it crashes on every launch on every device,
+       arm64 or armv7, no exceptions to catch on the Python side - this
+       is what NEON alone (fix 2) could never have fixed. prebuild_arch
+       patches the Setup-file text to add the missing source file to the
+       surface module's line before it's written out.
 
     .. warning:: Some pygame functionality is still untested, and some
         dependencies like freetype, postmidi and libjpeg are currently
@@ -59,6 +73,16 @@ class Pygame2Recipe(CompiledComponentsPythonRecipe):
         super().prebuild_arch(arch)
         with current_directory(self.get_build_dir(arch.arch)):
             setup_template = open(join("buildconfig", "Setup.Android.SDL2.in")).read()
+            missing_simd_source = "src_c/simd_blitters_sse2.c"
+            surface_sources = "src_c/surface.c src_c/alphablit.c src_c/surface_fill.c"
+            if missing_simd_source not in setup_template:
+                assert surface_sources in setup_template, (
+                    "pygame's Setup.Android.SDL2.in template changed - "
+                    "update the simd_blitters_sse2.c patch in p4a-recipes/pygame"
+                )
+                setup_template = setup_template.replace(
+                    surface_sources, surface_sources + " " + missing_simd_source
+                )
             env = self.get_recipe_env(arch)
             env['ANDROID_ROOT'] = join(self.ctx.ndk.sysroot, 'usr')
 
