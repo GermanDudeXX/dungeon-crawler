@@ -27,7 +27,7 @@ STRINGS = {
     "btn_achievements": {"en": "ACHIEVEMENTS", "de": "ERFOLGE"},
     "btn_settings": {"en": "SETTINGS", "de": "EINSTELLUNGEN"},
     "btn_bestiary": {"en": "BESTIARY", "de": "BESTIARIUM"},
-    "btn_back": {"en": "BACK", "de": "ZURUECK"},
+    "btn_back": {"en": "BACK", "de": "ZURÜCK"},
 
     # --- bestiary screen ---
     "bestiary_title": {"en": "BESTIARY", "de": "BESTIARIUM"},
@@ -40,11 +40,11 @@ STRINGS = {
 
     # --- stats screen ---
     "stats_title": {"en": "STATISTICS", "de": "STATISTIK"},
-    "stats_runs_deaths": {"en": "Runs played: {games}      Deaths: {deaths}", "de": "Laeufe gespielt: {games}      Tode: {deaths}"},
+    "stats_runs_deaths": {"en": "Runs played: {games}      Deaths: {deaths}", "de": "Läufe gespielt: {games}      Tode: {deaths}"},
     "stats_deepest": {"en": "Deepest level reached: {level}", "de": "Tiefste erreichte Ebene: {level}"},
     "stats_most_kills": {"en": "Most kills in a single run: {kills}", "de": "Meiste Kills in einem einzigen Lauf: {kills}"},
-    "stats_highest_level": {"en": "Highest character level: {level}", "de": "Hoechstes Charakterlevel: {level}"},
-    "stats_potions": {"en": "Potions drunk: {n}", "de": "Getrunkene Traenke: {n}"},
+    "stats_highest_level": {"en": "Highest character level: {level}", "de": "Höchstes Charakterlevel: {level}"},
+    "stats_potions": {"en": "Potions drunk: {n}", "de": "Getrunkene Tränke: {n}"},
     "stats_total_kills": {"en": "Total kills: {n}", "de": "Kills insgesamt: {n}"},
     "stats_kill_breakdown": {
         "en": "Rats: {rats}   Goblins: {goblins}   Orcs: {orcs}   Bosses: {bosses}",
@@ -52,21 +52,21 @@ STRINGS = {
     },
     "stats_footer": {
         "en": "Press any key or tap BACK to go back",
-        "de": "Druecke eine Taste oder tippe auf ZURUECK",
+        "de": "Drücke eine Taste oder tippe auf ZURÜCK",
     },
 
     # --- achievements screen ---
     "achievements_title": {"en": "ACHIEVEMENTS", "de": "ERFOLGE"},
     "achievements_footer": {
         "en": "Press any key or tap to go back",
-        "de": "Druecke eine Taste oder tippe, um zurueckzugehen",
+        "de": "Drücke eine Taste oder tippe, um zurückzugehen",
     },
 
     # --- tutorial screen ---
     "tutorial_title": {"en": "HOW TO PLAY", "de": "SO WIRD GESPIELT"},
     "tutorial_footer": {
         "en": "Press any key or tap to go back",
-        "de": "Druecke eine Taste oder tippe, um zurueckzugehen",
+        "de": "Drücke eine Taste oder tippe, um zurückzugehen",
     },
 
     # --- pause menu ---
@@ -75,25 +75,25 @@ STRINGS = {
     "btn_save_quit": {"en": "SAVE & QUIT", "de": "SPEICHERN & BEENDEN"},
 
     # --- shop screen ---
-    "shop_title": {"en": "MERCHANT", "de": "HAENDLER"},
+    "shop_title": {"en": "MERCHANT", "de": "HÄNDLER"},
     "shop_gold_label": {"en": "Your gold: {gold}", "de": "Dein Gold: {gold}"},
     "gold_word": {"en": "gold", "de": "Gold"},
     "btn_buy": {"en": "BUY", "de": "KAUFEN"},
     "btn_leave": {"en": "LEAVE", "de": "VERLASSEN"},
 
     # --- level-up perk choice ---
-    "levelup_title": {"en": "LEVEL UP! Choose a bonus", "de": "LEVEL AUF! Waehle einen Bonus"},
-    "levelup_hint": {"en": "Press 1 or 2, or tap CHOOSE", "de": "Druecke 1 oder 2, oder tippe WAEHLEN"},
-    "btn_choose": {"en": "CHOOSE", "de": "WAEHLEN"},
+    "levelup_title": {"en": "LEVEL UP! Choose a bonus", "de": "LEVEL AUF! Wähle einen Bonus"},
+    "levelup_hint": {"en": "Press 1 or 2, or tap CHOOSE", "de": "Drücke 1 oder 2, oder tippe WÄHLEN"},
+    "btn_choose": {"en": "CHOOSE", "de": "WÄHLEN"},
 
     # --- settings screen ---
     "settings_title": {"en": "SETTINGS", "de": "EINSTELLUNGEN"},
     "settings_touch_label": {"en": "On-screen touch buttons: {state}", "de": "Bildschirm-Tasten: {state}"},
     "settings_lang_label": {"en": "Language: {state}", "de": "Sprache: {state}"},
-    "settings_volume_label": {"en": "Sound volume: {state}", "de": "Lautstaerke: {state}"},
+    "settings_volume_label": {"en": "Sound volume: {state}", "de": "Lautstärke: {state}"},
     "settings_hint": {
         "en": "Tap TOGGLE or press C (controls) / L (language) / V (volume)      ESC: back",
-        "de": "Tippe UMSCHALTEN oder druecke C (Tasten) / L (Sprache) / V (Lautstaerke)      ESC: zurueck",
+        "de": "Tippe UMSCHALTEN oder drücke C (Tasten) / L (Sprache) / V (Lautstärke)      ESC: zurück",
     },
     "btn_toggle": {"en": "TOGGLE", "de": "UMSCHALTEN"},
     "on": {"en": "ON", "de": "AN"},
@@ -105,11 +105,11 @@ STRINGS = {
     "touch_warn_title": {"en": "WAIT!", "de": "WARTE!"},
     "touch_warn_line1": {
         "en": "Turning off on-screen controls removes your only way to move and act on a touchscreen.",
-        "de": "Bildschirm-Tasten auszuschalten entfernt deine einzige Moeglichkeit, dich auf dem Touchscreen zu bewegen.",
+        "de": "Bildschirm-Tasten auszuschalten entfernt deine einzige Möglichkeit, dich auf dem Touchscreen zu bewegen.",
     },
     "touch_warn_line2": {
         "en": "Only the MENU button still works - turn it back on there if you change your mind.",
-        "de": "Nur der MENUE-Button funktioniert dann noch - dort kannst du es wieder einschalten.",
+        "de": "Nur der MENÜ-Button funktioniert dann noch - dort kannst du es wieder einschalten.",
     },
     "btn_cancel": {"en": "CANCEL", "de": "ABBRECHEN"},
     "btn_confirm": {"en": "TURN OFF", "de": "AUSSCHALTEN"},
@@ -126,18 +126,18 @@ STRINGS = {
     },
     "update_available": {
         "en": "Update available: Build {build} ({size} MB)",
-        "de": "Update verfuegbar: Build {build} ({size} MB)",
+        "de": "Update verfügbar: Build {build} ({size} MB)",
     },
     "btn_download_install": {"en": "DOWNLOAD & INSTALL", "de": "HERUNTERLADEN & INSTALLIEREN"},
     "update_downloading": {"en": "Downloading... {percent}%", "de": "Lade herunter... {percent}%"},
     "update_restarting": {"en": "Installing update, restarting...", "de": "Update wird installiert, Neustart..."},
     "update_needs_permission": {
         "en": "Please allow 'install unknown apps' for this app in the Settings screen that just opened, then tap Retry.",
-        "de": "Bitte erlaube 'Unbekannte Apps installieren' fuer diese App in den geoeffneten Einstellungen und tippe dann auf Wiederholen.",
+        "de": "Bitte erlaube 'Unbekannte Apps installieren' für diese App in den geöffneten Einstellungen und tippe dann auf Wiederholen.",
     },
     "update_launched": {
         "en": "Installer opened - confirm the install, the app will restart.",
-        "de": "Installer geoeffnet - bestaetige die Installation, die App startet danach neu.",
+        "de": "Installer geöffnet - bestätige die Installation, die App startet danach neu.",
     },
     "update_dev_mode": {
         "en": "Self-update only works in the built app, not when running from source.",
@@ -147,12 +147,12 @@ STRINGS = {
 
     # --- HUD ---
     "hud_weapon": {"en": "Weapon:", "de": "Waffe:"},
-    "hud_armor": {"en": "Armor:", "de": "Ruestung:"},
-    "hud_potions": {"en": "Potions:", "de": "Traenke:"},
+    "hud_armor": {"en": "Armor:", "de": "Rüstung:"},
+    "hud_potions": {"en": "Potions:", "de": "Tränke:"},
     "hud_gold": {"en": "Gold:", "de": "Gold:"},
     "hud_kills": {"en": "Kills:", "de": "Kills:"},
     "hud_scrolls_label": {"en": "Scrolls -", "de": "Schriftrollen -"},
-    "hud_menu_hint": {"en": "ESC: Menu", "de": "ESC: Menue"},
+    "hud_menu_hint": {"en": "ESC: Menu", "de": "ESC: Menü"},
     "hud_poisoned": {"en": "POISONED", "de": "VERGIFTET"},
 
     # --- game over ---
@@ -167,7 +167,7 @@ STRINGS = {
 
     # --- touch controls ---
     "touch_heal": {"en": "HEAL", "de": "HEILEN"},
-    "touch_menu": {"en": "MENU", "de": "MENUE"},
+    "touch_menu": {"en": "MENU", "de": "MENÜ"},
 
     # --- boss ---
     "boss_appears": {"en": "BOSS APPEARS", "de": "BOSS ERSCHEINT"},
@@ -175,21 +175,21 @@ STRINGS = {
     # --- log messages ---
     "log_descend_dungeon": {"en": "You descend into the dungeon.", "de": "Du steigst in den Dungeon hinab."},
     "log_continue_descent": {"en": "You continue your descent.", "de": "Du setzt deinen Abstieg fort."},
-    "log_boss_guards": {"en": "A powerful presence guards the stairs...", "de": "Eine maechtige Praesenz bewacht die Treppe..."},
+    "log_boss_guards": {"en": "A powerful presence guards the stairs...", "de": "Eine mächtige Präsenz bewacht die Treppe..."},
     "log_poison_damage": {"en": "Poison deals {dmg} damage.", "de": "Gift verursacht {dmg} Schaden."},
     "log_succumb_poison": {"en": "You succumb to the poison.", "de": "Du erliegst dem Gift."},
-    "log_trap_damage": {"en": "You trigger a {trap}! -{dmg} HP.", "de": "Du loest eine {trap} aus! -{dmg} HP."},
-    "log_trap_finish": {"en": "The trap finishes you off.", "de": "Die Falle toetet dich."},
-    "log_trap_poison": {"en": "You trigger a {trap}! You are poisoned.", "de": "Du loest eine {trap} aus! Du bist vergiftet."},
-    "log_trap_alarm": {"en": "You trigger a {trap}! Monsters awaken!", "de": "Du loest eine {trap} aus! Monster erwachen!"},
+    "log_trap_damage": {"en": "You trigger a {trap}! -{dmg} HP.", "de": "Du löst eine {trap} aus! -{dmg} HP."},
+    "log_trap_finish": {"en": "The trap finishes you off.", "de": "Die Falle tötet dich."},
+    "log_trap_poison": {"en": "You trigger a {trap}! You are poisoned.", "de": "Du löst eine {trap} aus! Du bist vergiftet."},
+    "log_trap_alarm": {"en": "You trigger a {trap}! Monsters awaken!", "de": "Du löst eine {trap} aus! Monster erwachen!"},
     "log_descend_level": {"en": "You descend to level {level}.", "de": "Du steigst zu Ebene {level} hinab."},
-    "log_pickup_item": {"en": "You pick up a {item}.", "de": "Du erhaeltst: {item}."},
-    "log_equip_weapon": {"en": "You equip the {item} (+{bonus} power).", "de": "Ausgeruestet: {item} (+{bonus} Angriff)."},
+    "log_pickup_item": {"en": "You pick up a {item}.", "de": "Du erhältst: {item}."},
+    "log_equip_weapon": {"en": "You equip the {item} (+{bonus} power).", "de": "Ausgerüstet: {item} (+{bonus} Angriff)."},
     "log_find_worse_weapon": {"en": "You find a {item}, but your {current} is better.", "de": "Gefunden: {item}, aber {current} ist besser."},
-    "log_equip_armor": {"en": "You equip the {item} (+{bonus} defense).", "de": "Ausgeruestet: {item} (+{bonus} Verteidigung)."},
+    "log_equip_armor": {"en": "You equip the {item} (+{bonus} defense).", "de": "Ausgerüstet: {item} (+{bonus} Verteidigung)."},
     "log_find_worse_armor": {"en": "You find a {item}, but your {current} is better.", "de": "Gefunden: {item}, aber {current} ist besser."},
-    "log_pickup_gold": {"en": "You pick up {amount} gold.", "de": "Du erhaeltst {amount} Gold."},
-    "log_no_potions": {"en": "You have no potions.", "de": "Du hast keine Traenke."},
+    "log_pickup_gold": {"en": "You pick up {amount} gold.", "de": "Du erhältst {amount} Gold."},
+    "log_no_potions": {"en": "You have no potions.", "de": "Du hast keine Tränke."},
     "log_full_health": {"en": "You are already at full health.", "de": "Du bist bereits bei voller Gesundheit."},
     "log_drink_potion": {"en": "You drink a potion and heal {healed} HP.", "de": "Du trinkst einen Trank und heilst {healed} HP."},
     "log_not_enough_gold": {"en": "Not enough gold.", "de": "Nicht genug Gold."},
@@ -204,15 +204,15 @@ STRINGS = {
     "log_monster_dies": {"en": "{monster} dies. (+{xp} XP)", "de": "{monster} stirbt. (+{xp} XP)"},
     "log_level_up": {"en": "You reach level {level}!", "de": "Du erreichst Level {level}!"},
     "log_achievement_unlocked": {"en": "Achievement unlocked: {name}!", "de": "Erfolg freigeschaltet: {name}!"},
-    "log_perk_chosen": {"en": "You gain: {perk}.", "de": "Du erhaeltst: {perk}."},
+    "log_perk_chosen": {"en": "You gain: {perk}.", "de": "Du erhältst: {perk}."},
 }
 
 # perk id -> (name_de, desc_de)
 PERK_DE = {
-    "power": ("Rohe Staerke", "+2 Angriff"),
+    "power": ("Rohe Stärke", "+2 Angriff"),
     "defense": ("Eisenhaut", "+2 Verteidigung"),
-    "vitality": ("Vitalitaet", "+10 Max-HP"),
-    "precision": ("Praezision", "+5% Krit-Chance"),
+    "vitality": ("Vitalität", "+10 Max-HP"),
+    "precision": ("Präzision", "+5% Krit-Chance"),
 }
 
 # English display name -> German display name, for items/weapons/armor/scrolls.
@@ -221,16 +221,16 @@ NAME_DE = {
     "Short Sword": "Kurzschwert",
     "Long Sword": "Langschwert",
     "War Axe": "Kriegsaxt",
-    "Leather Armor": "Lederruestung",
+    "Leather Armor": "Lederrüstung",
     "Chainmail": "Kettenhemd",
-    "Plate Armor": "Plattenruestung",
+    "Plate Armor": "Plattenrüstung",
     "Healing Potion": "Heiltrank",
     "Gold": "Gold",
-    "Fists": "Faeuste",
+    "Fists": "Fäuste",
     "None": "Keine",
     "Scroll of Fireball": "Feuerball-Rolle",
     "Scroll of Teleport": "Teleport-Rolle",
-    "Scroll of Reveal": "Enthuellungs-Rolle",
+    "Scroll of Reveal": "Enthüllungs-Rolle",
 }
 
 MONSTER_NAME_DE = {
@@ -270,15 +270,15 @@ ADJ_ENDING_DE = {"m": "er", "f": "e", "n": "es"}
 
 ELITE_NAME_DE = {
     "Fast": "Schnell",
-    "Vicious": "Boesartig",
+    "Vicious": "Bösartig",
     "Armored": "Gepanzert",
     "Regenerating": "Regenerierend",
 }
 
 BOSS_TITLE_DE = {
-    "orc": "Haeuptling",
-    "skeleton": "Koenig",
-    "spider": "Koenigin",
+    "orc": "Häuptling",
+    "skeleton": "König",
+    "spider": "Königin",
     "slime": "Koloss",
 }
 
@@ -298,17 +298,17 @@ TRAP_NAME_DE = {
 # achievement id -> (name_de, desc_de)
 ACHIEVEMENT_DE = {
     "first_blood": ("Erstes Blut", "Besiege deinen ersten Gegner."),
-    "survivor": ("Ueberlebender", "Erreiche Charakterlevel 5."),
+    "survivor": ("Überlebender", "Erreiche Charakterlevel 5."),
     "veteran": ("Veteran", "Erreiche Charakterlevel 10."),
-    "deep_delver": ("Tiefengraeber", "Erreiche Dungeon-Ebene 5."),
-    "spelunker": ("Hoehlenforscher", "Erreiche Dungeon-Ebene 10."),
-    "boss_slayer": ("Bossjaeger", "Besiege einen Boss."),
+    "deep_delver": ("Tiefengräber", "Erreiche Dungeon-Ebene 5."),
+    "spelunker": ("Höhlenforscher", "Erreiche Dungeon-Ebene 10."),
+    "boss_slayer": ("Bossjäger", "Besiege einen Boss."),
     "rich": ("Reich", "Trage 100 Gold gleichzeitig bei dir."),
     "hoarder": ("Hamsterer", "Sammle insgesamt 500 Gold."),
     "well_read": ("Belesen", "Benutze insgesamt 10 Schriftrollen."),
-    "persistent": ("Hartnaeckig", "Stirb 5 Mal."),
+    "persistent": ("Hartnäckig", "Stirb 5 Mal."),
     "centurion": ("Zenturio", "Besiege insgesamt 100 Monster."),
-    "untouchable": ("Unberuehrbar", "Erreiche Dungeon-Ebene 3, ohne einen Trank zu trinken."),
+    "untouchable": ("Unberührbar", "Erreiche Dungeon-Ebene 3, ohne einen Trank zu trinken."),
 }
 
 TUTORIAL_SECTIONS = {
@@ -346,35 +346,35 @@ TUTORIAL_SECTIONS = {
     ],
     "de": [
         ("Bewegung & Kampf", [
-            "Bewege dich mit WASD / Pfeiltasten / D-Pad (gedrueckt halten zum Weiterlaufen).",
+            "Bewege dich mit WASD / Pfeiltasten / D-Pad (gedrückt halten zum Weiterlaufen).",
             "Laufe in ein Monster, um es anzugreifen. Laufe auf die Treppe '>', um abzusteigen.",
-            "Deine Krit-Chance waechst mit dem Level; ein Krit verursacht doppelten Schaden.",
-            "Bei Levelaufstieg waehlst du einen dauerhaften Bonus aus zwei Optionen.",
+            "Deine Krit-Chance wächst mit dem Level; ein Krit verursacht doppelten Schaden.",
+            "Bei Levelaufstieg wählst du einen dauerhaften Bonus aus zwei Optionen.",
         ]),
-        ("Ueberleben", [
-            "G / HEILEN-Taste: trinke einen Trank. Traenke heilen 15 HP.",
+        ("Überleben", [
+            "G / HEILEN-Taste: trinke einen Trank. Tränke heilen 15 HP.",
             "Gift (von Spinnen oder Giftfallen) verursacht jede Runde Schaden, bis es abklingt.",
-            "ESC / MENUE-Taste: pausieren, speichern & beenden, oder Statistik ansehen ohne Tod.",
+            "ESC / MENÜ-Taste: pausieren, speichern & beenden, oder Statistik ansehen ohne Tod.",
         ]),
         ("Monster", [
             "r Ratte, g Goblin, o Ork,",
-            "s Skelett (schiesst aus der Distanz), z Schleim (teilt sich beim Tod),",
+            "s Skelett (schießt aus der Distanz), z Schleim (teilt sich beim Tod),",
             "b Fledermaus (schnell, zieht doppelt), x Spinne (vergiftet bei Treffer).",
-            "Farblich markierte 'Elite'-Monster sind staerker, geben aber deutlich mehr XP.",
+            "Farblich markierte 'Elite'-Monster sind stärker, geben aber deutlich mehr XP.",
             "Alle 5 Dungeon-Ebenen bewacht ein Boss die Treppe - beachte seine Lebensleiste oben.",
             "Entdeckte Monster werden im Bestiarium gespeichert (Titelbildschirm).",
         ]),
         ("Beute & Gold", [
-            "$  Gold - gib es bei Haendlern aus (laufe in das cyanfarbene 'M').",
-            "/  Waffen und [  Ruestung ruesten sich automatisch aus, wenn sie besser sind.",
+            "$  Gold - gib es bei Händlern aus (laufe in das cyanfarbene 'M').",
+            "/  Waffen und [  Rüstung rüsten sich automatisch aus, wenn sie besser sind.",
             "?  Schriftrollen: F = Feuerball (Schaden an nahen Gegnern),",
-            "   T = Teleport (zufaelliger Sprung), V = Enthuellung (zeigt die Karte).",
+            "   T = Teleport (zufälliger Sprung), V = Enthüllung (zeigt die Karte).",
         ]),
         ("Gefahren & Fortschritt", [
-            "Versteckte Fallen loesen aus, wenn man draufsteht: Stacheln, Giftgas oder Alarme.",
-            "Speichern & Beenden sichert deinen Lauf - setze ihn spaeter vom Titelbildschirm fort.",
-            "Lebenszeit-Statistik und Erfolge werden ueber jeden Lauf verfolgt, auch nach dem Tod.",
-            "Einstellungen (Titel- / Pausenmenue): Touch-Tasten ausblenden, Sprache wechseln.",
+            "Versteckte Fallen lösen aus, wenn man draufsteht: Stacheln, Giftgas oder Alarme.",
+            "Speichern & Beenden sichert deinen Lauf - setze ihn später vom Titelbildschirm fort.",
+            "Lebenszeit-Statistik und Erfolge werden über jeden Lauf verfolgt, auch nach dem Tod.",
+            "Einstellungen (Titel- / Pausenmenü): Touch-Tasten ausblenden, Sprache wechseln.",
         ]),
     ],
 }

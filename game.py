@@ -34,6 +34,8 @@ class Game:
     def __init__(self):
         pygame.init()
         pygame.display.set_caption("Dungeon Crawler")
+        if ON_ANDROID:
+            self._fit_screen_to_device()
         # Without SCALED, SDL renders our fixed logical resolution into the
         # top-left corner of the real (much larger) device screen and
         # leaves the rest black. SCALED stretches the same fixed-size
@@ -81,6 +83,35 @@ class Game:
         self.update_progress = (0, 0)
         self._update_thread = None
         self._update_download_path = None
+
+    def _fit_screen_to_device(self):
+        # Widens the existing left/right gutters (already reserved for
+        # touch controls) so the logical canvas's aspect ratio matches the
+        # real device screen's aspect ratio exactly - that makes SCALED's
+        # letterboxing a no-op instead of leaving black pillarbox bars on
+        # phones wider than our fixed 1480x790 canvas (e.g. 20:9 phones).
+        # pygame.display.Info() is a read-only query and safe to call here:
+        # unlike passing pygame.FULLSCREEN (see the comment where the
+        # display gets created), it never touches SDL2-for-Android's
+        # setOrientation() logic, which is what caused the earlier
+        # portrait-flip regression - confirmed by reading SDL's own
+        # android video/window backend source.
+        try:
+            info = pygame.display.Info()
+            dev_w, dev_h = info.current_w, info.current_h
+            if dev_w > 0 and dev_h > 0:
+                device_ratio = dev_w / dev_h
+                # Reject 0/garbage/portrait-shaped reads rather than ever
+                # producing a broken layout - falls back to the static
+                # GUTTER_WIDTH/SCREEN_WIDTH already set in constants.py.
+                if 1.2 <= device_ratio <= 3.5:
+                    new_width = round(C.SCREEN_HEIGHT * device_ratio)
+                    new_gutter = max(C.MIN_GUTTER_WIDTH, (new_width - C.MAP_PIXEL_WIDTH) // 2)
+                    C.GUTTER_WIDTH = new_gutter
+                    C.MAP_OFFSET_X = new_gutter
+                    C.SCREEN_WIDTH = C.MAP_PIXEL_WIDTH + 2 * new_gutter
+        except pygame.error:
+            pass
 
     def _load_player_sprite(self):
         try:
@@ -563,7 +594,7 @@ class Game:
         base = loc.MONSTER_NAME_DE.get(monster.kind, monster.kind)
         gender = self._monster_gender(monster)
         if monster.is_boss:
-            title = loc.BOSS_TITLE_DE.get(monster.kind, "Haeuptling")
+            title = loc.BOSS_TITLE_DE.get(monster.kind, "Häuptling")
             base = f"{base}-{title}"
         if monster.elite_name:
             elite_stem = loc.ELITE_NAME_DE.get(monster.elite_name, monster.elite_name)
@@ -1047,9 +1078,9 @@ class Game:
             defender_label = "dich" if defender is self.player else self._monster_named(defender, "acc")
             verb = "triffst" if attacker is self.player else "trifft"
             if crit:
-                self.add_log(f"Kritischer Treffer! {attacker_label} {verb} {defender_label} fuer {damage}.")
+                self.add_log(f"Kritischer Treffer! {attacker_label} {verb} {defender_label} für {damage}.")
             else:
-                self.add_log(f"{attacker_label} {verb} {defender_label} fuer {damage}.")
+                self.add_log(f"{attacker_label} {verb} {defender_label} für {damage}.")
         else:
             attacker_label = "You" if attacker is self.player else self._monster_named(attacker, "nom")
             defender_label = "you" if defender is self.player else self._monster_named(defender, "acc")

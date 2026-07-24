@@ -16,6 +16,19 @@ MAP_PIXEL_WIDTH = MAP_WIDTH * TILE_SIZE
 GUTTER_WIDTH = 260
 MAP_OFFSET_X = GUTTER_WIDTH
 SCREEN_WIDTH = MAP_PIXEL_WIDTH + 2 * GUTTER_WIDTH
+
+# Absolute floor a gutter can shrink to on Android when the real device's
+# aspect ratio is fitted at startup (see Game._fit_screen_to_device) and
+# still keep the D-pad fully inside it: the D-pad's own buttons span
+# GUTTER_WIDTH/2 +/- 104px (two 64px buttons plus an 8px gap either side
+# of center, see _setup_touch_controls), so GUTTER_WIDTH must stay >=
+# ~208px; 220 keeps a small margin. Deliberately NOT the same as the
+# default GUTTER_WIDTH=260 above - that default was sized generously for
+# the common case, not the true minimum, so using it as the shrink floor
+# would leave devices narrower than our default aspect ratio (e.g. 16:9)
+# with an unnecessary residual letterbox instead of an exact edge-to-edge
+# fit.
+MIN_GUTTER_WIDTH = 220
 SCREEN_HEIGHT = MAP_HEIGHT * TILE_SIZE + HUD_HEIGHT
 
 # Bundled read-only assets: a PyInstaller onefile exe unpacks these into
