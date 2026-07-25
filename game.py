@@ -35,8 +35,6 @@ class Game:
         pygame.init()
         pygame.display.set_caption("Dungeon Crawler")
         self.ui_scale = 1.0
-        if ON_ANDROID:
-            self._fit_screen_to_device()
         # Without SCALED, SDL renders our fixed logical resolution into the
         # top-left corner of the real (much larger) device screen and
         # leaves the rest black. SCALED stretches the same fixed-size
@@ -52,7 +50,23 @@ class Game:
         # ends up creating instead of trusting the manifest - which flipped
         # the app into portrait on a real device once the window was wider
         # than it was tall in a way that tripped its w>h heuristic.
+        if not ON_ANDROID:
+            # Desktop text/HUD/buttons were also sized for that same small
+            # reference canvas and read as too small on a normal monitor -
+            # a flat, modest bump (no device probing needed, the window is
+            # exactly whatever size we request).
+            self._apply_pc_ui_scale()
         self.screen = pygame.display.set_mode((C.SCREEN_WIDTH, C.SCREEN_HEIGHT), pygame.SCALED)
+        if ON_ANDROID and self._fit_screen_to_device():
+            # The window SDL actually created (queried below, now that one
+            # exists) is smaller than pygame.display.Info()'s device
+            # resolution by however much the status bar / nav buttons
+            # reserve - confirmed on a real device via logcat ("Window
+            # size: 2448x1098" vs "Device size: 2712x1220"). Recreate the
+            # display now that constants.py reflects the *real* usable
+            # size, so the logical canvas actually matches what's on
+            # screen instead of being letterboxed inside it.
+            self.screen = pygame.display.set_mode((C.SCREEN_WIDTH, C.SCREEN_HEIGHT), pygame.SCALED)
         self.clock = pygame.time.Clock()
         # pygame.font.SysFont looks up a named font through the OS's font
         # system, which crashes on Android (no such font, no font-listing
@@ -88,54 +102,70 @@ class Game:
         self._update_thread = None
         self._update_download_path = None
 
-    def _fit_screen_to_device(self):
-        # Widens the existing left/right gutters (already reserved for
-        # touch controls) so the logical canvas's aspect ratio matches the
-        # real device screen's aspect ratio exactly - that makes SCALED's
-        # letterboxing a no-op instead of leaving black pillarbox bars on
-        # phones wider than our fixed 1480x790 canvas (e.g. 20:9 phones).
-        # pygame.display.Info() is a read-only query and safe to call here:
-        # unlike passing pygame.FULLSCREEN (see the comment where the
-        # display gets created), it never touches SDL2-for-Android's
-        # setOrientation() logic, which is what caused the earlier
-        # portrait-flip regression - confirmed by reading SDL's own
-        # android video/window backend source.
-        try:
-            info = pygame.display.Info()
-            dev_w, dev_h = info.current_w, info.current_h
-            if dev_w > 0 and dev_h > 0:
-                # pygame.SCALED stretches our fixed logical canvas to fill
-                # the real device resolution, so raw pixel sizes chosen for
-                # a ~790px-tall canvas (roughly 1:1 on a desktop window)
-                # end up physically tiny on a modern phone's much denser
-                # screen. Grow the canvas - fonts, HUD band, touch buttons
-                # - proportionally to the device's actual short-edge
-                # resolution instead of leaving it flat. 800 is the
-                # reference height these numbers were tuned at (1.0x);
-                # clamped so even low-res phones get a solid minimum bump
-                # and very high-res ones don't end up with oversized UI.
-                self.ui_scale = max(1.25, min(1.75, dev_h / 800))
-                C.HUD_HEIGHT = int(190 * self.ui_scale)
-                C.SCREEN_HEIGHT = C.MAP_HEIGHT * C.TILE_SIZE + C.HUD_HEIGHT
+    def _apply_pc_ui_scale(self):
+        self.ui_scale = 1.3
+        map_pixel_height = C.MAP_HEIGHT * C.TILE_SIZE
+        C.HUD_HEIGHT = int(190 * self.ui_scale)
+        C.SCREEN_HEIGHT = map_pixel_height + C.HUD_HEIGHT
+        # Widen the gutter too, in proportion - otherwise the now-bigger
+        # D-pad (see _setup_touch_controls) would overflow past the edge
+        # of the unchanged default gutter width.
+        C.GUTTER_WIDTH = int(C.GUTTER_WIDTH * self.ui_scale)
+        C.MAP_OFFSET_X = C.GUTTER_WIDTH
+        C.SCREEN_WIDTH = C.MAP_PIXEL_WIDTH + 2 * C.GUTTER_WIDTH
 
-                device_ratio = dev_w / dev_h
-                # Reject 0/garbage/portrait-shaped reads rather than ever
-                # producing a broken layout - falls back to the static
-                # GUTTER_WIDTH/SCREEN_WIDTH already set in constants.py.
-                if 1.2 <= device_ratio <= 3.5:
-                    new_width = round(C.SCREEN_HEIGHT * device_ratio)
-                    # The D-pad's own footprint inside the gutter grows with
-                    # ui_scale too (see _setup_touch_controls), so the floor
-                    # has to grow with it - otherwise a scaled-up D-pad on a
-                    # narrow-but-dense phone can poke out past the gutter's
-                    # left edge (off the requested logical canvas entirely).
-                    min_gutter = int(C.MIN_GUTTER_WIDTH * self.ui_scale)
-                    new_gutter = max(min_gutter, (new_width - C.MAP_PIXEL_WIDTH) // 2)
-                    C.GUTTER_WIDTH = new_gutter
-                    C.MAP_OFFSET_X = new_gutter
-                    C.SCREEN_WIDTH = C.MAP_PIXEL_WIDTH + 2 * new_gutter
+    def _fit_screen_to_device(self):
+        # pygame.display.Info() (used here previously) reports the full
+        # Android *device* resolution, not the actual window SDL creates -
+        # confirmed via logcat on a real phone: "Window size: 2448x1098"
+        # vs "Device size: 2712x1220", a ~260x120px gap reserved by the
+        # status bar and the 3-button nav row. Sizing our canvas off the
+        # bigger device number left it letterboxed inside the smaller real
+        # window. pygame.display.get_window_size() reads the window SDL
+        # actually created, so it's only callable *after* the first
+        # set_mode() call (see __init__, which creates a throwaway window,
+        # calls this, then recreates the display at the corrected size).
+        try:
+            win_w, win_h = pygame.display.get_window_size()
         except pygame.error:
-            pass
+            return False
+        if win_w <= 0 or win_h <= 0:
+            return False
+
+        # Grow the HUD band to fill whatever vertical space is left over
+        # once the fixed-size map is drawn, instead of guessing a scale
+        # factor from device metrics - this is the real, already-measured
+        # window, so "fill it exactly" is always correct as long as the
+        # result stays under the ui_scale ceiling below. Floored at the
+        # original 190px design height so a window shorter than the map
+        # itself never shrinks the HUD.
+        map_pixel_height = C.MAP_HEIGHT * C.TILE_SIZE
+        raw_hud_height = max(190, win_h - map_pixel_height)
+        # Capped at 3x the original HUD design size - only bites on
+        # extreme/degenerate window shapes (a window far taller than any
+        # real phone), where filling exactly would make the HUD dwarf the
+        # map; ordinary phones (even ones with a big status-bar/nav-button
+        # inset) land well under this and get an exact, letterbox-free fit.
+        self.ui_scale = min(3.0, raw_hud_height / 190)
+        C.HUD_HEIGHT = int(190 * self.ui_scale)
+        C.SCREEN_HEIGHT = map_pixel_height + C.HUD_HEIGHT
+
+        device_ratio = win_w / win_h
+        # Reject 0/garbage/portrait-shaped reads rather than ever
+        # producing a broken layout - falls back to the static
+        # GUTTER_WIDTH/SCREEN_WIDTH already set in constants.py.
+        if 1.2 <= device_ratio <= 3.5:
+            # The D-pad's own footprint inside the gutter grows with
+            # ui_scale too (see _setup_touch_controls), so the floor has
+            # to grow with it - otherwise a scaled-up D-pad on a
+            # narrow-but-dense phone can poke out past the gutter's left
+            # edge (off the requested logical canvas entirely).
+            min_gutter = int(C.MIN_GUTTER_WIDTH * self.ui_scale)
+            new_gutter = max(min_gutter, (win_w - C.MAP_PIXEL_WIDTH) // 2)
+            C.GUTTER_WIDTH = new_gutter
+            C.MAP_OFFSET_X = new_gutter
+            C.SCREEN_WIDTH = C.MAP_PIXEL_WIDTH + 2 * new_gutter
+        return True
 
     def _load_player_sprite(self):
         try:
@@ -234,6 +264,7 @@ class Game:
         self.dungeon_level = 1
         self.log = []
         self.player = entities.Player(0, 0)
+        self.level_history = {}
         self.shake_timer = 0
         self.shake_intensity = 0
         self.flash_timer = 0
@@ -290,36 +321,19 @@ class Game:
 
         self.grid = data["grid"]
         self.stairs_pos = tuple(data["stairs_pos"])
+        up_stairs = data.get("up_stairs_pos")
+        self.up_stairs_pos = tuple(up_stairs) if up_stairs else None
         self.explored = {tuple(t) for t in data["explored"]}
         self.traps = {tuple(int(v) for v in pos): kind for pos, kind in data.get("traps", [])}
         shrine = data.get("shrine_pos")
         self.shrine_pos = tuple(shrine) if shrine else None
 
-        self.monsters = []
-        for m in data["monsters"]:
-            elite = None
-            if m.get("elite_name"):
-                elite = next((e for e in C.ELITE_MODIFIERS if e["name"] == m["elite_name"]), None)
-            monster = entities.Monster(m["x"], m["y"], m["kind"], boss=m["boss"], elite=elite)
-            monster.hp = m["hp"]
-            monster.awake = m["awake"]
-            monster.is_split_child = m.get("is_split_child", False)
-            monster.enraged = m.get("enraged", False)
-            if monster.enraged:
-                monster.power = int(monster.power * 1.5)
-            self.monsters.append(monster)
-
-        self.items = []
-        for i in data["items"]:
-            self.items.append(
-                entities.Item(
-                    i["x"], i["y"], i["kind"], i["name"], i["char"], tuple(i["color"]),
-                    bonus=i["bonus"], scroll_type=i.get("scroll_type"), rarity_id=i.get("rarity_id"),
-                    element_id=i.get("element_id"),
-                )
-            )
-
+        self.monsters = [self._deserialize_monster(m) for m in data["monsters"]]
+        self.items = [self._deserialize_item(i) for i in data["items"]]
         self.merchants = [entities.Merchant(m["x"], m["y"]) for m in data.get("merchants", [])]
+        self.level_history = {
+            int(level): snapshot for level, snapshot in data.get("level_history", {}).items()
+        }
 
         self.shake_timer = 0
         self.shake_intensity = 0
@@ -360,24 +374,78 @@ class Game:
             },
             "grid": self.grid,
             "stairs_pos": list(self.stairs_pos),
+            "up_stairs_pos": list(self.up_stairs_pos) if self.up_stairs_pos else None,
             "explored": [list(t) for t in self.explored],
             "traps": [[list(pos), kind] for pos, kind in self.traps.items()],
             "shrine_pos": list(self.shrine_pos) if self.shrine_pos else None,
-            "monsters": [
-                {
-                    "x": m.x, "y": m.y, "kind": m.kind, "boss": m.is_boss, "hp": m.hp, "awake": m.awake,
-                    "elite_name": m.elite_name, "is_split_child": m.is_split_child, "enraged": m.enraged,
-                }
-                for m in self.monsters
-            ],
-            "items": [
-                {"x": i.x, "y": i.y, "kind": i.kind, "name": i.name, "char": i.char,
-                 "color": list(i.color), "bonus": i.bonus, "scroll_type": i.scroll_type,
-                 "rarity_id": i.rarity_id, "element_id": i.element_id}
-                for i in self.items
-            ],
+            "monsters": [self._serialize_monster(m) for m in self.monsters],
+            "items": [self._serialize_item(i) for i in self.items],
+            "merchants": [{"x": m.x, "y": m.y} for m in self.merchants],
+            "level_history": {str(level): snap for level, snap in self.level_history.items()},
+        }
+
+    @staticmethod
+    def _serialize_monster(m):
+        return {
+            "x": m.x, "y": m.y, "kind": m.kind, "boss": m.is_boss, "hp": m.hp, "awake": m.awake,
+            "elite_name": m.elite_name, "is_split_child": m.is_split_child, "enraged": m.enraged,
+        }
+
+    @staticmethod
+    def _deserialize_monster(m):
+        elite = None
+        if m.get("elite_name"):
+            elite = next((e for e in C.ELITE_MODIFIERS if e["name"] == m["elite_name"]), None)
+        monster = entities.Monster(m["x"], m["y"], m["kind"], boss=m["boss"], elite=elite)
+        monster.hp = m["hp"]
+        monster.awake = m["awake"]
+        monster.is_split_child = m.get("is_split_child", False)
+        monster.enraged = m.get("enraged", False)
+        if monster.enraged:
+            monster.power = int(monster.power * 1.5)
+        return monster
+
+    @staticmethod
+    def _serialize_item(i):
+        return {
+            "x": i.x, "y": i.y, "kind": i.kind, "name": i.name, "char": i.char,
+            "color": list(i.color), "bonus": i.bonus, "scroll_type": i.scroll_type,
+            "rarity_id": i.rarity_id, "element_id": i.element_id,
+        }
+
+    @staticmethod
+    def _deserialize_item(i):
+        return entities.Item(
+            i["x"], i["y"], i["kind"], i["name"], i["char"], tuple(i["color"]),
+            bonus=i["bonus"], scroll_type=i.get("scroll_type"), rarity_id=i.get("rarity_id"),
+            element_id=i.get("element_id"),
+        )
+
+    def _snapshot_current_level(self):
+        return {
+            "grid": self.grid,
+            "stairs_pos": list(self.stairs_pos),
+            "up_stairs_pos": list(self.up_stairs_pos) if self.up_stairs_pos else None,
+            "explored": [list(t) for t in self.explored],
+            "traps": [[list(pos), kind] for pos, kind in self.traps.items()],
+            "shrine_pos": list(self.shrine_pos) if self.shrine_pos else None,
+            "monsters": [self._serialize_monster(m) for m in self.monsters],
+            "items": [self._serialize_item(i) for i in self.items],
             "merchants": [{"x": m.x, "y": m.y} for m in self.merchants],
         }
+
+    def _restore_level_snapshot(self, snap):
+        self.grid = snap["grid"]
+        self.stairs_pos = tuple(snap["stairs_pos"])
+        up_stairs = snap.get("up_stairs_pos")
+        self.up_stairs_pos = tuple(up_stairs) if up_stairs else None
+        self.explored = {tuple(t) for t in snap["explored"]}
+        self.traps = {tuple(int(v) for v in pos): kind for pos, kind in snap.get("traps", [])}
+        shrine = snap.get("shrine_pos")
+        self.shrine_pos = tuple(shrine) if shrine else None
+        self.monsters = [self._deserialize_monster(m) for m in snap["monsters"]]
+        self.items = [self._deserialize_item(i) for i in snap["items"]]
+        self.merchants = [entities.Merchant(m["x"], m["y"]) for m in snap.get("merchants", [])]
 
     def _save_and_quit(self):
         persistence.save_run(self._build_save_data())
@@ -394,6 +462,12 @@ class Game:
         self.player.x, self.player.y = self.rooms[0].center()
         self.player.snap()
         self.stairs_pos = self.rooms[-1].center()
+        # Every level except the first has a way back up, placed at this
+        # level's own entry point - the same tile the player spawns on here
+        # (see _advance_level/_ascend_level: descending always arrives at
+        # up_stairs_pos, ascending always arrives at the level below's own
+        # stairs_pos, so the two sides of every staircase line up).
+        self.up_stairs_pos = self.rooms[0].center() if self.dungeon_level > 1 else None
 
         self.monsters = []
         self.items = []
@@ -1008,6 +1082,9 @@ class Game:
             if (self.player.x, self.player.y) == self.stairs_pos:
                 self._advance_level()
                 return
+            if self.up_stairs_pos and (self.player.x, self.player.y) == self.up_stairs_pos:
+                self._ascend_level()
+                return
         else:
             return
 
@@ -1120,10 +1197,38 @@ class Game:
             spawned += 1
 
     def _advance_level(self):
+        self.level_history[self.dungeon_level] = self._snapshot_current_level()
         self.dungeon_level += 1
         self.add_log(self.t("log_descend_level", level=self.dungeon_level))
         self.sounds.play("stairs")
-        self.new_level()
+        if self.dungeon_level in self.level_history:
+            self._restore_level_snapshot(self.level_history.pop(self.dungeon_level))
+            self.player.x, self.player.y = self.up_stairs_pos
+            self.player.snap()
+            self._recompute_fov()
+        else:
+            self.new_level()
+        self._check_achievements()
+        self._maybe_show_levelup_choice()
+
+    def _ascend_level(self):
+        if self.dungeon_level <= 1 or not self.up_stairs_pos:
+            return
+        self.level_history[self.dungeon_level] = self._snapshot_current_level()
+        self.dungeon_level -= 1
+        self.add_log(self.t("log_ascend_level", level=self.dungeon_level))
+        self.sounds.play("stairs")
+        if self.dungeon_level in self.level_history:
+            self._restore_level_snapshot(self.level_history.pop(self.dungeon_level))
+        else:
+            # Shouldn't happen in practice - every level below the current
+            # one was necessarily snapshotted on the way down - but fall
+            # back to a fresh level rather than crash if history is ever
+            # missing (e.g. an old save from before this feature existed).
+            self.new_level()
+        self.player.x, self.player.y = self.stairs_pos
+        self.player.snap()
+        self._recompute_fov()
         self._check_achievements()
         self._maybe_show_levelup_choice()
 
@@ -2181,6 +2286,9 @@ class Game:
 
         if self.stairs_pos in self.explored:
             self._draw_ladder(*self.stairs_pos, ox, oy)
+
+        if self.up_stairs_pos and self.up_stairs_pos in self.explored:
+            self._draw_char("<", self.up_stairs_pos[0], self.up_stairs_pos[1], C.COLOR_STAIRS_UP, ox, oy)
 
         if self.shrine_pos and self.shrine_pos in self.explored:
             self._draw_char("A", self.shrine_pos[0], self.shrine_pos[1], C.COLOR_SHRINE, ox, oy)

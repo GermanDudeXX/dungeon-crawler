@@ -183,6 +183,7 @@ STRINGS = {
     "log_trap_poison": {"en": "You trigger a {trap}! You are poisoned.", "de": "Du löst eine {trap} aus! Du bist vergiftet."},
     "log_trap_alarm": {"en": "You trigger a {trap}! Monsters awaken!", "de": "Du löst eine {trap} aus! Monster erwachen!"},
     "log_descend_level": {"en": "You descend to level {level}.", "de": "Du steigst zu Ebene {level} hinab."},
+    "log_ascend_level": {"en": "You climb back up to level {level}.", "de": "Du steigst zurück zu Ebene {level} hinauf."},
     "log_pickup_item": {"en": "You pick up a {item}.", "de": "Du erhältst: {item}."},
     "log_equip_weapon": {"en": "You equip the {item} (+{bonus} power).", "de": "Ausgerüstet: {item} (+{bonus} Angriff)."},
     "log_find_worse_weapon": {"en": "You find a {item}, but your {current} is better.", "de": "Gefunden: {item}, aber {current} ist besser."},
