@@ -874,6 +874,26 @@ class Game:
 
             self.render()
             self.clock.tick(30)
+            self._log_fps()
+
+    def _log_fps(self):
+        # TEMPORARY DIAGNOSTIC - remove once the lag work is done.
+        # Prints the real achieved framerate and the render-only cost once a
+        # second, so we can see on a real device whether we're actually
+        # holding the 30fps the frame-counted input repeat assumes.
+        if not ON_ANDROID:
+            return
+        self._fps_frames = getattr(self, "_fps_frames", 0) + 1
+        now = pygame.time.get_ticks()
+        last = getattr(self, "_fps_last", None)
+        if last is None:
+            self._fps_last = now
+            return
+        if now - last >= 1000:
+            print(f"[perf] {self._fps_frames * 1000 / (now - last):.1f} fps "
+                  f"canvas={C.SCREEN_WIDTH}x{C.SCREEN_HEIGHT} state={self.state}")
+            self._fps_frames = 0
+            self._fps_last = now
 
     def _handle_movement_repeat(self):
         keys = pygame.key.get_pressed()
