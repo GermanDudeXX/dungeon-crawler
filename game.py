@@ -85,7 +85,11 @@ class Game:
         # across the bus. A plain Surface is normal cached RAM, so the
         # many small draws are fast again and only one large sequential
         # copy per frame touches the slow surface.
-        self.screen = pygame.Surface((C.SCREEN_WIDTH, C.SCREEN_HEIGHT)).convert()
+        # Explicitly 32-bit. Surface.convert() would instead match the
+        # display's own format, and if SDL hands us a 24-bit display on
+        # Android every pixel becomes an unaligned 3-byte access with no
+        # SIMD fast path - which fits the measured ~20M px/s fill rate.
+        self.screen = pygame.Surface((C.SCREEN_WIDTH, C.SCREEN_HEIGHT), 0, 32)
         self.clock = pygame.time.Clock()
         # pygame.font.SysFont looks up a named font through the OS's font
         # system, which crashes on Android (no such font, no font-listing
@@ -122,6 +126,8 @@ class Game:
         self.item_sprites = self._load_item_sprites()
         self.ladder_sprite = self._load_scaled_sprite(C.LADDER_SPRITE_PATH, C.LADDER_SPRITE_HEIGHT)
         self.merchant_sprite = self._load_scaled_sprite(C.MERCHANT_SPRITE_PATH, C.MERCHANT_SPRITE_HEIGHT)
+        self.needs_redraw = True
+        self._last_draw_ms = 0
         self.state = "title"
         self.stats_return_state = "title"
         self.settings_return_state = "title"
@@ -878,6 +884,7 @@ class Game:
                         persistence.save_run(self._build_save_data())
                     pygame.quit()
                     sys.exit()
+                self.needs_redraw = True
                 if event.type == pygame.KEYDOWN:
                     self._handle_key(event.key)
                 elif event.type == pygame.MOUSEBUTTONDOWN:
@@ -890,18 +897,46 @@ class Game:
                 self._update_animations()
             elif self.state == "confirm_disable_touch" and self.touch_warning_timer > 0:
                 self.touch_warning_timer -= 1
+                self.needs_redraw = True
 
-            t0 = pygame.time.get_ticks()
-            self.render()
-            # render() ends in _present(), which times itself - subtract
-            # that to get drawing-only time.
-            flip = getattr(self, "_perf_flip_frame", 0.0)
-            self._perf_draw_ms = (getattr(self, "_perf_draw_ms", 0.0)
-                                  + (pygame.time.get_ticks() - t0) - flip)
-            self._perf_flip_ms = getattr(self, "_perf_flip_ms", 0.0) + flip
-            self._perf_flip_frame = 0.0
+            if self._should_redraw():
+                t0 = pygame.time.get_ticks()
+                self.render()
+                # render() ends in _present(), which times itself -
+                # subtract that to get drawing-only time.
+                flip = getattr(self, "_perf_flip_frame", 0.0)
+                self._perf_draw_ms = (getattr(self, "_perf_draw_ms", 0.0)
+                                      + (pygame.time.get_ticks() - t0) - flip)
+                self._perf_flip_ms = getattr(self, "_perf_flip_ms", 0.0) + flip
+                self._perf_flip_frame = 0.0
+                self.needs_redraw = False
+                self._last_draw_ms = pygame.time.get_ticks()
             self.clock.tick(30)
             self._log_fps()
+
+    def _should_redraw(self):
+        # This is a turn-based game: between the player's moves the screen
+        # is completely static, so redrawing it 30x a second is pure waste
+        # - and on a real device a single frame costs ~250ms, which is
+        # most of the reported input lag (the loop was too busy redrawing
+        # identical pixels to service touches promptly). Redraw only when
+        # something actually changed or an animation is mid-flight.
+        if self.needs_redraw:
+            return True
+        if self.state == "playing" and self._animations_active():
+            return True
+        # Safety net: never let the screen stay stale for longer than half
+        # a second, whatever we might have forgotten to flag.
+        return pygame.time.get_ticks() - getattr(self, "_last_draw_ms", 0) > 500
+
+    def _animations_active(self):
+        if self.shake_timer > 0 or self.flash_timer > 0 or self.boss_banner_timer > 0:
+            return True
+        if self.damage_numbers:
+            return True
+        if self.player.render_x != self.player.x or self.player.render_y != self.player.y:
+            return True
+        return any(m.render_x != m.x or m.render_y != m.y for m in self.monsters)
 
     def _present(self):
         # One large sequential copy of the in-RAM canvas onto the real
@@ -932,7 +967,10 @@ class Game:
             flip = getattr(self, "_perf_flip_ms", 0.0) / n
             print(f"[perf] {self._fps_frames * 1000 / (now - last):.1f} fps "
                   f"draw={draw:.0f}ms flip={flip:.0f}ms "
-                  f"canvas={C.SCREEN_WIDTH}x{C.SCREEN_HEIGHT} state={self.state}")
+                  f"canvas={C.SCREEN_WIDTH}x{C.SCREEN_HEIGHT} "
+                  f"bits={self.screen.get_bitsize()}/{self.display.get_bitsize()} "
+                  f"hwaccel={bool(self.display.get_flags() & pygame.HWSURFACE)} "
+                  f"state={self.state}")
             self._fps_frames = 0
             self._perf_draw_ms = 0.0
             self._perf_flip_ms = 0.0
@@ -957,6 +995,7 @@ class Game:
         now = pygame.time.get_ticks()
         if now < self.move_next_ms:
             return
+        self.needs_redraw = True
         self._player_turn(dx, dy)
         if self.state != "playing":
             return
