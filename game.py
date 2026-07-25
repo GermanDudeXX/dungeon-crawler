@@ -76,11 +76,24 @@ class Game:
         self.font = pygame.font.Font(None, int(18 * self.ui_scale))
         self.big_font = pygame.font.Font(None, int(40 * self.ui_scale))
         self.big_font.set_bold(True)
-        # Variable-length list screens (stats/achievements/bestiary/
-        # tutorial) need their own, more conservative font to match
-        # _list_sc's layout scale - see _list_sc for why the full
-        # ui_scale isn't safe there.
-        self.list_font = pygame.font.Font(None, int(18 * min(self.ui_scale, C.SCREEN_HEIGHT / 790)))
+        # Menu/info screens each get their OWN scale, capped at exactly
+        # how big that specific screen's content can go before it runs
+        # off the bottom of the real screen - not one blanket guess for
+        # all of them. _SCREEN_DESIGN_EXTENT records, per screen, how
+        # tall its content is in the original ui_scale=1.0 design
+        # (measured from that screen's own render code: e.g. tutorial's
+        # ~25 lines bottom out around y=680) and whether it's laid out
+        # symmetrically around the vertical center (title/pause/confirm/
+        # level-up/game-over) or stacked from the top (stats/achievements/
+        # bestiary/settings/shop/tutorial). See _msc/_screen_font.
+        self.screen_scale = {}
+        self.screen_font = {}
+        for name, (extent, symmetric) in C.SCREEN_DESIGN_EXTENT.items():
+            avail = (C.SCREEN_HEIGHT / 2 - 30) if symmetric else (C.SCREEN_HEIGHT - 30)
+            cap = avail / extent
+            s = max(1.0, min(self.ui_scale, cap))
+            self.screen_scale[name] = s
+            self.screen_font[name] = pygame.font.Font(None, int(18 * s))
         self.stats = persistence.load_stats()
         self.save_data = persistence.load_save()
         self.settings = persistence.load_settings()
@@ -653,29 +666,14 @@ class Game:
             return loc.ELEMENT_DE.get(elem["name"], elem["name"])
         return elem["name"]
 
-    def _sc(self, n):
-        # Scales a pixel constant that was tuned for ui_scale=1.0 (the
-        # menu/info screens: title, stats, achievements, bestiary,
-        # tutorial, settings, shop, pause, confirm, game over, level-up
-        # choice). Every position, gap and box size in those screens goes
-        # through this, uniformly - a pure zoom of the original design, so
-        # it can't introduce new overlaps that weren't already there at
-        # 1.0x, no matter how big ui_scale gets on a real phone (up to
-        # ~2.6x measured). The live gameplay HUD has its own separate
-        # scale-aware layout already (see _render_hud) and doesn't use this.
-        return int(n * self.ui_scale)
-
-    def _list_sc(self, n):
-        # Same idea as _sc, but for screens whose content length varies
-        # (stats, achievements, bestiary, tutorial) - at the full ui_scale
-        # those can end up taller than the actual screen (SCREEN_HEIGHT
-        # doesn't grow at the same rate as ui_scale, since the map's
-        # portion of it is fixed size), running text off the bottom
-        # instead of just being letterboxed. Capped at how much the
-        # canvas itself actually grew (SCREEN_HEIGHT / the original
-        # 790px design height) so content that fit at ui_scale=1.0 is
-        # guaranteed to still fit, however big ui_scale gets elsewhere.
-        return int(n * min(self.ui_scale, C.SCREEN_HEIGHT / 790))
+    def _msc(self, screen, n):
+        # Scales a pixel constant that was tuned for ui_scale=1.0, using
+        # that specific screen's own precomputed cap (see __init__ and
+        # constants.SCREEN_DESIGN_EXTENT) - a pure zoom of the original
+        # design, so it can't introduce new overlaps that weren't already
+        # there at 1.0x, and each screen gets to scale up as far as its
+        # own content actually allows instead of one blanket guess.
+        return int(n * self.screen_scale[screen])
 
     def _toggle_touch_controls(self):
         self.settings["show_touch_controls"] = not self.settings.get("show_touch_controls", True)
@@ -1862,14 +1860,14 @@ class Game:
 
         pygame.display.flip()
 
-    def _draw_tap_button(self, rect, label, key):
-        # Every call site sizes its box with _list_sc, so the label has to
-        # match that same scale (list_font), not the full ui_scale - see
-        # _list_sc for why menu screens can't safely use the full scale.
+    def _draw_tap_button(self, rect, label, key, font=None):
+        # font must match whatever scale the caller sized the box with
+        # (see _msc/screen_font) - defaults to self.font for the few
+        # touch-control buttons that aren't part of a scaled menu screen.
         rect = pygame.Rect(rect)
         pygame.draw.rect(self.screen, (45, 45, 58), rect, border_radius=8)
         pygame.draw.rect(self.screen, (130, 130, 150), rect, width=2, border_radius=8)
-        text = self.list_font.render(label, True, C.COLOR_HUD_TEXT)
+        text = (font or self.font).render(label, True, C.COLOR_HUD_TEXT)
         self.screen.blit(text, text.get_rect(center=rect.center))
         self._tap_targets.append((rect, key))
 
@@ -1877,12 +1875,12 @@ class Game:
         self.screen.fill(C.COLOR_BG)
         self._tap_targets = []
         title = self.big_font.render("DUNGEON CRAWLER", True, (230, 200, 60))
-        rect = title.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - self._list_sc(160)))
+        rect = title.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - self._msc("title", 160)))
         self.screen.blit(title, rect)
 
         if self.player_sprite_large is not None:
             sprite_rect = self.player_sprite_large.get_rect(
-                center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - self._list_sc(60))
+                center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - self._msc("title", 60))
             )
             self.screen.blit(self.player_sprite_large, sprite_rect)
 
@@ -1899,30 +1897,30 @@ class Game:
             lines.append(self.t("title_saved_line", level=saved_level, clevel=saved_char_level))
 
         for i, line in enumerate(lines):
-            surf = self.list_font.render(line, True, C.COLOR_HUD_TEXT)
-            r = surf.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 + self._list_sc(20) + i * self._list_sc(26)))
+            surf = self.screen_font["title"].render(line, True, C.COLOR_HUD_TEXT)
+            r = surf.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 + self._msc("title", 20) + i * self._msc("title", 26)))
             self.screen.blit(surf, r)
 
-        button_y = C.SCREEN_HEIGHT // 2 + self._list_sc(20) + len(lines) * self._list_sc(26) + self._list_sc(14)
+        button_y = C.SCREEN_HEIGHT // 2 + self._msc("title", 20) + len(lines) * self._msc("title", 26) + self._msc("title", 14)
         cx = C.SCREEN_WIDTH // 2
-        bw, bh = self._list_sc(150), self._list_sc(44)
+        bw, bh = self._msc("title", 150), self._msc("title", 44)
         if self.save_data:
-            self._draw_tap_button((cx - self._list_sc(160), button_y, bw, bh), self.t("btn_continue"), pygame.K_RETURN)
-            self._draw_tap_button((cx + self._list_sc(10), button_y, bw, bh), self.t("btn_new_run"), pygame.K_n)
+            self._draw_tap_button((cx - self._msc("title", 160), button_y, bw, bh), self.t("btn_continue"), pygame.K_RETURN, font=self.screen_font["title"])
+            self._draw_tap_button((cx + self._msc("title", 10), button_y, bw, bh), self.t("btn_new_run"), pygame.K_n, font=self.screen_font["title"])
         else:
-            self._draw_tap_button((cx - bw // 2, button_y, bw, bh), self.t("btn_start"), pygame.K_RETURN)
-        row2_y = button_y + self._list_sc(54)
-        row3_y = button_y + self._list_sc(108)
-        self._draw_tap_button((cx - self._list_sc(235), row2_y, bw, bh), self.t("btn_tutorial"), pygame.K_t)
-        self._draw_tap_button((cx - bw // 2, row2_y, bw, bh), self.t("btn_stats"), pygame.K_s)
-        self._draw_tap_button((cx + self._list_sc(85), row2_y, bw, bh), self.t("btn_achievements"), pygame.K_a)
-        self._draw_tap_button((cx - self._list_sc(160), row3_y, bw, bh), self.t("btn_settings"), pygame.K_o)
-        self._draw_tap_button((cx + self._list_sc(10), row3_y, bw, bh), self.t("btn_bestiary"), pygame.K_b)
+            self._draw_tap_button((cx - bw // 2, button_y, bw, bh), self.t("btn_start"), pygame.K_RETURN, font=self.screen_font["title"])
+        row2_y = button_y + self._msc("title", 54)
+        row3_y = button_y + self._msc("title", 108)
+        self._draw_tap_button((cx - self._msc("title", 235), row2_y, bw, bh), self.t("btn_tutorial"), pygame.K_t, font=self.screen_font["title"])
+        self._draw_tap_button((cx - bw // 2, row2_y, bw, bh), self.t("btn_stats"), pygame.K_s, font=self.screen_font["title"])
+        self._draw_tap_button((cx + self._msc("title", 85), row2_y, bw, bh), self.t("btn_achievements"), pygame.K_a, font=self.screen_font["title"])
+        self._draw_tap_button((cx - self._msc("title", 160), row3_y, bw, bh), self.t("btn_settings"), pygame.K_o, font=self.screen_font["title"])
+        self._draw_tap_button((cx + self._msc("title", 10), row3_y, bw, bh), self.t("btn_bestiary"), pygame.K_b, font=self.screen_font["title"])
 
     def _render_stats(self):
         self.screen.fill(C.COLOR_BG)
         title = self.big_font.render(self.t("stats_title"), True, (230, 200, 60))
-        rect = title.get_rect(center=(C.SCREEN_WIDTH // 2, self._list_sc(90)))
+        rect = title.get_rect(center=(C.SCREEN_WIDTH // 2, self._msc("stats", 90)))
         self.screen.blit(title, rect)
 
         s = self.stats
@@ -1945,46 +1943,46 @@ class Game:
             self.t("stats_footer"),
         ]
         for i, line in enumerate(lines):
-            surf = self.list_font.render(line, True, C.COLOR_HUD_TEXT)
-            r = surf.get_rect(center=(C.SCREEN_WIDTH // 2, self._list_sc(180) + i * self._list_sc(30)))
+            surf = self.screen_font["stats"].render(line, True, C.COLOR_HUD_TEXT)
+            r = surf.get_rect(center=(C.SCREEN_WIDTH // 2, self._msc("stats", 180) + i * self._msc("stats", 30)))
             self.screen.blit(surf, r)
 
         back_rect = pygame.Rect(
-            C.SCREEN_WIDTH // 2 - self._list_sc(75), self._list_sc(180) + len(lines) * self._list_sc(30) + self._list_sc(10),
-            self._list_sc(150), self._list_sc(44),
+            C.SCREEN_WIDTH // 2 - self._msc("stats", 75), self._msc("stats", 180) + len(lines) * self._msc("stats", 30) + self._msc("stats", 10),
+            self._msc("stats", 150), self._msc("stats", 44),
         )
         pygame.draw.rect(self.screen, (45, 45, 58), back_rect, border_radius=8)
         pygame.draw.rect(self.screen, (130, 130, 150), back_rect, width=2, border_radius=8)
-        back_text = self.list_font.render(self.t("btn_back"), True, C.COLOR_HUD_TEXT)
+        back_text = self.screen_font["stats"].render(self.t("btn_back"), True, C.COLOR_HUD_TEXT)
         self.screen.blit(back_text, back_text.get_rect(center=back_rect.center))
 
     def _render_achievements(self):
         self.screen.fill(C.COLOR_BG)
         title = self.big_font.render(self.t("achievements_title"), True, (230, 200, 60))
-        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, self._list_sc(50))))
+        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, self._msc("achievements", 50))))
 
         unlocked = set(self.stats.get("achievements_unlocked", []))
         for i, (ach_id, name, desc) in enumerate(C.ACHIEVEMENTS):
-            y = self._list_sc(100) + i * self._list_sc(32)
+            y = self._msc("achievements", 100) + i * self._msc("achievements", 32)
             done = ach_id in unlocked
             color = (255, 215, 0) if done else (95, 95, 105)
             mark = "[X]" if done else "[ ]"
             name_d = self._achievement_name(ach_id, name)
             desc_d = self._achievement_desc(ach_id, desc)
-            surf = self.list_font.render(f"{mark} {name_d} - {desc_d}", True, color)
-            self.screen.blit(surf, (self._list_sc(60), y))
+            surf = self.screen_font["achievements"].render(f"{mark} {name_d} - {desc_d}", True, color)
+            self.screen.blit(surf, (self._msc("achievements", 60), y))
 
-        footer = self.list_font.render(self.t("achievements_footer"), True, C.COLOR_HUD_TEXT)
-        y = self._list_sc(100) + len(C.ACHIEVEMENTS) * self._list_sc(32) + self._list_sc(30)
+        footer = self.screen_font["achievements"].render(self.t("achievements_footer"), True, C.COLOR_HUD_TEXT)
+        y = self._msc("achievements", 100) + len(C.ACHIEVEMENTS) * self._msc("achievements", 32) + self._msc("achievements", 30)
         self.screen.blit(footer, footer.get_rect(center=(C.SCREEN_WIDTH // 2, y)))
 
     def _render_bestiary(self):
         self.screen.fill(C.COLOR_BG)
         title = self.big_font.render(self.t("bestiary_title"), True, (230, 200, 60))
-        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, self._list_sc(50))))
+        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, self._msc("bestiary", 50))))
 
         seen = set(self.stats.get("bestiary_seen", []))
-        y = self._list_sc(110)
+        y = self._msc("bestiary", 110)
         for kind, stats in C.MONSTER_TYPES.items():
             discovered = kind in seen
             color = stats["color"] if discovered else (80, 80, 90)
@@ -1994,11 +1992,11 @@ class Game:
             else:
                 name = "???"
 
-            char_surf = self.list_font.render(char, True, color)
-            self.screen.blit(char_surf, (self._list_sc(60), y))
+            char_surf = self.screen_font["bestiary"].render(char, True, color)
+            self.screen.blit(char_surf, (self._msc("bestiary", 60), y))
             name_color = color if discovered else (110, 110, 120)
-            name_surf = self.list_font.render(name, True, name_color)
-            self.screen.blit(name_surf, (self._list_sc(90), y))
+            name_surf = self.screen_font["bestiary"].render(name, True, name_color)
+            self.screen.blit(name_surf, (self._msc("bestiary", 90), y))
 
             if discovered:
                 tags = []
@@ -2018,33 +2016,33 @@ class Game:
                 info = self.t("bestiary_undiscovered")
                 info_color = (80, 80, 90)
 
-            info_surf = self.list_font.render(info, True, info_color)
-            self.screen.blit(info_surf, (self._list_sc(320), y))
-            y += self._list_sc(34)
+            info_surf = self.screen_font["bestiary"].render(info, True, info_color)
+            self.screen.blit(info_surf, (self._msc("bestiary", 320), y))
+            y += self._msc("bestiary", 34)
 
-        footer = self.list_font.render(self.t("achievements_footer"), True, C.COLOR_HUD_TEXT)
-        self.screen.blit(footer, footer.get_rect(center=(C.SCREEN_WIDTH // 2, y + self._list_sc(20))))
+        footer = self.screen_font["bestiary"].render(self.t("achievements_footer"), True, C.COLOR_HUD_TEXT)
+        self.screen.blit(footer, footer.get_rect(center=(C.SCREEN_WIDTH // 2, y + self._msc("bestiary", 20))))
 
     def _render_tutorial(self):
         self.screen.fill(C.COLOR_BG)
         title = self.big_font.render(self.t("tutorial_title"), True, (230, 200, 60))
-        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, self._list_sc(40))))
+        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, self._msc("tutorial", 40))))
 
         sections = loc.TUTORIAL_SECTIONS.get(self._lang(), loc.TUTORIAL_SECTIONS["en"])
 
-        y = self._list_sc(90)
+        y = self._msc("tutorial", 90)
         for heading, body_lines in sections:
-            heading_surf = self.list_font.render(heading, True, (120, 200, 255))
-            self.screen.blit(heading_surf, (self._list_sc(50), y))
-            y += self._list_sc(24)
+            heading_surf = self.screen_font["tutorial"].render(heading, True, (120, 200, 255))
+            self.screen.blit(heading_surf, (self._msc("tutorial", 50), y))
+            y += self._msc("tutorial", 24)
             for line in body_lines:
-                surf = self.list_font.render(line, True, C.COLOR_HUD_TEXT)
-                self.screen.blit(surf, (self._list_sc(70), y))
-                y += self._list_sc(20)
-            y += self._list_sc(8)
+                surf = self.screen_font["tutorial"].render(line, True, C.COLOR_HUD_TEXT)
+                self.screen.blit(surf, (self._msc("tutorial", 70), y))
+                y += self._msc("tutorial", 20)
+            y += self._msc("tutorial", 8)
 
-        footer = self.list_font.render(self.t("tutorial_footer"), True, C.COLOR_HELP_TEXT)
-        self.screen.blit(footer, footer.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT - self._list_sc(20))))
+        footer = self.screen_font["tutorial"].render(self.t("tutorial_footer"), True, C.COLOR_HELP_TEXT)
+        self.screen.blit(footer, footer.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT - self._msc("tutorial", 20))))
 
     def _render_pause(self):
         self.screen.fill(C.COLOR_BG)
@@ -2059,50 +2057,51 @@ class Game:
 
         self._tap_targets = []
         title = self.big_font.render(self.t("pause_title"), True, (230, 200, 60))
-        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - self._list_sc(110))))
+        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - self._msc("pause", 110))))
 
         cx = C.SCREEN_WIDTH // 2
-        bw, bh = self._list_sc(150), self._list_sc(44)
-        self._draw_tap_button((cx - bw // 2, C.SCREEN_HEIGHT // 2 - self._list_sc(30), bw, bh), self.t("btn_resume"), pygame.K_ESCAPE)
-        self._draw_tap_button((cx - bw // 2, C.SCREEN_HEIGHT // 2 + self._list_sc(24), bw, bh), self.t("btn_stats"), pygame.K_s)
-        self._draw_tap_button((cx - bw // 2, C.SCREEN_HEIGHT // 2 + self._list_sc(78), bw, bh), self.t("btn_settings"), pygame.K_o)
+        bw, bh = self._msc("pause", 150), self._msc("pause", 44)
+        self._draw_tap_button((cx - bw // 2, C.SCREEN_HEIGHT // 2 - self._msc("pause", 30), bw, bh), self.t("btn_resume"), pygame.K_ESCAPE, font=self.screen_font["pause"])
+        self._draw_tap_button((cx - bw // 2, C.SCREEN_HEIGHT // 2 + self._msc("pause", 24), bw, bh), self.t("btn_stats"), pygame.K_s, font=self.screen_font["pause"])
+        self._draw_tap_button((cx - bw // 2, C.SCREEN_HEIGHT // 2 + self._msc("pause", 78), bw, bh), self.t("btn_settings"), pygame.K_o, font=self.screen_font["pause"])
         self._draw_tap_button(
-            (cx - self._list_sc(110), C.SCREEN_HEIGHT // 2 + self._list_sc(132), self._list_sc(220), bh),
+            (cx - self._msc("pause", 110), C.SCREEN_HEIGHT // 2 + self._msc("pause", 132), self._msc("pause", 220), bh),
             self.t("btn_save_quit"), pygame.K_q,
+            font=self.screen_font["pause"],
         )
 
     def _render_settings(self):
         self.screen.fill(C.COLOR_BG)
         self._tap_targets = []
         title = self.big_font.render(self.t("settings_title"), True, (230, 200, 60))
-        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, self._list_sc(90))))
+        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, self._msc("settings", 90))))
 
         cx = C.SCREEN_WIDTH // 2
         touch_state = self.t("on") if self.settings.get("show_touch_controls", True) else self.t("off")
         lang_state = self.t("lang_de") if self._lang() == "de" else self.t("lang_en")
-        bw, bh = self._list_sc(200), self._list_sc(44)
+        bw, bh = self._msc("settings", 200), self._msc("settings", 44)
 
-        row1 = self.list_font.render(self.t("settings_touch_label", state=touch_state), True, C.COLOR_HUD_TEXT)
-        self.screen.blit(row1, row1.get_rect(center=(cx, self._list_sc(190))))
-        self._draw_tap_button((cx - bw // 2, self._list_sc(220), bw, bh), self.t("btn_toggle"), pygame.K_c)
+        row1 = self.screen_font["settings"].render(self.t("settings_touch_label", state=touch_state), True, C.COLOR_HUD_TEXT)
+        self.screen.blit(row1, row1.get_rect(center=(cx, self._msc("settings", 190))))
+        self._draw_tap_button((cx - bw // 2, self._msc("settings", 220), bw, bh), self.t("btn_toggle"), pygame.K_c, font=self.screen_font["settings"])
 
-        row2 = self.list_font.render(self.t("settings_lang_label", state=lang_state), True, C.COLOR_HUD_TEXT)
-        self.screen.blit(row2, row2.get_rect(center=(cx, self._list_sc(300))))
-        self._draw_tap_button((cx - bw // 2, self._list_sc(330), bw, bh), self.t("btn_toggle"), pygame.K_l)
+        row2 = self.screen_font["settings"].render(self.t("settings_lang_label", state=lang_state), True, C.COLOR_HUD_TEXT)
+        self.screen.blit(row2, row2.get_rect(center=(cx, self._msc("settings", 300))))
+        self._draw_tap_button((cx - bw // 2, self._msc("settings", 330), bw, bh), self.t("btn_toggle"), pygame.K_l, font=self.screen_font["settings"])
 
         volume = self.settings.get("volume", sound.MASTER_VOLUME)
-        row3 = self.list_font.render(self.t("settings_volume_label", state=f"{int(round(volume * 100))}%"), True, C.COLOR_HUD_TEXT)
-        self.screen.blit(row3, row3.get_rect(center=(cx, self._list_sc(410))))
-        self._draw_tap_button((cx - bw // 2, self._list_sc(440), bw, bh), self.t("btn_toggle"), pygame.K_v)
+        row3 = self.screen_font["settings"].render(self.t("settings_volume_label", state=f"{int(round(volume * 100))}%"), True, C.COLOR_HUD_TEXT)
+        self.screen.blit(row3, row3.get_rect(center=(cx, self._msc("settings", 410))))
+        self._draw_tap_button((cx - bw // 2, self._msc("settings", 440), bw, bh), self.t("btn_toggle"), pygame.K_v, font=self.screen_font["settings"])
 
-        row4 = self.list_font.render(self.t("settings_update_label", build=updater.current_build()), True, C.COLOR_HUD_TEXT)
-        self.screen.blit(row4, row4.get_rect(center=(cx, self._list_sc(520))))
-        self._draw_tap_button((cx - self._list_sc(130), self._list_sc(550), self._list_sc(260), bh), self.t("btn_check_update"), pygame.K_u)
+        row4 = self.screen_font["settings"].render(self.t("settings_update_label", build=updater.current_build()), True, C.COLOR_HUD_TEXT)
+        self.screen.blit(row4, row4.get_rect(center=(cx, self._msc("settings", 520))))
+        self._draw_tap_button((cx - self._msc("settings", 130), self._msc("settings", 550), self._msc("settings", 260), bh), self.t("btn_check_update"), pygame.K_u, font=self.screen_font["settings"])
 
-        self._draw_tap_button((cx - bw // 2, self._list_sc(630), self._list_sc(150), bh), self.t("btn_back"), pygame.K_ESCAPE)
+        self._draw_tap_button((cx - bw // 2, self._msc("settings", 630), self._msc("settings", 150), bh), self.t("btn_back"), pygame.K_ESCAPE, font=self.screen_font["settings"])
 
-        hint = self.list_font.render(self.t("settings_hint"), True, C.COLOR_HELP_TEXT)
-        self.screen.blit(hint, hint.get_rect(center=(cx, C.SCREEN_HEIGHT - self._list_sc(30))))
+        hint = self.screen_font["settings"].render(self.t("settings_hint"), True, C.COLOR_HELP_TEXT)
+        self.screen.blit(hint, hint.get_rect(center=(cx, C.SCREEN_HEIGHT - self._msc("settings", 30))))
 
     def _render_confirm_disable_touch(self):
         self.screen.fill(C.COLOR_BG)
@@ -2110,30 +2109,30 @@ class Game:
         cx = C.SCREEN_WIDTH // 2
 
         title = self.big_font.render(self.t("touch_warn_title"), True, (230, 80, 80))
-        self.screen.blit(title, title.get_rect(center=(cx, C.SCREEN_HEIGHT // 2 - self._list_sc(140))))
+        self.screen.blit(title, title.get_rect(center=(cx, C.SCREEN_HEIGHT // 2 - self._msc("confirm", 140))))
 
-        y = C.SCREEN_HEIGHT // 2 - self._list_sc(70)
+        y = C.SCREEN_HEIGHT // 2 - self._msc("confirm", 70)
         for key in ("touch_warn_line1", "touch_warn_line2"):
-            surf = self.list_font.render(self.t(key), True, C.COLOR_HUD_TEXT)
+            surf = self.screen_font["confirm"].render(self.t(key), True, C.COLOR_HUD_TEXT)
             self.screen.blit(surf, surf.get_rect(center=(cx, y)))
-            y += self._list_sc(26)
+            y += self._msc("confirm", 26)
 
         ready = self.touch_warning_timer <= 0
         seconds_left = (self.touch_warning_timer + 29) // 30
 
-        button_y = y + self._list_sc(40)
-        bw, bh = self._list_sc(150), self._list_sc(44)
-        self._draw_tap_button((cx - self._list_sc(160), button_y, bw, bh), self.t("btn_cancel"), pygame.K_ESCAPE)
+        button_y = y + self._msc("confirm", 40)
+        bw, bh = self._msc("confirm", 150), self._msc("confirm", 44)
+        self._draw_tap_button((cx - self._msc("confirm", 160), button_y, bw, bh), self.t("btn_cancel"), pygame.K_ESCAPE, font=self.screen_font["confirm"])
 
-        confirm_rect = pygame.Rect(cx + self._list_sc(10), button_y, bw, bh)
+        confirm_rect = pygame.Rect(cx + self._msc("confirm", 10), button_y, bw, bh)
         if ready:
-            self._draw_tap_button(confirm_rect, self.t("btn_confirm"), pygame.K_RETURN)
+            self._draw_tap_button(confirm_rect, self.t("btn_confirm"), pygame.K_RETURN, font=self.screen_font["confirm"])
         else:
             # Not a registered tap target yet - visibly disabled until the
             # wait is over, showing the countdown instead of a label.
             pygame.draw.rect(self.screen, (30, 30, 36), confirm_rect, border_radius=8)
             pygame.draw.rect(self.screen, (70, 70, 80), confirm_rect, width=2, border_radius=8)
-            label = self.list_font.render(f"{self.t('btn_confirm')} ({seconds_left})", True, (110, 110, 120))
+            label = self.screen_font["confirm"].render(f"{self.t('btn_confirm')} ({seconds_left})", True, (110, 110, 120))
             self.screen.blit(label, label.get_rect(center=confirm_rect.center))
 
     def _render_update(self):
@@ -2143,10 +2142,10 @@ class Game:
         cy = C.SCREEN_HEIGHT // 2
 
         title = self.big_font.render(self.t("update_title"), True, (230, 200, 60))
-        self.screen.blit(title, title.get_rect(center=(cx, cy - self._list_sc(150))))
+        self.screen.blit(title, title.get_rect(center=(cx, cy - self._msc("update", 150))))
 
         phase = self.update_phase
-        body_y = cy - self._list_sc(70)
+        body_y = cy - self._msc("update", 70)
 
         if phase == "checking":
             body = self.t("update_checking")
@@ -2174,33 +2173,33 @@ class Game:
 
         if body:
             max_width = C.SCREEN_WIDTH - 2 * C.GUTTER_WIDTH
-            for line in self._wrap_text(body, self.list_font, max_width):
-                surf = self.list_font.render(line, True, C.COLOR_HUD_TEXT)
+            for line in self._wrap_text(body, self.screen_font["update"], max_width):
+                surf = self.screen_font["update"].render(line, True, C.COLOR_HUD_TEXT)
                 self.screen.blit(surf, surf.get_rect(center=(cx, body_y)))
-                body_y += self._list_sc(24)
+                body_y += self._msc("update", 24)
 
         if phase == "downloading":
             done, total = self.update_progress
-            bar_w, bar_h = self._list_sc(320), self._list_sc(20)
-            bar_rect = pygame.Rect(cx - bar_w // 2, body_y + self._list_sc(10), bar_w, bar_h)
+            bar_w, bar_h = self._msc("update", 320), self._msc("update", 20)
+            bar_rect = pygame.Rect(cx - bar_w // 2, body_y + self._msc("update", 10), bar_w, bar_h)
             pygame.draw.rect(self.screen, (40, 40, 48), bar_rect, border_radius=6)
             if total:
                 fill_w = int(bar_w * min(1.0, done / total))
                 pygame.draw.rect(self.screen, (90, 180, 90), (bar_rect.x, bar_rect.y, fill_w, bar_h), border_radius=6)
             pygame.draw.rect(self.screen, (70, 70, 80), bar_rect, width=2, border_radius=6)
-            body_y = bar_rect.bottom + self._list_sc(10)
+            body_y = bar_rect.bottom + self._msc("update", 10)
 
-        button_y = max(body_y + self._list_sc(30), cy + self._list_sc(60))
+        button_y = max(body_y + self._msc("update", 30), cy + self._msc("update", 60))
         if phase == "available":
-            self._draw_tap_button((cx - self._list_sc(155), button_y, self._list_sc(310), self._list_sc(44)), self.t("btn_download_install"), pygame.K_RETURN)
+            self._draw_tap_button((cx - self._msc("update", 155), button_y, self._msc("update", 310), self._msc("update", 44)), self.t("btn_download_install"), pygame.K_RETURN, font=self.screen_font["update"])
         elif phase == "error":
-            self._draw_tap_button((cx - self._list_sc(155), button_y, self._list_sc(150), self._list_sc(44)), self.t("btn_retry"), pygame.K_r)
+            self._draw_tap_button((cx - self._msc("update", 155), button_y, self._msc("update", 150), self._msc("update", 44)), self.t("btn_retry"), pygame.K_r, font=self.screen_font["update"])
         elif phase == "needs_permission":
-            self._draw_tap_button((cx - self._list_sc(155), button_y, self._list_sc(310), self._list_sc(44)), self.t("btn_retry"), pygame.K_r)
+            self._draw_tap_button((cx - self._msc("update", 155), button_y, self._msc("update", 310), self._msc("update", 44)), self.t("btn_retry"), pygame.K_r, font=self.screen_font["update"])
 
         if phase not in ("downloading", "restarting"):
-            back_y = button_y + self._list_sc(60)
-            self._draw_tap_button((cx - self._list_sc(75), back_y, self._list_sc(150), self._list_sc(44)), self.t("btn_back"), pygame.K_ESCAPE)
+            back_y = button_y + self._msc("update", 60)
+            self._draw_tap_button((cx - self._msc("update", 75), back_y, self._msc("update", 150), self._msc("update", 44)), self.t("btn_back"), pygame.K_ESCAPE, font=self.screen_font["update"])
 
     def _wrap_text(self, text, font, max_width):
         words = text.split(" ")
@@ -2231,48 +2230,51 @@ class Game:
 
         self._tap_targets = []
         title = self.big_font.render(self.t("levelup_title"), True, (230, 200, 60))
-        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - self._list_sc(150))))
+        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - self._msc("levelup", 150))))
 
         cx = C.SCREEN_WIDTH // 2
         keys = [pygame.K_1, pygame.K_2]
         for i, perk in enumerate(self.perk_choices):
-            x = cx - self._list_sc(320) + i * self._list_sc(340)
-            y = C.SCREEN_HEIGHT // 2 - self._list_sc(60)
-            name_surf = self.list_font.render(f"{i + 1}. {self._perk_name(perk)}", True, (255, 255, 255))
-            self.screen.blit(name_surf, name_surf.get_rect(center=(x + self._list_sc(150), y)))
-            desc_surf = self.list_font.render(self._perk_desc(perk), True, C.COLOR_HUD_TEXT)
-            self.screen.blit(desc_surf, desc_surf.get_rect(center=(x + self._list_sc(150), y + self._list_sc(26))))
+            x = cx - self._msc("levelup", 320) + i * self._msc("levelup", 340)
+            y = C.SCREEN_HEIGHT // 2 - self._msc("levelup", 60)
+            name_surf = self.screen_font["levelup"].render(f"{i + 1}. {self._perk_name(perk)}", True, (255, 255, 255))
+            self.screen.blit(name_surf, name_surf.get_rect(center=(x + self._msc("levelup", 150), y)))
+            desc_surf = self.screen_font["levelup"].render(self._perk_desc(perk), True, C.COLOR_HUD_TEXT)
+            self.screen.blit(desc_surf, desc_surf.get_rect(center=(x + self._msc("levelup", 150), y + self._msc("levelup", 26))))
             self._draw_tap_button(
-                (x + self._list_sc(50), y + self._list_sc(50), self._list_sc(200), self._list_sc(44)),
+                (x + self._msc("levelup", 50), y + self._msc("levelup", 50), self._msc("levelup", 200), self._msc("levelup", 44)),
                 self.t("btn_choose"), keys[i],
+                font=self.screen_font["levelup"],
             )
 
-        hint = self.list_font.render(self.t("levelup_hint"), True, C.COLOR_HELP_TEXT)
-        self.screen.blit(hint, hint.get_rect(center=(cx, C.SCREEN_HEIGHT // 2 + self._list_sc(140))))
+        hint = self.screen_font["levelup"].render(self.t("levelup_hint"), True, C.COLOR_HELP_TEXT)
+        self.screen.blit(hint, hint.get_rect(center=(cx, C.SCREEN_HEIGHT // 2 + self._msc("levelup", 140))))
 
     def _render_shop(self):
         self.screen.fill(C.COLOR_BG)
         self._tap_targets = []
         title = self.big_font.render(self.t("shop_title"), True, C.COLOR_MERCHANT)
-        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, self._list_sc(80))))
-        gold_text = self.list_font.render(self.t("shop_gold_label", gold=self.player.gold), True, C.COLOR_GOLD)
-        self.screen.blit(gold_text, gold_text.get_rect(center=(C.SCREEN_WIDTH // 2, self._list_sc(126))))
+        self.screen.blit(title, title.get_rect(center=(C.SCREEN_WIDTH // 2, self._msc("shop", 80))))
+        gold_text = self.screen_font["shop"].render(self.t("shop_gold_label", gold=self.player.gold), True, C.COLOR_GOLD)
+        self.screen.blit(gold_text, gold_text.get_rect(center=(C.SCREEN_WIDTH // 2, self._msc("shop", 126))))
 
         keys = [pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4]
         for i, stock in enumerate(C.SHOP_STOCK):
-            y = self._list_sc(180) + i * self._list_sc(60)
+            y = self._msc("shop", 180) + i * self._msc("shop", 60)
             label = f"{i + 1}. {self.tn(stock['name'])} - {stock['price']} {self.t('gold_word')}"
-            surf = self.list_font.render(label, True, C.COLOR_HUD_TEXT)
-            self.screen.blit(surf, (C.SCREEN_WIDTH // 2 - self._list_sc(260), y + self._list_sc(8)))
+            surf = self.screen_font["shop"].render(label, True, C.COLOR_HUD_TEXT)
+            self.screen.blit(surf, (C.SCREEN_WIDTH // 2 - self._msc("shop", 260), y + self._msc("shop", 8)))
             self._draw_tap_button(
-                (C.SCREEN_WIDTH // 2 + self._list_sc(120), y - self._list_sc(6), self._list_sc(100), self._list_sc(40)),
+                (C.SCREEN_WIDTH // 2 + self._msc("shop", 120), y - self._msc("shop", 6), self._msc("shop", 100), self._msc("shop", 40)),
                 self.t("btn_buy"), keys[i],
+                font=self.screen_font["shop"],
             )
 
-        leave_y = self._list_sc(180) + len(C.SHOP_STOCK) * self._list_sc(60) + self._list_sc(20)
+        leave_y = self._msc("shop", 180) + len(C.SHOP_STOCK) * self._msc("shop", 60) + self._msc("shop", 20)
         self._draw_tap_button(
-            (C.SCREEN_WIDTH // 2 - self._list_sc(75), leave_y, self._list_sc(150), self._list_sc(44)),
+            (C.SCREEN_WIDTH // 2 - self._msc("shop", 75), leave_y, self._msc("shop", 150), self._msc("shop", 44)),
             self.t("btn_leave"), pygame.K_ESCAPE,
+            font=self.screen_font["shop"],
         )
 
     def _render_minimap(self):
@@ -2294,8 +2296,8 @@ class Game:
         boss = next((m for m in self.monsters if m.is_boss and m.awake and m.is_alive()), None)
         if boss is None:
             return
-        bar_w, bar_h = self._sc(400), self._sc(22)
-        x, y = C.SCREEN_WIDTH // 2 - bar_w // 2, self._sc(10)
+        bar_w, bar_h = self._msc("boss_bar", 400), self._msc("boss_bar", 22)
+        x, y = C.SCREEN_WIDTH // 2 - bar_w // 2, self._msc("boss_bar", 10)
         pygame.draw.rect(self.screen, (40, 10, 40), (x, y, bar_w, bar_h))
         ratio = max(0, boss.hp / boss.max_hp)
         pygame.draw.rect(self.screen, C.COLOR_BOSS, (x, y, int(bar_w * ratio), bar_h))
@@ -2583,7 +2585,7 @@ class Game:
         self.screen.blit(overlay, (0, 0))
 
         text = self.big_font.render(self.t("gameover_title"), True, (200, 40, 40))
-        rect = text.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - self._list_sc(60)))
+        rect = text.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - self._msc("gameover", 60)))
         self.screen.blit(text, rect)
 
         best_line = self.t("gameover_best")
@@ -2595,13 +2597,13 @@ class Game:
 
         for i, line in enumerate(lines):
             color = (255, 215, 0) if line == best_line else C.COLOR_HUD_TEXT
-            surf = self.list_font.render(line, True, color)
-            r = surf.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - self._list_sc(10) + i * self._list_sc(28)))
+            surf = self.screen_font["gameover"].render(line, True, color)
+            r = surf.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - self._msc("gameover", 10) + i * self._msc("gameover", 28)))
             self.screen.blit(surf, r)
 
-        button_y = C.SCREEN_HEIGHT // 2 - self._list_sc(10) + len(lines) * self._list_sc(28) + self._list_sc(20)
+        button_y = C.SCREEN_HEIGHT // 2 - self._msc("gameover", 10) + len(lines) * self._msc("gameover", 28) + self._msc("gameover", 20)
         cx = C.SCREEN_WIDTH // 2
-        bw, bh = self._list_sc(150), self._list_sc(44)
-        self._draw_tap_button((cx - self._list_sc(235), button_y, bw, bh), self.t("btn_restart"), pygame.K_r)
-        self._draw_tap_button((cx - bw // 2, button_y, bw, bh), self.t("btn_stats"), pygame.K_s)
-        self._draw_tap_button((cx + self._list_sc(85), button_y, bw, bh), self.t("btn_quit"), pygame.K_ESCAPE)
+        bw, bh = self._msc("gameover", 150), self._msc("gameover", 44)
+        self._draw_tap_button((cx - self._msc("gameover", 235), button_y, bw, bh), self.t("btn_restart"), pygame.K_r, font=self.screen_font["gameover"])
+        self._draw_tap_button((cx - bw // 2, button_y, bw, bh), self.t("btn_stats"), pygame.K_s, font=self.screen_font["gameover"])
+        self._draw_tap_button((cx + self._msc("gameover", 85), button_y, bw, bh), self.t("btn_quit"), pygame.K_ESCAPE, font=self.screen_font["gameover"])

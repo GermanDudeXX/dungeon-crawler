@@ -31,6 +31,33 @@ SCREEN_WIDTH = MAP_PIXEL_WIDTH + 2 * GUTTER_WIDTH
 MIN_GUTTER_WIDTH = 220
 SCREEN_HEIGHT = MAP_HEIGHT * TILE_SIZE + HUD_HEIGHT
 
+# Per-screen "how tall is this screen's content, measured at ui_scale=1.0"
+# (name -> (extent_px, symmetric_around_center)). Used by Game.__init__ to
+# give each menu/info screen its own scale cap - big enough that the
+# screen still fits after scaling, instead of one flat guess that's too
+# conservative for roomy screens (bestiary, pause) and still not quite
+# enough for the tightest one (tutorial). extent_px is measured from that
+# screen's own render code: for a top-anchored screen (stats, achievements,
+# bestiary, settings, shop, tutorial) it's the y-position of the last
+# element's bottom edge; for a screen centered on SCREEN_HEIGHT//2 (title,
+# pause, confirm, level-up, game over) it's the larger of how far the
+# content extends above vs below center.
+SCREEN_DESIGN_EXTENT = {
+    "title": (320, True),
+    "stats": (564, False),
+    "achievements": (514, False),
+    "bestiary": (368, False),
+    "settings": (674, False),
+    "shop": (484, False),
+    "tutorial": (680, False),
+    "pause": (176, True),
+    "confirm": (206, True),
+    "levelup": (294, True),
+    "gameover": (130, True),
+    "update": (220, True),
+    "boss_bar": (32, False),
+}
+
 # Bundled read-only assets: a PyInstaller onefile exe unpacks these into
 # sys._MEIPASS at startup, not next to the .exe itself (unlike save data,
 # see persistence.py - these are read-only and fine to live in the
