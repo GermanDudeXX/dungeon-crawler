@@ -2075,8 +2075,20 @@ class Game:
             self._present()
             return
 
-        self.screen.fill(C.COLOR_BG)
+        # Only the strips the map does not cover need clearing - the map
+        # cache paints its whole rect and the HUD its own band, so filling
+        # the entire 2.7M-pixel canvas every frame was mostly wasted. The
+        # map is inset by the shake offset, so clear a little wider than
+        # the gutters to catch it.
         ox, oy = self._shake_offset()
+        map_w, map_h = C.MAP_PIXEL_WIDTH, C.MAP_HEIGHT * C.TILE_SIZE
+        slack = self.shake_intensity if self.shake_timer > 0 else 0
+        self.screen.fill(C.COLOR_BG, (0, 0, C.MAP_OFFSET_X + slack, map_h))
+        self.screen.fill(C.COLOR_BG,
+                         (C.MAP_OFFSET_X + map_w - slack, 0,
+                          C.SCREEN_WIDTH - C.MAP_OFFSET_X - map_w + slack, map_h))
+        if slack:
+            self.screen.fill(C.COLOR_BG, (0, 0, C.SCREEN_WIDTH, slack))
         self._render_map(ox, oy)
         self._render_entities(ox, oy)
         self._render_damage_numbers(ox, oy)
