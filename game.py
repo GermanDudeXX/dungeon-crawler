@@ -169,40 +169,53 @@ class Game:
         if win_w <= 0 or win_h <= 0:
             return False
 
-        # Grow the HUD band to fill whatever vertical space is left over
-        # once the fixed-size map is drawn, instead of guessing a scale
-        # factor from device metrics - this is the real, already-measured
-        # window, so "fill it exactly" is always correct as long as the
-        # result stays under the ui_scale ceiling below. Floored at the
-        # original 190px design height so a window shorter than the map
-        # itself never shrinks the HUD.
+        # Pick the largest tile size the window can actually hold. The
+        # tile size used to be a fixed 24px, which on this device left
+        # the 40x25 map occupying only 960x600 of a 2448x1098 window -
+        # 39% of the width - while the HUD band soaked up the rest. The
+        # two constraints are the gutters (which must stay wide enough
+        # for the touch controls) and the HUD band under the map.
+        min_hud = 250
+        by_width = (win_w - 2 * C.MIN_GUTTER_WIDTH) // C.MAP_WIDTH
+        by_height = (win_h - min_hud) // C.MAP_HEIGHT
+        tile = max(24, min(by_width, by_height))
+        C.TILE_SIZE = tile
+        C.MAP_PIXEL_WIDTH = C.MAP_WIDTH * tile
+        self._rescale_tile_constants()
+
         map_pixel_height = C.MAP_HEIGHT * C.TILE_SIZE
-        raw_hud_height = max(190, win_h - map_pixel_height)
-        # Capped at 3x the original HUD design size - only bites on
-        # extreme/degenerate window shapes (a window far taller than any
-        # real phone), where filling exactly would make the HUD dwarf the
-        # map; ordinary phones (even ones with a big status-bar/nav-button
-        # inset) land well under this and get an exact, letterbox-free fit.
-        self.ui_scale = min(3.0, raw_hud_height / 190)
-        C.HUD_HEIGHT = int(190 * self.ui_scale)
+        # Whatever vertical space the map leaves goes to the HUD, floored
+        # at the original design height so a short window cannot squeeze
+        # it away entirely.
+        C.HUD_HEIGHT = max(190, win_h - map_pixel_height)
         C.SCREEN_HEIGHT = map_pixel_height + C.HUD_HEIGHT
+        self.ui_scale = C.HUD_HEIGHT / 190
 
         device_ratio = win_w / win_h
         # Reject 0/garbage/portrait-shaped reads rather than ever
         # producing a broken layout - falls back to the static
         # GUTTER_WIDTH/SCREEN_WIDTH already set in constants.py.
         if 1.2 <= device_ratio <= 3.5:
-            # The D-pad's own footprint inside the gutter grows with
-            # ui_scale too (see _setup_touch_controls), so the floor has
-            # to grow with it - otherwise a scaled-up D-pad on a
-            # narrow-but-dense phone can poke out past the gutter's left
-            # edge (off the requested logical canvas entirely).
-            min_gutter = C.MIN_GUTTER_WIDTH
-            new_gutter = max(min_gutter, (win_w - C.MAP_PIXEL_WIDTH) // 2)
+            new_gutter = max(C.MIN_GUTTER_WIDTH, (win_w - C.MAP_PIXEL_WIDTH) // 2)
             C.GUTTER_WIDTH = new_gutter
             C.MAP_OFFSET_X = new_gutter
             C.SCREEN_WIDTH = C.MAP_PIXEL_WIDTH + 2 * new_gutter
         return True
+
+    def _rescale_tile_constants(self):
+        """Re-derive everything that was computed from the old TILE_SIZE.
+
+        constants.py sizes the sprites relative to TILE_SIZE at import
+        time, so changing the tile size afterwards has to recompute them -
+        otherwise the art stays at the old scale and looks wrong on the
+        larger tiles. Called before any sprite is loaded (see __init__).
+        """
+        t = C.TILE_SIZE
+        C.PLAYER_SPRITE_HEIGHT = int(t * 1.8)
+        C.MONSTER_SPRITE_HEIGHT = int(t * 1.5)
+        C.ITEM_SPRITE_HEIGHT = int(t * 1.1)
+        C.LADDER_SPRITE_HEIGHT = int(t * 1.3)
+        C.MERCHANT_SPRITE_HEIGHT = int(t * 1.6)
 
     def _load_player_sprite(self):
         try:
@@ -264,8 +277,11 @@ class Game:
         max_s = (C.GUTTER_WIDTH - 2 * self.gap_m - 2 * g) // 3
         s = max(self.gap_xl, min(s, max_s))
 
+        # Anchor the whole cluster just above the HUD band so nothing
+        # overlaps it: the cross reaches s/2 + g + s beyond its centre.
+        map_bottom = C.MAP_HEIGHT * C.TILE_SIZE
         dpad_cx = C.GUTTER_WIDTH // 2
-        dpad_cy = C.MAP_HEIGHT * C.TILE_SIZE - s - g
+        dpad_cy = map_bottom - self.gap_m - (s // 2 + g + s)
         self.dpad_buttons = {
             "up": (pygame.Rect(dpad_cx - s // 2, dpad_cy - s - g, s, s), (0, -1), "^"),
             "down": (pygame.Rect(dpad_cx - s // 2, dpad_cy + g, s, s), (0, 1), "v"),
@@ -275,7 +291,7 @@ class Game:
 
         right_edge = C.SCREEN_WIDTH - self.gap_m
         potion_size = min(int(s * 1.2), C.GUTTER_WIDTH - 2 * self.gap_m)
-        potion_y = dpad_cy + g
+        potion_y = map_bottom - self.gap_m - potion_size
         self.potion_button = pygame.Rect(
             right_edge - potion_size, potion_y, potion_size, potion_size)
 
@@ -2763,90 +2779,85 @@ class Game:
         self.screen.blit(overlay, (C.MAP_OFFSET_X, 0))
 
     def _render_hud(self):
-        # Every offset below is scaled by self.ui_scale (1.0 on PC, up to
-        # 1.75x on dense phones) in lockstep with the font and HUD_HEIGHT
-        # itself (see _fit_screen_to_device) - growing the font without
-        # growing these pixel gaps to match would make HUD lines overlap.
-        scale = self.ui_scale
+        # Laid out from the actual band height and the shared font ladder
+        # rather than from self.ui_scale, so it stays readable however the
+        # map/HUD split lands on a given device.
         hud_y = C.MAP_HEIGHT * C.TILE_SIZE
         pygame.draw.rect(self.screen, C.COLOR_HUD_BG, (0, hud_y, C.SCREEN_WIDTH, C.HUD_HEIGHT))
 
-        # Content stays aligned under the map itself (offset by the same
-        # gutter width), not spread across the full HUD strip - the gutters
-        # below the D-pad/action buttons stay empty here, which is fine
-        # since they visually "belong" to those buttons above.
+        f = self.f_sm
+        row_h = f.get_linesize() + self.gap_s // 2
+        pad = self.gap_m
         ox = C.MAP_OFFSET_X
-        pad = int(10 * scale)
+        left_x = ox + pad
+        col_w = (C.SCREEN_WIDTH - ox - pad * 2) // 2
+        right_x = left_x + col_w
+        y = hud_y + self.gap_s
 
-        bar_width, bar_height = int(180 * scale), int(16 * scale)
-        pygame.draw.rect(self.screen, C.COLOR_HP_BAR_BG, (ox + pad, hud_y + pad, bar_width, bar_height))
+        bar_w = min(col_w - pad * 2, int(col_w * 0.55))
+        bar_h = f.get_height()
+
+        pygame.draw.rect(self.screen, C.COLOR_HP_BAR_BG, (left_x, y, bar_w, bar_h))
         hp_ratio = max(0, self.player.hp / self.player.max_hp)
-        pygame.draw.rect(
-            self.screen, C.COLOR_HP_BAR_FG, (ox + pad, hud_y + pad, int(bar_width * hp_ratio), bar_height)
-        )
-        hp_text = self.font.render(f"HP {max(0, self.player.hp)}/{self.player.max_hp}", True, C.COLOR_HUD_TEXT)
-        self.screen.blit(hp_text, (ox + int(200 * scale), hud_y + int(8 * scale)))
+        pygame.draw.rect(self.screen, C.COLOR_HP_BAR_FG, (left_x, y, int(bar_w * hp_ratio), bar_h))
+        self.screen.blit(f.render(f"HP {max(0, self.player.hp)}/{self.player.max_hp}", True,
+                                  C.COLOR_HUD_TEXT), (left_x + bar_w + self.gap_s, y))
 
-        xp_bar_x = ox + int(340 * scale)
-        pygame.draw.rect(self.screen, C.COLOR_XP_BAR_BG, (xp_bar_x, hud_y + pad, bar_width, bar_height))
+        pygame.draw.rect(self.screen, C.COLOR_XP_BAR_BG, (right_x, y, bar_w, bar_h))
         xp_ratio = self.player.xp / self.player.xp_to_next
-        pygame.draw.rect(
-            self.screen, C.COLOR_XP_BAR_FG, (xp_bar_x, hud_y + pad, int(bar_width * xp_ratio), bar_height)
-        )
-        xp_text = self.font.render(
-            f"Lv {self.player.level}  XP {self.player.xp}/{self.player.xp_to_next}", True, C.COLOR_HUD_TEXT
-        )
-        self.screen.blit(xp_text, (xp_bar_x + bar_width + pad, hud_y + int(8 * scale)))
+        pygame.draw.rect(self.screen, C.COLOR_XP_BAR_FG, (right_x, y, int(bar_w * xp_ratio), bar_h))
+        self.screen.blit(
+            f.render(f"Lv {self.player.level}  XP {self.player.xp}/{self.player.xp_to_next}",
+                     True, C.COLOR_HUD_TEXT), (right_x + bar_w + self.gap_s, y))
+        y += row_h
 
-        # Two-column icon+label overview instead of one dense wall of text -
-        # left column is equipment, right column is resources. Icons reuse
-        # the same glyph+colour already used for these items on the map,
-        # so the legend is consistent everywhere.
-        left_x, right_x = ox + pad, xp_bar_x
-        row_y = hud_y + int(34 * scale)
-        row_h = int(18 * scale)
-
+        # Two columns: equipment left, resources right. Icons reuse the
+        # same glyph and colour these items have on the map.
         weapon_color = C.RARITY_BY_ID.get(self.player.weapon_rarity_id, {}).get("color", (215, 215, 230))
         weapon_suffix = f" [{self.te(self.player.weapon_element_id)}]" if self.player.weapon_element_id else ""
-        self._hud_icon_row(left_x, row_y, "/", weapon_color,
-                            f"{self.tn(self.player.weapon_name)} (+{self.player.weapon_bonus}){weapon_suffix}",
-                            label_color=weapon_color)
-        self._hud_icon_row(right_x, row_y, "!", C.COLOR_POTION,
-                            f"{self.t('hud_potions')} {self.player.potions}")
+        self._hud_icon_row(left_x, y, "/", weapon_color,
+                           f"{self.tn(self.player.weapon_name)} (+{self.player.weapon_bonus}){weapon_suffix}",
+                           label_color=weapon_color)
+        self._hud_icon_row(right_x, y, "!", C.COLOR_POTION,
+                           f"{self.t('hud_potions')} {self.player.potions}")
+        y += row_h
 
         armor_color = C.RARITY_BY_ID.get(self.player.armor_rarity_id, {}).get("color", (170, 170, 185))
-        self._hud_icon_row(left_x, row_y + row_h, "[", armor_color,
-                            f"{self.tn(self.player.armor_name)} (+{self.player.armor_bonus})",
-                            label_color=armor_color)
-        self._hud_icon_row(right_x, row_y + row_h, "$", C.COLOR_GOLD,
-                            f"{self.t('hud_gold')} {self.player.gold}")
+        self._hud_icon_row(left_x, y, "[", armor_color,
+                           f"{self.tn(self.player.armor_name)} (+{self.player.armor_bonus})",
+                           label_color=armor_color)
+        self._hud_icon_row(right_x, y, "$", C.COLOR_GOLD,
+                           f"{self.t('hud_gold')} {self.player.gold}")
+        y += row_h
 
-        dlvl_text = self.font.render(f"Dungeon Lv {self.dungeon_level}", True, C.COLOR_HUD_TEXT)
-        self.screen.blit(dlvl_text, (left_x, row_y + 2 * row_h))
-        kills_text = self.font.render(f"{self.t('hud_kills')} {self.player.kills}", True, C.COLOR_HUD_TEXT)
-        self.screen.blit(kills_text, (right_x, row_y + 2 * row_h))
+        self.screen.blit(f.render(f"Dungeon Lv {self.dungeon_level}", True, C.COLOR_HUD_TEXT), (left_x, y))
+        self.screen.blit(f.render(f"{self.t('hud_kills')} {self.player.kills}", True, C.COLOR_HUD_TEXT), (right_x, y))
+        y += row_h
 
         scrolls = self.player.scrolls
-        scroll_line = (
-            f"{self.t('hud_scrolls_label')} Fire(F):{scrolls['fireball']}  Teleport(T):{scrolls['teleport']}  "
-            f"Reveal(V):{scrolls['reveal']}    {self.t('hud_menu_hint')}"
-        )
-        poison_suffix = f"    {self.t('hud_poisoned')}" if self.player.poison_turns > 0 else ""
-        scroll_color = C.COLOR_POISON if self.player.poison_turns > 0 else C.COLOR_HELP_TEXT
-        self.screen.blit(
-            self.font.render(scroll_line + poison_suffix, True, scroll_color), (ox + pad, hud_y + int(92 * scale))
-        )
+        scroll_line = (f"{self.t('hud_scrolls_label')} F:{scrolls['fireball']}  "
+                       f"T:{scrolls['teleport']}  V:{scrolls['reveal']}")
+        if self.player.poison_turns > 0:
+            scroll_line += f"    {self.t('hud_poisoned')}"
+            scroll_color = C.COLOR_POISON
+        else:
+            scroll_color = C.COLOR_HELP_TEXT
+        self.screen.blit(f.render(scroll_line, True, scroll_color), (left_x, y))
+        y += row_h
 
-        log_line_h = int(16 * scale)
-        for i, message in enumerate(self.log[-4:]):
-            msg_surf = self.font.render(message, True, C.COLOR_LOG_TEXT)
-            self.screen.blit(msg_surf, (ox + pad, hud_y + int(112 * scale) + i * log_line_h))
+        # Fill whatever is left with the most recent log lines, oldest
+        # first, so the newest is always visible at the bottom.
+        log_font = self.f_xs
+        log_pitch = log_font.get_linesize() + 2
+        room = max(0, (hud_y + C.HUD_HEIGHT - self.gap_s - y) // log_pitch)
+        for i, message in enumerate(self.log[-room:] if room else []):
+            self.screen.blit(log_font.render(message, True, C.COLOR_LOG_TEXT), (left_x, y + i * log_pitch))
 
     def _hud_icon_row(self, x, y, char, color, text, label_color=None):
-        icon = self.font.render(char, True, color)
+        icon = self.f_sm.render(char, True, color)
         self.screen.blit(icon, (x, y))
-        label = self.font.render(text, True, label_color or C.COLOR_HUD_TEXT)
-        self.screen.blit(label, (x + int(16 * self.ui_scale), y))
+        label = self.f_sm.render(text, True, label_color or C.COLOR_HUD_TEXT)
+        self.screen.blit(label, (x + self.f_sm.size("XX")[0], y))
 
     def _draw_touch_button(self, rect, label, active=False):
         radius = max(6, rect.height // 8)
