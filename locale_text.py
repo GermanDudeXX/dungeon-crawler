@@ -28,6 +28,8 @@ STRINGS = {
     "btn_settings": {"en": "SETTINGS", "de": "EINSTELLUNGEN"},
     "btn_bestiary": {"en": "BESTIARY", "de": "BESTIARIUM"},
     "btn_back": {"en": "BACK", "de": "ZURÜCK"},
+    "btn_prev": {"en": "< PREV", "de": "< ZURÜCK"},
+    "btn_next": {"en": "NEXT >", "de": "WEITER >"},
 
     # --- bestiary screen ---
     "bestiary_title": {"en": "BESTIARY", "de": "BESTIARIUM"},

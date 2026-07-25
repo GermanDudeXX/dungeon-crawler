@@ -17,46 +17,51 @@ GUTTER_WIDTH = 260
 MAP_OFFSET_X = GUTTER_WIDTH
 SCREEN_WIDTH = MAP_PIXEL_WIDTH + 2 * GUTTER_WIDTH
 
-# Absolute floor a gutter can shrink to on Android when the real device's
-# aspect ratio is fitted at startup (see Game._fit_screen_to_device) and
-# still keep the D-pad fully inside it: the D-pad's own buttons span
-# GUTTER_WIDTH/2 +/- 104px (two 64px buttons plus an 8px gap either side
-# of center, see _setup_touch_controls), so GUTTER_WIDTH must stay >=
-# ~208px; 220 keeps a small margin. Deliberately NOT the same as the
-# default GUTTER_WIDTH=260 above - that default was sized generously for
-# the common case, not the true minimum, so using it as the shrink floor
-# would leave devices narrower than our default aspect ratio (e.g. 16:9)
-# with an unnecessary residual letterbox instead of an exact edge-to-edge
-# fit.
-MIN_GUTTER_WIDTH = 220
+# Absolute floor a gutter can shrink to when the real device's aspect
+# ratio is fitted at startup (see Game._fit_screen_to_device). The D-pad
+# is a 3-wide cross of Game.btn_h-sized buttons plus gaps and margins, so
+# the gutter has to hold roughly 3 * 152 + padding. Below this the cross
+# would be drawn over the dungeon; _setup_touch_controls additionally
+# clamps the buttons to whatever gutter it actually gets, so a narrower
+# device degrades to smaller controls instead of a broken layout.
+MIN_GUTTER_WIDTH = 540
 SCREEN_HEIGHT = MAP_HEIGHT * TILE_SIZE + HUD_HEIGHT
 
-# Per-screen "how tall is this screen's content, measured at ui_scale=1.0"
-# (name -> (extent_px, symmetric_around_center)). Used by Game.__init__ to
-# give each menu/info screen its own scale cap - big enough that the
-# screen still fits after scaling, instead of one flat guess that's too
-# conservative for roomy screens (bestiary, pause) and still not quite
-# enough for the tightest one (tutorial). extent_px is measured from that
-# screen's own render code: for a top-anchored screen (stats, achievements,
-# bestiary, settings, shop, tutorial) it's the y-position of the last
-# element's bottom edge; for a screen centered on SCREEN_HEIGHT//2 (title,
-# pause, confirm, level-up, game over) it's the larger of how far the
-# content extends above vs below center.
-SCREEN_DESIGN_EXTENT = {
-    "title": (320, True),
-    "stats": (564, False),
-    "achievements": (514, False),
-    "bestiary": (368, False),
-    "settings": (674, False),
-    "shop": (484, False),
-    "tutorial": (680, False),
-    "pause": (176, True),
-    "confirm": (206, True),
-    "levelup": (294, True),
-    "gameover": (130, True),
-    "update": (220, True),
-    "boss_bar": (32, False),
-}
+# Menu/info screens are laid out from these sizes rather than by zooming a
+# fixed small design, which is what kept the buttons tiny: a uniform zoom
+# has to shrink until the screen's *whole* original design fits, so the
+# densest screen dictated the size of every button everywhere.
+#
+# The numbers are chosen against a 1098px-tall canvas on a density-3.0
+# phone, where 1 logical px == 1 physical px, so:
+#   - Android's minimum touch target is 48dp = 144px; BTN_H sits above it
+#   - comfortable body text is ~16sp = 48px of glyph, and pygame's default
+#     font renders a glyph about 0.67x its nominal size, hence 68
+# UI_REF_HEIGHT is what they were measured against; Game scales them by
+# SCREEN_HEIGHT/UI_REF_HEIGHT so a smaller canvas (desktop, or a low-res
+# phone) stays proportionate instead of overflowing.
+UI_REF_HEIGHT = 1098
+
+FONT_TITLE = 130      # screen titles, bold
+FONT_H1 = 90          # section headings, bold
+FONT_BODY = 68        # normal reading text
+FONT_SM = 54          # secondary/help text
+FONT_XS = 44          # dense list rows
+
+BTN_H = 152           # ~50dp: comfortably over Android's 48dp minimum
+BTN_H_HERO = 184      # for a screen with room to spare
+BTN_MIN_W = 260
+BTN_PAD_X = 40        # per side, added to the measured label width
+BTN_GAP = 22
+# Taps count anywhere within this many px outside the drawn button, so a
+# slightly-off thumb still registers without making the button look huge.
+BTN_TAP_SLOP = 20
+
+PAD = 34              # screen margin
+GAP_S = 16
+GAP_M = 24
+GAP_L = 34
+GAP_XL = 46
 
 # Bundled read-only assets: a PyInstaller onefile exe unpacks these into
 # sys._MEIPASS at startup, not next to the .exe itself (unlike save data,
