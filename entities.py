@@ -39,8 +39,10 @@ class Player(Entity):
         self.base_defense = 1
         self.weapon_bonus = 0
         self.weapon_name = "Fists"
+        self.weapon_rarity_id = None
         self.armor_bonus = 0
         self.armor_name = "None"
+        self.armor_rarity_id = None
         self.level = 1
         self.xp = 0
         self.xp_to_next = 15
@@ -136,8 +138,9 @@ class Merchant(Entity):
 
 
 class Item(Entity):
-    def __init__(self, x, y, kind, name, char, color, bonus=0, scroll_type=None):
+    def __init__(self, x, y, kind, name, char, color, bonus=0, scroll_type=None, rarity_id=None):
         super().__init__(x, y, char, color, name, blocks_movement=False)
         self.kind = kind
         self.bonus = bonus
         self.scroll_type = scroll_type
+        self.rarity_id = rarity_id

@@ -34,6 +34,7 @@ class Game:
     def __init__(self):
         pygame.init()
         pygame.display.set_caption("Dungeon Crawler")
+        self.ui_scale = 1.0
         if ON_ANDROID:
             self._fit_screen_to_device()
         # Without SCALED, SDL renders our fixed logical resolution into the
@@ -58,8 +59,8 @@ class Game:
         # tools like fc-list in the sandbox). pygame.font.Font(None, size)
         # uses pygame's own bundled default font instead - no OS lookup,
         # works identically on every platform.
-        self.font = pygame.font.Font(None, 18)
-        self.big_font = pygame.font.Font(None, 40)
+        self.font = pygame.font.Font(None, int(18 * self.ui_scale))
+        self.big_font = pygame.font.Font(None, int(40 * self.ui_scale))
         self.big_font.set_bold(True)
         self.stats = persistence.load_stats()
         self.save_data = persistence.load_save()
@@ -103,13 +104,33 @@ class Game:
             info = pygame.display.Info()
             dev_w, dev_h = info.current_w, info.current_h
             if dev_w > 0 and dev_h > 0:
+                # pygame.SCALED stretches our fixed logical canvas to fill
+                # the real device resolution, so raw pixel sizes chosen for
+                # a ~790px-tall canvas (roughly 1:1 on a desktop window)
+                # end up physically tiny on a modern phone's much denser
+                # screen. Grow the canvas - fonts, HUD band, touch buttons
+                # - proportionally to the device's actual short-edge
+                # resolution instead of leaving it flat. 800 is the
+                # reference height these numbers were tuned at (1.0x);
+                # clamped so even low-res phones get a solid minimum bump
+                # and very high-res ones don't end up with oversized UI.
+                self.ui_scale = max(1.25, min(1.75, dev_h / 800))
+                C.HUD_HEIGHT = int(190 * self.ui_scale)
+                C.SCREEN_HEIGHT = C.MAP_HEIGHT * C.TILE_SIZE + C.HUD_HEIGHT
+
                 device_ratio = dev_w / dev_h
                 # Reject 0/garbage/portrait-shaped reads rather than ever
                 # producing a broken layout - falls back to the static
                 # GUTTER_WIDTH/SCREEN_WIDTH already set in constants.py.
                 if 1.2 <= device_ratio <= 3.5:
                     new_width = round(C.SCREEN_HEIGHT * device_ratio)
-                    new_gutter = max(C.MIN_GUTTER_WIDTH, (new_width - C.MAP_PIXEL_WIDTH) // 2)
+                    # The D-pad's own footprint inside the gutter grows with
+                    # ui_scale too (see _setup_touch_controls), so the floor
+                    # has to grow with it - otherwise a scaled-up D-pad on a
+                    # narrow-but-dense phone can poke out past the gutter's
+                    # left edge (off the requested logical canvas entirely).
+                    min_gutter = int(C.MIN_GUTTER_WIDTH * self.ui_scale)
+                    new_gutter = max(min_gutter, (new_width - C.MAP_PIXEL_WIDTH) // 2)
                     C.GUTTER_WIDTH = new_gutter
                     C.MAP_OFFSET_X = new_gutter
                     C.SCREEN_WIDTH = C.MAP_PIXEL_WIDTH + 2 * new_gutter
@@ -165,8 +186,17 @@ class Game:
         # bottom-right, each fully inside its own side gutter (not overlaid
         # on the map view) so they're big enough to actually hit and never
         # obscure the dungeon.
-        s, g = 64, 8
-        dpad_cx, dpad_cy = C.GUTTER_WIDTH // 2, 480
+        # Scaled by the same self.ui_scale computed in _fit_screen_to_device
+        # (1.0 on PC, up to 1.75x on dense phones) so touch targets grow
+        # right along with the HUD text instead of staying pinned at sizes
+        # tuned for a small desktop window. y_scale keeps each button's
+        # relative vertical position stable as the HUD band (and so
+        # SCREEN_HEIGHT) grows - both factors collapse to 1.0 on PC, so
+        # none of this changes desktop layout at all.
+        scale = self.ui_scale
+        y_scale = C.SCREEN_HEIGHT / 790
+        s, g = int(64 * scale), int(8 * scale)
+        dpad_cx, dpad_cy = C.GUTTER_WIDTH // 2, int(480 * y_scale)
         self.dpad_buttons = {
             "up": (pygame.Rect(dpad_cx - s // 2, dpad_cy - s - g, s, s), (0, -1), "^"),
             "down": (pygame.Rect(dpad_cx - s // 2, dpad_cy + g, s, s), (0, 1), "v"),
@@ -174,13 +204,14 @@ class Game:
             "right": (pygame.Rect(dpad_cx + g + s // 2, dpad_cy - s // 2, s, s), (1, 0), ">"),
         }
 
-        action_right_edge = C.SCREEN_WIDTH - 16
-        potion_size = 76
-        self.potion_button = pygame.Rect(action_right_edge - potion_size, 500, potion_size, potion_size)
+        action_right_edge = C.SCREEN_WIDTH - int(16 * scale)
+        potion_size = int(76 * scale)
+        potion_y = int(500 * y_scale)
+        self.potion_button = pygame.Rect(action_right_edge - potion_size, potion_y, potion_size, potion_size)
 
-        scroll_size = 52
-        scroll_gap = 8
-        scroll_y = 500 - scroll_gap - scroll_size
+        scroll_size = int(52 * scale)
+        scroll_gap = int(8 * scale)
+        scroll_y = potion_y - scroll_gap - scroll_size
         scroll_row_width = 3 * scroll_size + 2 * scroll_gap
         scroll_start_x = action_right_edge - scroll_row_width
         self.scroll_buttons = {
@@ -192,7 +223,9 @@ class Game:
         # Bigger and pinned to the top-right corner so it's always easy to
         # find and tap - this is the only touch way back to the pause menu,
         # and it stays visible even when show_touch_controls is off.
-        self.save_button = pygame.Rect(C.SCREEN_WIDTH - 140, 8, 124, 52)
+        self.save_button = pygame.Rect(
+            C.SCREEN_WIDTH - int(140 * scale), int(8 * scale), int(124 * scale), int(52 * scale)
+        )
 
     def start_new_run(self):
         persistence.delete_save()
@@ -232,8 +265,10 @@ class Game:
         player.base_defense = p["base_defense"]
         player.weapon_bonus = p["weapon_bonus"]
         player.weapon_name = p["weapon_name"]
+        player.weapon_rarity_id = p.get("weapon_rarity_id")
         player.armor_bonus = p["armor_bonus"]
         player.armor_name = p["armor_name"]
+        player.armor_rarity_id = p.get("armor_rarity_id")
         player.level = p["level"]
         player.xp = p["xp"]
         player.xp_to_next = p["xp_to_next"]
@@ -268,7 +303,7 @@ class Game:
             self.items.append(
                 entities.Item(
                     i["x"], i["y"], i["kind"], i["name"], i["char"], tuple(i["color"]),
-                    bonus=i["bonus"], scroll_type=i.get("scroll_type"),
+                    bonus=i["bonus"], scroll_type=i.get("scroll_type"), rarity_id=i.get("rarity_id"),
                 )
             )
 
@@ -298,7 +333,9 @@ class Game:
                 "x": p.x, "y": p.y, "hp": p.hp, "max_hp": p.max_hp,
                 "base_power": p.base_power, "base_defense": p.base_defense,
                 "weapon_bonus": p.weapon_bonus, "weapon_name": p.weapon_name,
+                "weapon_rarity_id": p.weapon_rarity_id,
                 "armor_bonus": p.armor_bonus, "armor_name": p.armor_name,
+                "armor_rarity_id": p.armor_rarity_id,
                 "level": p.level, "xp": p.xp, "xp_to_next": p.xp_to_next,
                 "potions": p.potions, "kills": p.kills, "facing": p.facing,
                 "gold": p.gold, "scrolls": dict(p.scrolls), "poison_turns": p.poison_turns,
@@ -318,7 +355,8 @@ class Game:
             ],
             "items": [
                 {"x": i.x, "y": i.y, "kind": i.kind, "name": i.name, "char": i.char,
-                 "color": list(i.color), "bonus": i.bonus, "scroll_type": i.scroll_type}
+                 "color": list(i.color), "bonus": i.bonus, "scroll_type": i.scroll_type,
+                 "rarity_id": i.rarity_id}
                 for i in self.items
             ],
             "merchants": [{"x": m.x, "y": m.y} for m in self.merchants],
@@ -418,11 +456,19 @@ class Game:
         elif kind == "weapon":
             tier_max = min(len(C.WEAPON_TYPES) - 1, self.dungeon_level // 2)
             w = C.WEAPON_TYPES[random.randint(0, tier_max)]
-            self.items.append(entities.Item(x, y, "weapon", w["name"], "/", w["color"], bonus=w["bonus"]))
+            rarity = self._roll_rarity()
+            bonus = max(w["bonus"], round(w["bonus"] * rarity["mult"]))
+            self.items.append(entities.Item(
+                x, y, "weapon", w["name"], "/", rarity["color"], bonus=bonus, rarity_id=rarity["id"]
+            ))
         elif kind == "armor":
             tier_max = min(len(C.ARMOR_TYPES) - 1, self.dungeon_level // 2)
             a = C.ARMOR_TYPES[random.randint(0, tier_max)]
-            self.items.append(entities.Item(x, y, "armor", a["name"], "[", a["color"], bonus=a["bonus"]))
+            rarity = self._roll_rarity()
+            bonus = max(a["bonus"], round(a["bonus"] * rarity["mult"]))
+            self.items.append(entities.Item(
+                x, y, "armor", a["name"], "[", rarity["color"], bonus=bonus, rarity_id=rarity["id"]
+            ))
         elif kind == "gold":
             amount = random.randint(5, 15) * self.dungeon_level
             self.items.append(entities.Item(x, y, "gold", "Gold", "$", C.COLOR_GOLD, bonus=amount))
@@ -432,6 +478,10 @@ class Game:
             self.items.append(
                 entities.Item(x, y, "scroll", info["name"], info["char"], info["color"], scroll_type=scroll_type)
             )
+
+    def _roll_rarity(self):
+        available = [t for t in C.RARITY_TIERS if t["min_level"] <= self.dungeon_level]
+        return random.choices(available, weights=[t["weight"] for t in available], k=1)[0]
 
     def _random_floor_in_room(self, room):
         x = random.randint(room.x1, room.x2 - 1)
@@ -474,6 +524,16 @@ class Game:
         if self._lang() == "de":
             return loc.NAME_DE.get(name, name)
         return name
+
+    def tr(self, rarity_id):
+        if not rarity_id:
+            return ""
+        tier = C.RARITY_BY_ID.get(rarity_id)
+        if tier is None:
+            return ""
+        if self._lang() == "de":
+            return loc.RARITY_DE.get(tier["name"], tier["name"])
+        return tier["name"]
 
     def _toggle_touch_controls(self):
         self.settings["show_touch_controls"] = not self.settings.get("show_touch_controls", True)
@@ -971,7 +1031,9 @@ class Game:
             if item.bonus > self.player.weapon_bonus:
                 self.player.weapon_bonus = item.bonus
                 self.player.weapon_name = item.name
-                self.add_log(self.t("log_equip_weapon", item=self.tn(item.name), bonus=item.bonus))
+                self.player.weapon_rarity_id = item.rarity_id
+                label = f"{self.tr(item.rarity_id)} {self.tn(item.name)}".strip()
+                self.add_log(self.t("log_equip_weapon", item=label, bonus=item.bonus))
                 self.sounds.play("equip")
             else:
                 self.add_log(self.t("log_find_worse_weapon", item=self.tn(item.name), current=self.tn(self.player.weapon_name)))
@@ -979,7 +1041,9 @@ class Game:
             if item.bonus > self.player.armor_bonus:
                 self.player.armor_bonus = item.bonus
                 self.player.armor_name = item.name
-                self.add_log(self.t("log_equip_armor", item=self.tn(item.name), bonus=item.bonus))
+                self.player.armor_rarity_id = item.rarity_id
+                label = f"{self.tr(item.rarity_id)} {self.tn(item.name)}".strip()
+                self.add_log(self.t("log_equip_armor", item=label, bonus=item.bonus))
                 self.sounds.play("equip")
             else:
                 self.add_log(self.t("log_find_worse_armor", item=self.tn(item.name), current=self.tn(self.player.armor_name)))
@@ -1985,6 +2049,11 @@ class Game:
         self.screen.blit(overlay, (C.MAP_OFFSET_X, 0))
 
     def _render_hud(self):
+        # Every offset below is scaled by self.ui_scale (1.0 on PC, up to
+        # 1.75x on dense phones) in lockstep with the font and HUD_HEIGHT
+        # itself (see _fit_screen_to_device) - growing the font without
+        # growing these pixel gaps to match would make HUD lines overlap.
+        scale = self.ui_scale
         hud_y = C.MAP_HEIGHT * C.TILE_SIZE
         pygame.draw.rect(self.screen, C.COLOR_HUD_BG, (0, hud_y, C.SCREEN_WIDTH, C.HUD_HEIGHT))
 
@@ -1993,42 +2062,47 @@ class Game:
         # below the D-pad/action buttons stay empty here, which is fine
         # since they visually "belong" to those buttons above.
         ox = C.MAP_OFFSET_X
+        pad = int(10 * scale)
 
-        bar_width, bar_height = 180, 16
-        pygame.draw.rect(self.screen, C.COLOR_HP_BAR_BG, (ox + 10, hud_y + 10, bar_width, bar_height))
+        bar_width, bar_height = int(180 * scale), int(16 * scale)
+        pygame.draw.rect(self.screen, C.COLOR_HP_BAR_BG, (ox + pad, hud_y + pad, bar_width, bar_height))
         hp_ratio = max(0, self.player.hp / self.player.max_hp)
         pygame.draw.rect(
-            self.screen, C.COLOR_HP_BAR_FG, (ox + 10, hud_y + 10, int(bar_width * hp_ratio), bar_height)
+            self.screen, C.COLOR_HP_BAR_FG, (ox + pad, hud_y + pad, int(bar_width * hp_ratio), bar_height)
         )
         hp_text = self.font.render(f"HP {max(0, self.player.hp)}/{self.player.max_hp}", True, C.COLOR_HUD_TEXT)
-        self.screen.blit(hp_text, (ox + 200, hud_y + 8))
+        self.screen.blit(hp_text, (ox + int(200 * scale), hud_y + int(8 * scale)))
 
-        xp_bar_x = ox + 340
-        pygame.draw.rect(self.screen, C.COLOR_XP_BAR_BG, (xp_bar_x, hud_y + 10, bar_width, bar_height))
+        xp_bar_x = ox + int(340 * scale)
+        pygame.draw.rect(self.screen, C.COLOR_XP_BAR_BG, (xp_bar_x, hud_y + pad, bar_width, bar_height))
         xp_ratio = self.player.xp / self.player.xp_to_next
         pygame.draw.rect(
-            self.screen, C.COLOR_XP_BAR_FG, (xp_bar_x, hud_y + 10, int(bar_width * xp_ratio), bar_height)
+            self.screen, C.COLOR_XP_BAR_FG, (xp_bar_x, hud_y + pad, int(bar_width * xp_ratio), bar_height)
         )
         xp_text = self.font.render(
             f"Lv {self.player.level}  XP {self.player.xp}/{self.player.xp_to_next}", True, C.COLOR_HUD_TEXT
         )
-        self.screen.blit(xp_text, (xp_bar_x + bar_width + 10, hud_y + 8))
+        self.screen.blit(xp_text, (xp_bar_x + bar_width + pad, hud_y + int(8 * scale)))
 
         # Two-column icon+label overview instead of one dense wall of text -
         # left column is equipment, right column is resources. Icons reuse
         # the same glyph+colour already used for these items on the map,
         # so the legend is consistent everywhere.
-        left_x, right_x = ox + 10, ox + 340
-        row_y = hud_y + 34
-        row_h = 18
+        left_x, right_x = ox + pad, xp_bar_x
+        row_y = hud_y + int(34 * scale)
+        row_h = int(18 * scale)
 
-        self._hud_icon_row(left_x, row_y, "/", (215, 215, 230),
-                            f"{self.tn(self.player.weapon_name)} (+{self.player.weapon_bonus})")
+        weapon_color = C.RARITY_BY_ID.get(self.player.weapon_rarity_id, {}).get("color", (215, 215, 230))
+        self._hud_icon_row(left_x, row_y, "/", weapon_color,
+                            f"{self.tn(self.player.weapon_name)} (+{self.player.weapon_bonus})",
+                            label_color=weapon_color)
         self._hud_icon_row(right_x, row_y, "!", C.COLOR_POTION,
                             f"{self.t('hud_potions')} {self.player.potions}")
 
-        self._hud_icon_row(left_x, row_y + row_h, "[", (170, 170, 185),
-                            f"{self.tn(self.player.armor_name)} (+{self.player.armor_bonus})")
+        armor_color = C.RARITY_BY_ID.get(self.player.armor_rarity_id, {}).get("color", (170, 170, 185))
+        self._hud_icon_row(left_x, row_y + row_h, "[", armor_color,
+                            f"{self.tn(self.player.armor_name)} (+{self.player.armor_bonus})",
+                            label_color=armor_color)
         self._hud_icon_row(right_x, row_y + row_h, "$", C.COLOR_GOLD,
                             f"{self.t('hud_gold')} {self.player.gold}")
 
@@ -2044,17 +2118,20 @@ class Game:
         )
         poison_suffix = f"    {self.t('hud_poisoned')}" if self.player.poison_turns > 0 else ""
         scroll_color = C.COLOR_POISON if self.player.poison_turns > 0 else C.COLOR_HELP_TEXT
-        self.screen.blit(self.font.render(scroll_line + poison_suffix, True, scroll_color), (ox + 10, hud_y + 92))
+        self.screen.blit(
+            self.font.render(scroll_line + poison_suffix, True, scroll_color), (ox + pad, hud_y + int(92 * scale))
+        )
 
+        log_line_h = int(16 * scale)
         for i, message in enumerate(self.log[-4:]):
             msg_surf = self.font.render(message, True, C.COLOR_LOG_TEXT)
-            self.screen.blit(msg_surf, (ox + 10, hud_y + 112 + i * 16))
+            self.screen.blit(msg_surf, (ox + pad, hud_y + int(112 * scale) + i * log_line_h))
 
-    def _hud_icon_row(self, x, y, char, color, text):
+    def _hud_icon_row(self, x, y, char, color, text, label_color=None):
         icon = self.font.render(char, True, color)
         self.screen.blit(icon, (x, y))
-        label = self.font.render(text, True, C.COLOR_HUD_TEXT)
-        self.screen.blit(label, (x + 16, y))
+        label = self.font.render(text, True, label_color or C.COLOR_HUD_TEXT)
+        self.screen.blit(label, (x + int(16 * self.ui_scale), y))
 
     def _draw_touch_button(self, rect, label, active=False):
         overlay = pygame.Surface(rect.size, pygame.SRCALPHA)

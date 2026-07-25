@@ -148,6 +148,21 @@ ARMOR_TYPES = [
     {"name": "Plate Armor", "bonus": 5, "color": (190, 190, 210)},
 ]
 
+# Rolled per weapon/armor drop on top of its base type - multiplies that
+# type's bonus and replaces its halo/HUD colour, so rarity reads at a
+# glance instead of needing a tooltip. min_level gates which tiers can
+# even be rolled yet, so early floors never hand out a Legendary drop;
+# weight is only compared among tiers already unlocked at the current
+# dungeon_level (see Game._roll_rarity).
+RARITY_TIERS = [
+    {"id": "common", "name": "Common", "mult": 1.0, "color": (200, 200, 205), "weight": 10, "min_level": 1},
+    {"id": "uncommon", "name": "Uncommon", "mult": 1.3, "color": (70, 200, 90), "weight": 5, "min_level": 1},
+    {"id": "rare", "name": "Rare", "mult": 1.7, "color": (70, 140, 230), "weight": 2.2, "min_level": 3},
+    {"id": "epic", "name": "Epic", "mult": 2.1, "color": (180, 90, 230), "weight": 0.9, "min_level": 5},
+    {"id": "legendary", "name": "Legendary", "mult": 2.6, "color": (255, 170, 30), "weight": 0.3, "min_level": 8},
+]
+RARITY_BY_ID = {tier["id"]: tier for tier in RARITY_TIERS}
+
 SCROLL_TYPES = {
     "fireball": {
         "name": "Scroll of Fireball", "char": "?", "color": (255, 120, 40), "key": "F",

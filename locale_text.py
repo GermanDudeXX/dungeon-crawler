@@ -275,6 +275,14 @@ ELITE_NAME_DE = {
     "Regenerating": "Regenerierend",
 }
 
+RARITY_DE = {
+    "Common": "Gewöhnlich",
+    "Uncommon": "Ungewöhnlich",
+    "Rare": "Selten",
+    "Epic": "Episch",
+    "Legendary": "Legendär",
+}
+
 BOSS_TITLE_DE = {
     "orc": "Häuptling",
     "skeleton": "König",
