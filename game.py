@@ -26,8 +26,14 @@ MOVE_KEYS = (
     (pygame.K_RIGHT, (1, 0)),
     (pygame.K_d, (1, 0)),
 )
-MOVE_REPEAT_INITIAL_DELAY = 12
-MOVE_REPEAT_INTERVAL = 6
+# Auto-repeat timings in MILLISECONDS, deliberately not in frames. These
+# used to be frame counts (12 and 6) evaluated against a 30fps target,
+# which silently turned every framerate drop into input lag: measured on a
+# real device at 3.9fps, the 6-frame repeat became a 1.5 SECOND wait per
+# step. Wall-clock timing keeps the controls feeling identical no matter
+# what the renderer manages.
+MOVE_REPEAT_INITIAL_DELAY_MS = 400
+MOVE_REPEAT_INTERVAL_MS = 200
 
 
 class Game:
@@ -56,7 +62,7 @@ class Game:
             # a flat, modest bump (no device probing needed, the window is
             # exactly whatever size we request).
             self._apply_pc_ui_scale()
-        self.screen = pygame.display.set_mode((C.SCREEN_WIDTH, C.SCREEN_HEIGHT), pygame.SCALED)
+        self.display = pygame.display.set_mode((C.SCREEN_WIDTH, C.SCREEN_HEIGHT), pygame.SCALED)
         if ON_ANDROID and self._fit_screen_to_device():
             # The window SDL actually created (queried below, now that one
             # exists) is smaller than pygame.display.Info()'s device
@@ -66,7 +72,20 @@ class Game:
             # display now that constants.py reflects the *real* usable
             # size, so the logical canvas actually matches what's on
             # screen instead of being letterboxed inside it.
-            self.screen = pygame.display.set_mode((C.SCREEN_WIDTH, C.SCREEN_HEIGHT), pygame.SCALED)
+            self.display = pygame.display.set_mode((C.SCREEN_WIDTH, C.SCREEN_HEIGHT), pygame.SCALED)
+        # Everything draws into an ordinary in-RAM surface, which is copied
+        # to the real display once per frame by _present(). Measured on a
+        # real device: drawing straight into the pygame.SCALED display
+        # surface cost 250ms/frame in gameplay (3.9 fps) while the flip
+        # itself was only 5ms - i.e. the cost was the drawing, not the
+        # present, and the same frame costs 2.3ms on desktop. That 100x
+        # gap is the signature of the display surface living in
+        # uncached/write-combined memory on Android, where every small
+        # blit and read-modify-write (alpha blending especially) goes
+        # across the bus. A plain Surface is normal cached RAM, so the
+        # many small draws are fast again and only one large sequential
+        # copy per frame touches the slow surface.
+        self.screen = pygame.Surface((C.SCREEN_WIDTH, C.SCREEN_HEIGHT)).convert()
         self.clock = pygame.time.Clock()
         # pygame.font.SysFont looks up a named font through the OS's font
         # system, which crashes on Android (no such font, no font-listing
@@ -286,7 +305,7 @@ class Game:
         self.shake_timer = 0
         self.shake_intensity = 0
         self.flash_timer = 0
-        self.move_repeat_timer = 0
+        self.move_next_ms = 0
         self.move_held = False
         self.new_best = False
         self.damage_numbers = []
@@ -356,7 +375,7 @@ class Game:
         self.shake_timer = 0
         self.shake_intensity = 0
         self.flash_timer = 0
-        self.move_repeat_timer = 0
+        self.move_next_ms = 0
         self.move_held = False
         self.new_best = False
         self.damage_numbers = []
@@ -852,7 +871,6 @@ class Game:
         return fallback
 
     def run(self):
-        self._install_perf_hook()
         while True:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -875,31 +893,25 @@ class Game:
 
             t0 = pygame.time.get_ticks()
             self.render()
-            # render() ends in pygame.display.flip(), whose cost _install_perf_hook
-            # accounts separately - subtract it to get drawing-only time.
+            # render() ends in _present(), which times itself - subtract
+            # that to get drawing-only time.
+            flip = getattr(self, "_perf_flip_frame", 0.0)
             self._perf_draw_ms = (getattr(self, "_perf_draw_ms", 0.0)
-                                  + (pygame.time.get_ticks() - t0)
-                                  - self._perf_flip_frame)
-            self._perf_flip_ms = getattr(self, "_perf_flip_ms", 0.0) + self._perf_flip_frame
+                                  + (pygame.time.get_ticks() - t0) - flip)
+            self._perf_flip_ms = getattr(self, "_perf_flip_ms", 0.0) + flip
             self._perf_flip_frame = 0.0
             self.clock.tick(30)
             self._log_fps()
 
-    def _install_perf_hook(self):
-        # TEMPORARY DIAGNOSTIC. Splits the frame into "drawing" (all the
-        # Python/pygame blitting) vs "flip" (SDL's present, which for a
-        # pygame.SCALED window is the surface->texture upload plus the
-        # upscale). Those two point at completely different fixes, so we
-        # measure rather than guess which dominates on the real device.
-        self._perf_flip_frame = 0.0
-        real_flip = pygame.display.flip
-
-        def timed_flip():
-            t = pygame.time.get_ticks()
-            real_flip()
-            self._perf_flip_frame += pygame.time.get_ticks() - t
-
-        pygame.display.flip = timed_flip
+    def _present(self):
+        # One large sequential copy of the in-RAM canvas onto the real
+        # display surface, then present. See the comment where self.screen
+        # is created for why nothing draws into the display surface
+        # directly.
+        t = pygame.time.get_ticks()
+        self.display.blit(self.screen, (0, 0))
+        pygame.display.flip()
+        self._perf_flip_frame = getattr(self, "_perf_flip_frame", 0.0) + (pygame.time.get_ticks() - t)
 
     def _log_fps(self):
         # TEMPORARY DIAGNOSTIC - remove once the lag work is done.
@@ -938,18 +950,20 @@ class Game:
             dx, dy = self.touch_direction
 
         if dx == 0 and dy == 0:
-            self.move_repeat_timer = 0
+            self.move_next_ms = 0
             self.move_held = False
             return
 
-        if self.move_repeat_timer <= 0:
-            self._player_turn(dx, dy)
-            if self.state != "playing":
-                return
-            self.move_repeat_timer = MOVE_REPEAT_INTERVAL if self.move_held else MOVE_REPEAT_INITIAL_DELAY
-            self.move_held = True
-        else:
-            self.move_repeat_timer -= 1
+        now = pygame.time.get_ticks()
+        if now < self.move_next_ms:
+            return
+        self._player_turn(dx, dy)
+        if self.state != "playing":
+            return
+        self.move_next_ms = now + (
+            MOVE_REPEAT_INTERVAL_MS if self.move_held else MOVE_REPEAT_INITIAL_DELAY_MS
+        )
+        self.move_held = True
 
     def _update_animations(self):
         self.player.update_animation()
@@ -1841,57 +1855,57 @@ class Game:
     def render(self):
         if self.state == "title":
             self._render_title()
-            pygame.display.flip()
+            self._present()
             return
 
         if self.state == "stats":
             self._render_stats()
-            pygame.display.flip()
+            self._present()
             return
 
         if self.state == "achievements":
             self._render_achievements()
-            pygame.display.flip()
+            self._present()
             return
 
         if self.state == "tutorial":
             self._render_tutorial()
-            pygame.display.flip()
+            self._present()
             return
 
         if self.state == "settings":
             self._render_settings()
-            pygame.display.flip()
+            self._present()
             return
 
         if self.state == "bestiary":
             self._render_bestiary()
-            pygame.display.flip()
+            self._present()
             return
 
         if self.state == "levelup_choice":
             self._render_levelup_choice()
-            pygame.display.flip()
+            self._present()
             return
 
         if self.state == "confirm_disable_touch":
             self._render_confirm_disable_touch()
-            pygame.display.flip()
+            self._present()
             return
 
         if self.state == "update":
             self._render_update()
-            pygame.display.flip()
+            self._present()
             return
 
         if self.state == "shop":
             self._render_shop()
-            pygame.display.flip()
+            self._present()
             return
 
         if self.state == "paused":
             self._render_pause()
-            pygame.display.flip()
+            self._present()
             return
 
         self.screen.fill(C.COLOR_BG)
@@ -1909,7 +1923,7 @@ class Game:
         if self.state == "dead":
             self._render_game_over()
 
-        pygame.display.flip()
+        self._present()
 
     def _draw_tap_button(self, rect, label, key, font=None):
         # font must match whatever scale the caller sized the box with
