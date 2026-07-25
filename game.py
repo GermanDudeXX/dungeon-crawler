@@ -138,6 +138,7 @@ class Game:
         self.merchant_sprite = self._load_scaled_sprite(C.MERCHANT_SPRITE_PATH, C.MERCHANT_SPRITE_HEIGHT)
         self.needs_redraw = True
         self._last_draw_ms = 0
+        self._last_tick_ms = 0
         self.state = "title"
         self.stats_return_state = "title"
         self.settings_return_state = "title"
@@ -917,7 +918,7 @@ class Game:
             # the loop spins - otherwise the faster polling below would
             # run every animation at double speed.
             now = pygame.time.get_ticks()
-            if now - getattr(self, "_last_tick_ms", 0) >= TICK_INTERVAL_MS:
+            if now - self._last_tick_ms >= TICK_INTERVAL_MS:
                 # Advance by exactly one interval rather than snapping to
                 # `now`, so the leftover carries into the next iteration.
                 # Snapping loses it, and since the 16ms poll does not
