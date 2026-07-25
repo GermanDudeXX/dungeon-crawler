@@ -35,6 +35,16 @@ MOVE_KEYS = (
 MOVE_REPEAT_INITIAL_DELAY_MS = 400
 MOVE_REPEAT_INTERVAL_MS = 200
 
+# How often the loop spins, and so how quickly a touch can be noticed at
+# all. The old loop ran at 30Hz, which alone put a ~33ms floor under every
+# tap before any drawing happened; polling at 60Hz halves that. It is
+# affordable now only because most iterations no longer redraw anything
+# (see _should_redraw).
+POLL_HZ = 60
+# Frame-counted animation timers still advance at the original rate, so
+# doubling the poll rate does not double animation speed.
+TICK_INTERVAL_MS = 1000 // 30
+
 
 class Game:
     def __init__(self):
@@ -654,6 +664,11 @@ class Game:
     def _recompute_fov(self):
         self.visible = fov.compute_fov(self.grid, self.player.x, self.player.y, C.FOV_RADIUS)
         self.explored |= self.visible
+        # The cached tile surface is painted from exactly these two sets
+        # (see _rebuild_map_cache), so this is the single place that has
+        # to invalidate it - every map/level change routes through here.
+        self._map_cache = None
+        self.needs_redraw = True
 
     def add_log(self, message):
         self.log.append(message)
@@ -892,12 +907,30 @@ class Game:
                 elif event.type == pygame.MOUSEBUTTONUP:
                     self.touch_direction = None
 
+            # Movement repeat is wall-clock based, so it benefits from the
+            # faster poll rate directly.
             if self.state == "playing":
                 self._handle_movement_repeat()
-                self._update_animations()
-            elif self.state == "confirm_disable_touch" and self.touch_warning_timer > 0:
-                self.touch_warning_timer -= 1
-                self.needs_redraw = True
+
+            # Animation timers are still counted in frames, so they must
+            # keep advancing at the original 30Hz regardless of how often
+            # the loop spins - otherwise the faster polling below would
+            # run every animation at double speed.
+            now = pygame.time.get_ticks()
+            if now - getattr(self, "_last_tick_ms", 0) >= TICK_INTERVAL_MS:
+                # Advance by exactly one interval rather than snapping to
+                # `now`, so the leftover carries into the next iteration.
+                # Snapping loses it, and since the 16ms poll does not
+                # divide the 33ms tick that would silently run animations
+                # at ~21Hz instead of 30Hz. Clamped so a long stall cannot
+                # queue up a burst of catch-up ticks.
+                self._last_tick_ms = max(now - TICK_INTERVAL_MS,
+                                         self._last_tick_ms + TICK_INTERVAL_MS)
+                if self.state == "playing":
+                    self._update_animations()
+                elif self.state == "confirm_disable_touch" and self.touch_warning_timer > 0:
+                    self.touch_warning_timer -= 1
+                    self.needs_redraw = True
 
             if self._should_redraw():
                 t0 = pygame.time.get_ticks()
@@ -911,7 +944,7 @@ class Game:
                 self._perf_flip_frame = 0.0
                 self.needs_redraw = False
                 self._last_draw_ms = pygame.time.get_ticks()
-            self.clock.tick(30)
+            self.clock.tick(POLL_HZ)
             self._log_fps()
 
     def _should_redraw(self):
@@ -1490,6 +1523,10 @@ class Game:
                 (x, y) for y in range(C.MAP_HEIGHT) for x in range(C.MAP_WIDTH)
                 if self.grid[y][x] != dungeon.WALL
             }
+            # Widens `explored` without moving the player, so unlike every
+            # other path this one never reaches _recompute_fov - invalidate
+            # the cached tile surface here or the reveal would not show up.
+            self._map_cache = None
             self.add_log(self.t("log_reveal"))
 
         self._check_achievements()
@@ -2430,18 +2467,36 @@ class Game:
             )
             self.screen.blit(surf, surf.get_rect(center=center))
 
-    def _render_map(self, ox=0, oy=0):
+    def _rebuild_map_cache(self):
+        # The tile grid only changes when the player's field of view does,
+        # which is once per turn at most - but this loop was running every
+        # single frame, and it grows as the level is explored: measured at
+        # 0.22ms with 50 tiles explored and 3.74ms at 1000, making it the
+        # largest single item in a gameplay frame. Painting it once into a
+        # cached surface turns the per-frame cost into one 0.11ms blit.
+        # Invalidated from _recompute_fov and wherever the map is replaced.
+        surf = pygame.Surface((C.MAP_PIXEL_WIDTH, C.MAP_HEIGHT * C.TILE_SIZE))
+        surf.fill(C.COLOR_BG)
         for y in range(C.MAP_HEIGHT):
+            row = self.grid[y]
             for x in range(C.MAP_WIDTH):
                 if (x, y) not in self.explored:
                     continue
                 is_visible = (x, y) in self.visible
-                if self.grid[y][x] == dungeon.WALL:
+                if row[x] == dungeon.WALL:
                     color = C.COLOR_WALL if is_visible else C.COLOR_WALL_DIM
                 else:
                     color = C.COLOR_FLOOR if is_visible else C.COLOR_FLOOR_DIM
-                rect = (x * C.TILE_SIZE + ox, y * C.TILE_SIZE + oy, C.TILE_SIZE, C.TILE_SIZE)
-                pygame.draw.rect(self.screen, color, rect)
+                pygame.draw.rect(
+                    surf, color,
+                    (x * C.TILE_SIZE, y * C.TILE_SIZE, C.TILE_SIZE, C.TILE_SIZE),
+                )
+        self._map_cache = surf
+
+    def _render_map(self, ox=0, oy=0):
+        if getattr(self, "_map_cache", None) is None:
+            self._rebuild_map_cache()
+        self.screen.blit(self._map_cache, (ox, oy))
 
         if self.stairs_pos in self.explored:
             self._draw_ladder(*self.stairs_pos, ox, oy)
