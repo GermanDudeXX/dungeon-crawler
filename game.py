@@ -266,6 +266,7 @@ class Game:
         player.weapon_bonus = p["weapon_bonus"]
         player.weapon_name = p["weapon_name"]
         player.weapon_rarity_id = p.get("weapon_rarity_id")
+        player.weapon_element_id = p.get("weapon_element_id")
         player.armor_bonus = p["armor_bonus"]
         player.armor_name = p["armor_name"]
         player.armor_rarity_id = p.get("armor_rarity_id")
@@ -280,12 +281,19 @@ class Game:
         player.poison_turns = p.get("poison_turns", 0)
         player.potions_drunk_this_run = p.get("potions_drunk_this_run", 0)
         player.bonus_crit_chance = p.get("bonus_crit_chance", 0.0)
+        player.bonus_damage_reduction = p.get("bonus_damage_reduction", 0.0)
+        player.bonus_gold_mult = p.get("bonus_gold_mult", 0.0)
+        player.bonus_elemental_chance = p.get("bonus_elemental_chance", 0.0)
+        player.regen_interval = p.get("regen_interval")
+        player.regen_counter = p.get("regen_counter", 0)
         self.player = player
 
         self.grid = data["grid"]
         self.stairs_pos = tuple(data["stairs_pos"])
         self.explored = {tuple(t) for t in data["explored"]}
         self.traps = {tuple(int(v) for v in pos): kind for pos, kind in data.get("traps", [])}
+        shrine = data.get("shrine_pos")
+        self.shrine_pos = tuple(shrine) if shrine else None
 
         self.monsters = []
         for m in data["monsters"]:
@@ -296,6 +304,9 @@ class Game:
             monster.hp = m["hp"]
             monster.awake = m["awake"]
             monster.is_split_child = m.get("is_split_child", False)
+            monster.enraged = m.get("enraged", False)
+            if monster.enraged:
+                monster.power = int(monster.power * 1.5)
             self.monsters.append(monster)
 
         self.items = []
@@ -304,6 +315,7 @@ class Game:
                 entities.Item(
                     i["x"], i["y"], i["kind"], i["name"], i["char"], tuple(i["color"]),
                     bonus=i["bonus"], scroll_type=i.get("scroll_type"), rarity_id=i.get("rarity_id"),
+                    element_id=i.get("element_id"),
                 )
             )
 
@@ -333,7 +345,7 @@ class Game:
                 "x": p.x, "y": p.y, "hp": p.hp, "max_hp": p.max_hp,
                 "base_power": p.base_power, "base_defense": p.base_defense,
                 "weapon_bonus": p.weapon_bonus, "weapon_name": p.weapon_name,
-                "weapon_rarity_id": p.weapon_rarity_id,
+                "weapon_rarity_id": p.weapon_rarity_id, "weapon_element_id": p.weapon_element_id,
                 "armor_bonus": p.armor_bonus, "armor_name": p.armor_name,
                 "armor_rarity_id": p.armor_rarity_id,
                 "level": p.level, "xp": p.xp, "xp_to_next": p.xp_to_next,
@@ -341,22 +353,27 @@ class Game:
                 "gold": p.gold, "scrolls": dict(p.scrolls), "poison_turns": p.poison_turns,
                 "potions_drunk_this_run": p.potions_drunk_this_run,
                 "bonus_crit_chance": p.bonus_crit_chance,
+                "bonus_damage_reduction": p.bonus_damage_reduction,
+                "bonus_gold_mult": p.bonus_gold_mult,
+                "bonus_elemental_chance": p.bonus_elemental_chance,
+                "regen_interval": p.regen_interval, "regen_counter": p.regen_counter,
             },
             "grid": self.grid,
             "stairs_pos": list(self.stairs_pos),
             "explored": [list(t) for t in self.explored],
             "traps": [[list(pos), kind] for pos, kind in self.traps.items()],
+            "shrine_pos": list(self.shrine_pos) if self.shrine_pos else None,
             "monsters": [
                 {
                     "x": m.x, "y": m.y, "kind": m.kind, "boss": m.is_boss, "hp": m.hp, "awake": m.awake,
-                    "elite_name": m.elite_name, "is_split_child": m.is_split_child,
+                    "elite_name": m.elite_name, "is_split_child": m.is_split_child, "enraged": m.enraged,
                 }
                 for m in self.monsters
             ],
             "items": [
                 {"x": i.x, "y": i.y, "kind": i.kind, "name": i.name, "char": i.char,
                  "color": list(i.color), "bonus": i.bonus, "scroll_type": i.scroll_type,
-                 "rarity_id": i.rarity_id}
+                 "rarity_id": i.rarity_id, "element_id": i.element_id}
                 for i in self.items
             ],
             "merchants": [{"x": m.x, "y": m.y} for m in self.merchants],
@@ -382,6 +399,7 @@ class Game:
         self.items = []
         self.merchants = []
         self.traps = {}
+        self.shrine_pos = None
         self.damage_numbers = []
         self._populate_level()
 
@@ -444,6 +462,13 @@ class Game:
             if not self._is_occupied(x, y) and (x, y) not in self.traps and (x, y) != self.stairs_pos:
                 self.merchants.append(entities.Merchant(x, y))
 
+        if self.dungeon_level >= 2 and random.random() < C.SHRINE_CHANCE_PER_LEVEL:
+            room = random.choice(spawnable_rooms)
+            x, y = self._random_floor_in_room(room)
+            occupied_by_merchant = any((m.x, m.y) == (x, y) for m in self.merchants)
+            if not self._is_occupied(x, y) and not occupied_by_merchant and (x, y) not in self.traps and (x, y) != self.stairs_pos:
+                self.shrine_pos = (x, y)
+
     def _spawn_item(self, room, kind):
         x, y = self._random_floor_in_room(room)
         if self._is_occupied(x, y) or any((i.x, i.y) == (x, y) for i in self.items):
@@ -458,8 +483,12 @@ class Game:
             w = C.WEAPON_TYPES[random.randint(0, tier_max)]
             rarity = self._roll_rarity()
             bonus = max(w["bonus"], round(w["bonus"] * rarity["mult"]))
+            element_id = None
+            if self.dungeon_level >= C.ELEMENT_MIN_LEVEL and random.random() < C.ELEMENT_WEAPON_CHANCE:
+                element_id = random.choice(list(C.ELEMENTS.keys()))
             self.items.append(entities.Item(
-                x, y, "weapon", w["name"], "/", rarity["color"], bonus=bonus, rarity_id=rarity["id"]
+                x, y, "weapon", w["name"], "/", rarity["color"], bonus=bonus,
+                rarity_id=rarity["id"], element_id=element_id,
             ))
         elif kind == "armor":
             tier_max = min(len(C.ARMOR_TYPES) - 1, self.dungeon_level // 2)
@@ -534,6 +563,16 @@ class Game:
         if self._lang() == "de":
             return loc.RARITY_DE.get(tier["name"], tier["name"])
         return tier["name"]
+
+    def te(self, element_id):
+        if not element_id:
+            return ""
+        elem = C.ELEMENTS.get(element_id)
+        if elem is None:
+            return ""
+        if self._lang() == "de":
+            return loc.ELEMENT_DE.get(elem["name"], elem["name"])
+        return elem["name"]
 
     def _toggle_touch_controls(self):
         self.settings["show_touch_controls"] = not self.settings.get("show_touch_controls", True)
@@ -935,6 +974,7 @@ class Game:
         self._tick_poison()
         if self.state == "dead":
             return
+        self._tick_regen()
 
         if dx != 0:
             self.player.facing = 1 if dx > 0 else -1
@@ -956,6 +996,10 @@ class Game:
             pos = (self.player.x, self.player.y)
             if pos in self.traps:
                 self._trigger_trap(pos)
+                if self.state == "dead":
+                    return
+            if pos == self.shrine_pos:
+                self._trigger_shrine()
                 if self.state == "dead":
                     return
             item = next((i for i in self.items if i.x == self.player.x and i.y == self.player.y), None)
@@ -988,6 +1032,15 @@ class Game:
             self.state = "dead"
             self._finalize_run()
 
+    def _tick_regen(self):
+        if not self.player.regen_interval or self.player.hp >= self.player.max_hp:
+            return
+        self.player.regen_counter += 1
+        if self.player.regen_counter >= self.player.regen_interval:
+            self.player.regen_counter = 0
+            self.player.hp = min(self.player.max_hp, self.player.hp + 1)
+            self._spawn_damage_number(self.player.x, self.player.y, "+1", (100, 220, 120))
+
     def _trigger_trap(self, pos):
         kind = self.traps.pop(pos)
         info = C.TRAP_TYPES[kind]
@@ -1014,6 +1067,58 @@ class Game:
             for m in self.monsters:
                 m.awake = True
 
+    def _trigger_shrine(self):
+        self.shrine_pos = None
+        ids = [e["id"] for e in C.SHRINE_EVENTS]
+        weights = [e["weight"] for e in C.SHRINE_EVENTS]
+        event_id = random.choices(ids, weights=weights, k=1)[0]
+
+        if event_id == "vitality":
+            self.player.hp = self.player.max_hp
+            self._spawn_damage_number(self.player.x, self.player.y, "+HP", (100, 220, 120))
+            self.add_log(self.t("log_shrine_vitality"))
+            self.sounds.play("levelup")
+        elif event_id == "power":
+            self.player.base_power += 2
+            self.add_log(self.t("log_shrine_power"))
+            self.sounds.play("levelup")
+        elif event_id == "fortune":
+            amount = self.dungeon_level * 15
+            self.player.gold += amount
+            self.stats["total_gold_collected"] = self.stats.get("total_gold_collected", 0) + amount
+            self._spawn_damage_number(self.player.x, self.player.y, f"+{amount}", C.COLOR_GOLD)
+            self.add_log(self.t("log_shrine_fortune", amount=amount))
+            self.sounds.play("levelup")
+        elif event_id == "frailty":
+            amount = min(5, max(1, self.player.max_hp // 5))
+            self.player.max_hp = max(5, self.player.max_hp - amount)
+            self.player.hp = min(self.player.hp, self.player.max_hp)
+            self._spawn_damage_number(self.player.x, self.player.y, f"-{amount}", C.COLOR_TRAP)
+            self.add_log(self.t("log_shrine_frailty", amount=amount))
+            self.sounds.play("player_hurt")
+        elif event_id == "ambush":
+            self.add_log(self.t("log_shrine_ambush"))
+            self.sounds.play("player_hurt")
+            self._spawn_shrine_ambush()
+
+    def _spawn_shrine_ambush(self):
+        spots = [
+            (self.player.x + 1, self.player.y), (self.player.x - 1, self.player.y),
+            (self.player.x, self.player.y + 1), (self.player.x, self.player.y - 1),
+        ]
+        random.shuffle(spots)
+        kinds = list(C.MONSTER_TYPES.keys())
+        spawned = 0
+        for x, y in spots:
+            if spawned >= 2:
+                break
+            if not dungeon.is_walkable(self.grid, x, y) or self._is_occupied(x, y):
+                continue
+            monster = entities.Monster(x, y, random.choice(kinds), elite=self._maybe_elite())
+            monster.awake = True
+            self.monsters.append(monster)
+            spawned += 1
+
     def _advance_level(self):
         self.dungeon_level += 1
         self.add_log(self.t("log_descend_level", level=self.dungeon_level))
@@ -1032,7 +1137,10 @@ class Game:
                 self.player.weapon_bonus = item.bonus
                 self.player.weapon_name = item.name
                 self.player.weapon_rarity_id = item.rarity_id
+                self.player.weapon_element_id = item.element_id
                 label = f"{self.tr(item.rarity_id)} {self.tn(item.name)}".strip()
+                if item.element_id:
+                    label += f" ({self.te(item.element_id)})"
                 self.add_log(self.t("log_equip_weapon", item=label, bonus=item.bonus))
                 self.sounds.play("equip")
             else:
@@ -1048,9 +1156,10 @@ class Game:
             else:
                 self.add_log(self.t("log_find_worse_armor", item=self.tn(item.name), current=self.tn(self.player.armor_name)))
         elif item.kind == "gold":
-            self.player.gold += item.bonus
-            self.stats["total_gold_collected"] = self.stats.get("total_gold_collected", 0) + item.bonus
-            self.add_log(self.t("log_pickup_gold", amount=item.bonus))
+            amount = int(round(item.bonus * (1 + self.player.bonus_gold_mult)))
+            self.player.gold += amount
+            self.stats["total_gold_collected"] = self.stats.get("total_gold_collected", 0) + amount
+            self.add_log(self.t("log_pickup_gold", amount=amount))
             self.sounds.play("pickup")
         elif item.kind == "scroll":
             self.player.scrolls[item.scroll_type] += 1
@@ -1150,11 +1259,40 @@ class Game:
         self._check_achievements()
         self._maybe_show_levelup_choice()
 
+    _ELEMENT_STATUS_LOG_KEY = {
+        "burn_turns": "log_status_burn",
+        "weaken_turns": "log_status_weaken",
+        "stun_turns": "log_status_stun",
+        "poison_turns": "log_status_poison",
+    }
+
     def _attack(self, attacker, defender):
         crit = attacker is self.player and random.random() < self.player.crit_chance
-        damage = max(1, attacker.power - defender.defense)
+        defense = defender.defense
+        if getattr(defender, "weaken_turns", 0) > 0:
+            defense = int(defense * C.WEAKEN_DEFENSE_MULT)
+        damage = max(1, attacker.power - defense)
         if crit:
             damage *= 2
+
+        element_status_applied = None
+        if attacker is self.player and self.player.weapon_element_id:
+            elem = C.ELEMENTS[self.player.weapon_element_id]
+            kind_info = C.MONSTER_TYPES.get(getattr(defender, "kind", None), {})
+            weak = self.player.weapon_element_id in kind_info.get("weak", [])
+            resist = self.player.weapon_element_id in kind_info.get("resist", [])
+            dmg_mult = 1.6 if weak else (0.4 if resist else 1.0)
+            proc_mult = 1.5 if weak else (0.5 if resist else 1.0)
+            damage += max(1, round(elem["bonus_damage"] * dmg_mult))
+            proc_chance = min(0.95, elem["proc_chance"] * proc_mult + self.player.bonus_elemental_chance)
+            if random.random() < proc_chance:
+                status_field = elem["status"]
+                setattr(defender, status_field, max(getattr(defender, status_field, 0), elem["duration"]))
+                element_status_applied = status_field
+
+        if defender is self.player and self.player.bonus_damage_reduction:
+            damage = max(1, round(damage * (1 - self.player.bonus_damage_reduction)))
+
         defender.hp -= damage
 
         if self._lang() == "de":
@@ -1187,6 +1325,10 @@ class Game:
         if getattr(attacker, "poisons_on_hit", False) and defender is self.player and defender.hp > 0:
             defender.poison_turns = max(defender.poison_turns, 5)
             self.add_log(self.t("log_poison_bite"))
+
+        if element_status_applied and defender.hp > 0:
+            log_key = self._ELEMENT_STATUS_LOG_KEY[element_status_applied]
+            self.add_log(self.t(log_key, monster=self._monster_named(defender, "nom")))
 
         if defender.hp <= 0:
             if defender is self.player:
@@ -1290,6 +1432,11 @@ class Game:
             self.player.max_hp += perk["hp"]
             self.player.hp += perk["hp"]
         self.player.bonus_crit_chance += perk.get("crit_bonus", 0.0)
+        self.player.bonus_damage_reduction = min(0.75, self.player.bonus_damage_reduction + perk.get("damage_reduction", 0.0))
+        self.player.bonus_gold_mult += perk.get("gold_mult", 0.0)
+        self.player.bonus_elemental_chance += perk.get("elemental_chance_bonus", 0.0)
+        if perk.get("regen_interval"):
+            self.player.regen_interval = perk["regen_interval"]
         self.add_log(self.t("log_perk_chosen", perk=self._perk_name(perk)))
         self.pending_perk_count = max(0, self.pending_perk_count - 1)
         if self.pending_perk_count > 0:
@@ -1322,6 +1469,11 @@ class Game:
         for monster in list(self.monsters):
             if not monster.is_alive():
                 continue
+
+            stunned = self._tick_monster_status(monster)
+            if not monster.is_alive():
+                continue
+
             if (monster.x, monster.y) in self.visible:
                 was_asleep = not monster.awake
                 monster.awake = True
@@ -1329,6 +1481,8 @@ class Game:
                     self.boss_banner_timer = 90
                     self.sounds.play("boss")
             if not monster.awake:
+                continue
+            if stunned:
                 continue
 
             for _ in range(monster.speed):
@@ -1341,11 +1495,56 @@ class Game:
             if monster.regen and monster.is_alive() and monster.hp < monster.max_hp:
                 monster.hp = min(monster.max_hp, monster.hp + monster.regen)
 
+    def _tick_monster_status(self, monster):
+        # Only ever set by the player's own elemental weapon (see _attack) -
+        # monsters never inflict these on each other or on the player here.
+        # Returns True if the monster was stunned and should skip its
+        # action(s) this turn.
+        stunned = monster.stun_turns > 0
+        if stunned:
+            monster.stun_turns -= 1
+
+        if monster.poison_turns > 0:
+            monster.poison_turns -= 1
+            dmg = C.POISON_DAMAGE_PER_TURN
+            monster.hp -= dmg
+            self._spawn_damage_number(monster.x, monster.y, str(dmg), C.COLOR_POISON)
+            if monster.hp <= 0:
+                self._on_monster_death(monster)
+                return stunned
+
+        if monster.burn_turns > 0:
+            monster.burn_turns -= 1
+            dmg = C.BURN_DAMAGE_PER_TURN
+            monster.hp -= dmg
+            self._spawn_damage_number(monster.x, monster.y, str(dmg), C.ELEMENTS["fire"]["color"])
+            if monster.hp <= 0:
+                self._on_monster_death(monster)
+                return stunned
+
+        if monster.weaken_turns > 0:
+            monster.weaken_turns -= 1
+
+        return stunned
+
     def _monster_act(self, monster):
         dx = self.player.x - monster.x
         dy = self.player.y - monster.y
         if dx != 0:
             monster.facing = 1 if dx > 0 else -1
+
+        # Cowardly kinds run once badly hurt instead of trading blows to
+        # the death - bosses are exempt, they're meant to be a real fight.
+        flee_threshold = C.MONSTER_TYPES.get(monster.kind, {}).get("flees_below")
+        if flee_threshold and not monster.is_boss and monster.hp / monster.max_hp <= flee_threshold:
+            step_x = -((dx > 0) - (dx < 0))
+            step_y = -((dy > 0) - (dy < 0))
+            self._move_monster_toward(monster, step_x, step_y)
+            return
+
+        if monster.is_boss and self._boss_special_action(monster, dx, dy):
+            return
+
         if abs(dx) <= 1 and abs(dy) <= 1 and (dx, dy) != (0, 0):
             self._attack(monster, self.player)
             return
@@ -1359,6 +1558,60 @@ class Game:
         step_x = (dx > 0) - (dx < 0)
         step_y = (dy > 0) - (dy < 0)
         self._move_monster_toward(monster, step_x, step_y)
+
+    def _boss_special_action(self, monster, dx, dy):
+        if monster.kind == "orc":
+            if not monster.enraged and monster.hp <= monster.max_hp * 0.5:
+                monster.enraged = True
+                monster.power = int(monster.power * 1.5)
+                self.add_log(self.t("log_boss_enrage", monster=self._monster_named(monster, "nom")))
+                self.sounds.play("boss")
+            return False
+
+        if monster.kind == "skeleton":
+            monster.summon_cooldown = max(0, monster.summon_cooldown - 1)
+            if monster.summon_cooldown == 0:
+                alive_skeletons = sum(
+                    1 for m in self.monsters if m.kind == "skeleton" and not m.is_boss and m.is_alive()
+                )
+                if alive_skeletons < 3 and self._boss_summon_skeleton(monster):
+                    monster.summon_cooldown = 6
+                    return True
+            return False
+
+        if monster.kind == "spider":
+            dist = abs(dx) + abs(dy)
+            monster.web_cooldown = max(0, monster.web_cooldown - 1)
+            if (
+                2 <= dist <= 4
+                and monster.web_cooldown == 0
+                and self._cardinal_line_clear(monster.x, monster.y, self.player.x, self.player.y)
+            ):
+                self.player.poison_turns = max(self.player.poison_turns, 5)
+                self.add_log(self.t("log_boss_web", monster=self._monster_named(monster, "nom")))
+                self._spawn_damage_number(self.player.x, self.player.y, "!", C.COLOR_POISON)
+                self.sounds.play("hit")
+                monster.web_cooldown = 5
+                return True
+            return False
+
+        return False
+
+    def _boss_summon_skeleton(self, boss):
+        spots = [
+            (boss.x + 1, boss.y), (boss.x - 1, boss.y),
+            (boss.x, boss.y + 1), (boss.x, boss.y - 1),
+        ]
+        random.shuffle(spots)
+        for x, y in spots:
+            if dungeon.is_walkable(self.grid, x, y) and not self._is_occupied(x, y):
+                minion = entities.Monster(x, y, "skeleton")
+                minion.awake = True
+                self.monsters.append(minion)
+                self.add_log(self.t("log_boss_summon", monster=self._monster_named(boss, "nom")))
+                self.sounds.play("boss")
+                return True
+        return False
 
     def _cardinal_line_clear(self, x1, y1, x2, y2):
         if x1 == x2 and y1 != y2:
@@ -1929,6 +2182,9 @@ class Game:
         if self.stairs_pos in self.explored:
             self._draw_ladder(*self.stairs_pos, ox, oy)
 
+        if self.shrine_pos and self.shrine_pos in self.explored:
+            self._draw_char("A", self.shrine_pos[0], self.shrine_pos[1], C.COLOR_SHRINE, ox, oy)
+
     def _render_entities(self, ox=0, oy=0):
         for item in self.items:
             if (item.x, item.y) in self.visible:
@@ -2093,8 +2349,9 @@ class Game:
         row_h = int(18 * scale)
 
         weapon_color = C.RARITY_BY_ID.get(self.player.weapon_rarity_id, {}).get("color", (215, 215, 230))
+        weapon_suffix = f" [{self.te(self.player.weapon_element_id)}]" if self.player.weapon_element_id else ""
         self._hud_icon_row(left_x, row_y, "/", weapon_color,
-                            f"{self.tn(self.player.weapon_name)} (+{self.player.weapon_bonus})",
+                            f"{self.tn(self.player.weapon_name)} (+{self.player.weapon_bonus}){weapon_suffix}",
                             label_color=weapon_color)
         self._hud_icon_row(right_x, row_y, "!", C.COLOR_POTION,
                             f"{self.t('hud_potions')} {self.player.potions}")

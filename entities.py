@@ -40,6 +40,7 @@ class Player(Entity):
         self.weapon_bonus = 0
         self.weapon_name = "Fists"
         self.weapon_rarity_id = None
+        self.weapon_element_id = None
         self.armor_bonus = 0
         self.armor_name = "None"
         self.armor_rarity_id = None
@@ -53,6 +54,11 @@ class Player(Entity):
         self.poison_turns = 0
         self.potions_drunk_this_run = 0
         self.bonus_crit_chance = 0.0
+        self.bonus_damage_reduction = 0.0
+        self.bonus_gold_mult = 0.0
+        self.bonus_elemental_chance = 0.0
+        self.regen_interval = None
+        self.regen_counter = 0
 
     @property
     def power(self):
@@ -128,6 +134,21 @@ class Monster(Entity):
         self.regen = elite["regen"] if elite and "regen" in elite else 0
         self.is_split_child = False
 
+        # Status effects a player's elemental weapon can inflict (see
+        # Game._attack / Game._tick_monster_status) - never set by monster
+        # attacks themselves, so these stay 0 unless the player is wielding
+        # an elemental weapon.
+        self.poison_turns = 0
+        self.burn_turns = 0
+        self.weaken_turns = 0
+        self.stun_turns = 0
+
+        # Boss-only signature mechanics (see Game._boss_special_action) -
+        # harmless no-ops on regular monsters, which never check them.
+        self.enraged = False
+        self.summon_cooldown = 3
+        self.web_cooldown = 2
+
     def is_alive(self):
         return self.hp > 0
 
@@ -138,9 +159,10 @@ class Merchant(Entity):
 
 
 class Item(Entity):
-    def __init__(self, x, y, kind, name, char, color, bonus=0, scroll_type=None, rarity_id=None):
+    def __init__(self, x, y, kind, name, char, color, bonus=0, scroll_type=None, rarity_id=None, element_id=None):
         super().__init__(x, y, char, color, name, blocks_movement=False)
         self.kind = kind
         self.bonus = bonus
         self.scroll_type = scroll_type
         self.rarity_id = rarity_id
+        self.element_id = element_id

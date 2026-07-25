@@ -88,26 +88,33 @@ COLOR_MERCHANT = (80, 200, 220)
 COLOR_POISON = (110, 200, 90)
 COLOR_TRAP = (200, 80, 60)
 COLOR_CRIT = (255, 230, 60)
+COLOR_SHRINE = (190, 140, 255)
 
 MONSTER_TYPES = {
-    "rat": {"char": "r", "color": (140, 100, 60), "hp": 4, "power": 2, "defense": 0, "xp": 4, "name": "rat"},
+    "rat": {
+        "char": "r", "color": (140, 100, 60), "hp": 4, "power": 2, "defense": 0, "xp": 4, "name": "rat",
+        "flees_below": 0.3,
+    },
     "goblin": {"char": "g", "color": (60, 160, 60), "hp": 8, "power": 3, "defense": 1, "xp": 8, "name": "goblin"},
-    "orc": {"char": "o", "color": (180, 40, 40), "hp": 14, "power": 5, "defense": 2, "xp": 14, "name": "orc"},
+    "orc": {
+        "char": "o", "color": (180, 40, 40), "hp": 14, "power": 5, "defense": 2, "xp": 14, "name": "orc",
+        "weak": ["frost"],
+    },
     "skeleton": {
         "char": "s", "color": (210, 210, 220), "hp": 9, "power": 4, "defense": 1, "xp": 10,
-        "name": "skeleton", "ranged": True,
+        "name": "skeleton", "ranged": True, "resist": ["poison"], "weak": ["fire"],
     },
     "slime": {
         "char": "z", "color": (70, 200, 140), "hp": 6, "power": 2, "defense": 0, "xp": 6,
-        "name": "slime", "splits": True,
+        "name": "slime", "splits": True, "weak": ["fire"], "flees_below": 0.25,
     },
     "bat": {
         "char": "b", "color": (150, 90, 170), "hp": 5, "power": 2, "defense": 0, "xp": 6,
-        "name": "bat", "speed": 2,
+        "name": "bat", "speed": 2, "weak": ["lightning"],
     },
     "spider": {
         "char": "x", "color": (100, 50, 130), "hp": 7, "power": 3, "defense": 0, "xp": 9,
-        "name": "spider", "poisons": True,
+        "name": "spider", "poisons": True, "resist": ["poison"],
     },
 }
 
@@ -128,11 +135,36 @@ ELITE_MODIFIERS = [
 ELITE_CHANCE = 0.10
 ELITE_XP_MULT = 2.5
 
+# Elemental weapon affixes. "status" names the field on Monster/Player that
+# tracks the effect's remaining duration in turns (see Game._attack /
+# Game._tick_monster_status); "proc_chance" is the base chance per hit,
+# doubled/halved against a monster kind listed as weak/resist to that
+# element in MONSTER_TYPES above.
+ELEMENTS = {
+    "fire": {"name": "Fire", "color": (255, 100, 30), "status": "burn_turns", "duration": 3,
+              "bonus_damage": 3, "proc_chance": 0.35},
+    "frost": {"name": "Frost", "color": (120, 200, 255), "status": "weaken_turns", "duration": 3,
+              "bonus_damage": 2, "proc_chance": 0.4},
+    "lightning": {"name": "Lightning", "color": (255, 230, 80), "status": "stun_turns", "duration": 1,
+              "bonus_damage": 2, "proc_chance": 0.3},
+    "poison": {"name": "Venom", "color": (110, 200, 90), "status": "poison_turns", "duration": 4,
+              "bonus_damage": 2, "proc_chance": 0.4},
+}
+ELEMENT_WEAPON_CHANCE = 0.3
+ELEMENT_MIN_LEVEL = 2
+BURN_DAMAGE_PER_TURN = 3
+WEAKEN_DEFENSE_MULT = 0.6
+
 PERKS = [
     {"id": "power", "name": "Brute Strength", "desc": "+2 Power", "power": 2},
     {"id": "defense", "name": "Iron Skin", "desc": "+2 Defense", "defense": 2},
     {"id": "vitality", "name": "Vitality", "desc": "+10 Max HP", "hp": 10},
     {"id": "precision", "name": "Precision", "desc": "+5% Crit Chance", "crit_bonus": 0.05},
+    {"id": "toughness", "name": "Toughness", "desc": "-10% Damage Taken", "damage_reduction": 0.10},
+    {"id": "regeneration", "name": "Regeneration", "desc": "Regen 1 HP every 5 turns", "regen_interval": 5},
+    {"id": "greed", "name": "Greed", "desc": "+25% Gold Found", "gold_mult": 0.25},
+    {"id": "elemental_focus", "name": "Elemental Focus", "desc": "+15% Elemental Proc Chance",
+     "elemental_chance_bonus": 0.15},
 ]
 
 WEAPON_TYPES = [
@@ -185,6 +217,19 @@ TRAP_TYPES = {
 }
 TRAP_CHANCE_PER_ROOM = 0.3
 POISON_DAMAGE_PER_TURN = 2
+
+# A single optional shrine tile per level (mutually exclusive with the
+# stairs/merchant tiles, see Game._populate_level) that triggers one random
+# risk/reward event the moment the player steps on it - no separate menu or
+# input needed, same "walk onto it" pattern as traps.
+SHRINE_CHANCE_PER_LEVEL = 0.3
+SHRINE_EVENTS = [
+    {"id": "vitality", "name": "Blessing of Vitality", "weight": 3},
+    {"id": "power", "name": "Blessing of Power", "weight": 2},
+    {"id": "fortune", "name": "Fortune", "weight": 3},
+    {"id": "frailty", "name": "Curse of Frailty", "weight": 2},
+    {"id": "ambush", "name": "Vengeful Spirits", "weight": 1.5},
+]
 
 MERCHANT_CHANCE_PER_LEVEL = 0.35
 SHOP_STOCK = [

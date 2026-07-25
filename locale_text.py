@@ -200,6 +200,18 @@ STRINGS = {
     "log_blink": {"en": "You blink to a new location!", "de": "Du teleportierst dich an einen neuen Ort!"},
     "log_reveal": {"en": "The level layout is revealed!", "de": "Der Ebenenplan wird aufgedeckt!"},
     "log_poison_bite": {"en": "The bite poisons you!", "de": "Der Biss vergiftet dich!"},
+    "log_status_burn": {"en": "{monster} catches fire!", "de": "{monster} fängt Feuer!"},
+    "log_status_weaken": {"en": "{monster} is chilled and weakened!", "de": "{monster} wird erstarrt und geschwächt!"},
+    "log_status_stun": {"en": "{monster} is stunned!", "de": "{monster} wird betäubt!"},
+    "log_status_poison": {"en": "{monster} is poisoned!", "de": "{monster} wird vergiftet!"},
+    "log_boss_enrage": {"en": "{monster} flies into a rage!", "de": "{monster} gerät in Rage!"},
+    "log_boss_summon": {"en": "{monster} summons a minion!", "de": "{monster} beschwört einen Diener!"},
+    "log_boss_web": {"en": "{monster} spits venom at you from afar!", "de": "{monster} spuckt dich aus der Ferne mit Gift an!"},
+    "log_shrine_vitality": {"en": "The shrine bathes you in light - fully healed!", "de": "Der Schrein hüllt dich in Licht - vollständig geheilt!"},
+    "log_shrine_power": {"en": "The shrine empowers your muscles. +2 Power, permanently.", "de": "Der Schrein stärkt deine Muskeln. +2 Angriff, dauerhaft."},
+    "log_shrine_fortune": {"en": "The shrine rains gold on you! +{amount} Gold.", "de": "Der Schrein lässt Gold auf dich regnen! +{amount} Gold."},
+    "log_shrine_frailty": {"en": "The shrine curses you. -{amount} Max HP.", "de": "Der Schrein verflucht dich. -{amount} Max-HP."},
+    "log_shrine_ambush": {"en": "The shrine was a trap - vengeful spirits attack!", "de": "Der Schrein war eine Falle - rachsüchtige Geister greifen an!"},
     "log_you_died": {"en": "You have died.", "de": "Du bist gestorben."},
     "log_monster_dies": {"en": "{monster} dies. (+{xp} XP)", "de": "{monster} stirbt. (+{xp} XP)"},
     "log_level_up": {"en": "You reach level {level}!", "de": "Du erreichst Level {level}!"},
@@ -213,6 +225,17 @@ PERK_DE = {
     "defense": ("Eisenhaut", "+2 Verteidigung"),
     "vitality": ("Vitalität", "+10 Max-HP"),
     "precision": ("Präzision", "+5% Krit-Chance"),
+    "toughness": ("Zähigkeit", "-10% erlittener Schaden"),
+    "regeneration": ("Regeneration", "Regeneriere 1 HP alle 5 Runden"),
+    "greed": ("Gier", "+25% Gold-Funde"),
+    "elemental_focus": ("Elementarfokus", "+15% Elementar-Auslösechance"),
+}
+
+ELEMENT_DE = {
+    "Fire": "Feuer",
+    "Frost": "Frost",
+    "Lightning": "Blitz",
+    "Venom": "Gift",
 }
 
 # English display name -> German display name, for items/weapons/armor/scrolls.
