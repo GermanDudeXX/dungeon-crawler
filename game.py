@@ -852,6 +852,7 @@ class Game:
         return fallback
 
     def run(self):
+        self._install_perf_hook()
         while True:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -872,9 +873,33 @@ class Game:
             elif self.state == "confirm_disable_touch" and self.touch_warning_timer > 0:
                 self.touch_warning_timer -= 1
 
+            t0 = pygame.time.get_ticks()
             self.render()
+            # render() ends in pygame.display.flip(), whose cost _install_perf_hook
+            # accounts separately - subtract it to get drawing-only time.
+            self._perf_draw_ms = (getattr(self, "_perf_draw_ms", 0.0)
+                                  + (pygame.time.get_ticks() - t0)
+                                  - self._perf_flip_frame)
+            self._perf_flip_ms = getattr(self, "_perf_flip_ms", 0.0) + self._perf_flip_frame
+            self._perf_flip_frame = 0.0
             self.clock.tick(30)
             self._log_fps()
+
+    def _install_perf_hook(self):
+        # TEMPORARY DIAGNOSTIC. Splits the frame into "drawing" (all the
+        # Python/pygame blitting) vs "flip" (SDL's present, which for a
+        # pygame.SCALED window is the surface->texture upload plus the
+        # upscale). Those two point at completely different fixes, so we
+        # measure rather than guess which dominates on the real device.
+        self._perf_flip_frame = 0.0
+        real_flip = pygame.display.flip
+
+        def timed_flip():
+            t = pygame.time.get_ticks()
+            real_flip()
+            self._perf_flip_frame += pygame.time.get_ticks() - t
+
+        pygame.display.flip = timed_flip
 
     def _log_fps(self):
         # TEMPORARY DIAGNOSTIC - remove once the lag work is done.
@@ -890,9 +915,15 @@ class Game:
             self._fps_last = now
             return
         if now - last >= 1000:
+            n = max(1, self._fps_frames)
+            draw = getattr(self, "_perf_draw_ms", 0.0) / n
+            flip = getattr(self, "_perf_flip_ms", 0.0) / n
             print(f"[perf] {self._fps_frames * 1000 / (now - last):.1f} fps "
+                  f"draw={draw:.0f}ms flip={flip:.0f}ms "
                   f"canvas={C.SCREEN_WIDTH}x{C.SCREEN_HEIGHT} state={self.state}")
             self._fps_frames = 0
+            self._perf_draw_ms = 0.0
+            self._perf_flip_ms = 0.0
             self._fps_last = now
 
     def _handle_movement_repeat(self):
