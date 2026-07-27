@@ -1,9 +1,12 @@
 import json
 import os
 import re
+import shutil
 import ssl
 import subprocess
 import tempfile
+import threading
+import time
 import sys
 import urllib.request
 
@@ -144,11 +147,43 @@ def can_self_update():
     return ON_ANDROID or getattr(sys, "frozen", False)
 
 
-def apply_update_pc(new_exe_path, expected_size=None):
-    current_exe = os.path.abspath(sys.executable)
+FAILURE_MARKER = "update_failed.txt"
+OLD_EXE_SUFFIX = ".old"
+
+
+def failure_marker_path():
+    return os.path.join(staging_dir(), FAILURE_MARKER)
+
+
+def take_failure_marker():
+    """Reads and removes the marker the swap script leaves behind when it
+    could not install the new build. Returns a short reason code or None.
+
+    Without this a failed swap was completely invisible: the script fell
+    through to relaunching the old exe, so the game came back looking
+    normal and the update button still offered the same update forever.
+    """
+    path = failure_marker_path()
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            reason = f.read().strip()
+    except OSError:
+        return None
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    return reason or "unknown"
+
+
+def build_swap_script(current_exe, new_exe_path, fail_log, expected_size=None):
+    """The .bat that replaces the running exe. Split out from
+    apply_update_pc purely so the swap logic can be exercised by a test
+    against dummy files - it is fiddly, it silently broke once already,
+    and it is the one piece of this program that can leave a user with no
+    working game at all."""
     exe_name = os.path.basename(current_exe)
-    exe_dir = os.path.dirname(current_exe)
-    bat_path = os.path.join(staging_dir(), "_update.bat")
+    old_exe = current_exe + OLD_EXE_SUFFIX
 
     # tasklist/findstr/ping are fully-qualified to System32 rather than
     # relying on PATH lookup: if a Unix toolchain (Git for Windows, WSL
@@ -162,38 +197,107 @@ def apply_update_pc(new_exe_path, expected_size=None):
     # timeout.exe can refuse to run at all without a real console attached
     # to stdin, which a hidden/no-window process may not reliably have.
     #
-    # The file-size check right before the move is a second line of
+    # The file-size check right before the swap is a second line of
     # defense on top of download_update()'s own size check: antivirus
     # software can quarantine/truncate a file *after* Python already
     # verified it and moved on, in the window while this script is still
-    # waiting for the old process to exit. Skipping the move (and just
+    # waiting for the old process to exit. Skipping the swap (and just
     # relaunching the still-intact old exe) if the new file looks wrong
     # beats swapping in a broken one that fails to start at all.
+    #
+    # The swap itself renames the current exe aside and moves the new one
+    # into the freed name, instead of overwriting the current exe in
+    # place. Reason, and the whole point of this rewrite: a plain
+    # "move /y new current" fails outright while anything still holds a
+    # handle on the running exe - and something routinely does for a
+    # second or two after it exits (antivirus scanning it on close, the
+    # shell's icon cache). The old script sent that move's output to NUL
+    # and never checked errorlevel, so the failure was silent and it went
+    # straight on to relaunching the *old* exe. Renaming works where
+    # overwriting does not: Windows lets you rename a file that is open,
+    # it only refuses to delete or replace it. Every step is now checked,
+    # retried, and rolled back on failure, so the user can never end up
+    # without a working exe, and a genuine failure leaves a marker behind
+    # instead of pretending the update worked.
+    #
+    # Nothing here is written with parenthesised if-blocks or delayed
+    # expansion on purpose: %VAR% inside a block expands at parse time,
+    # and enabling delayed expansion would corrupt any install path
+    # containing a "!". Flat labels and gotos avoid both traps.
     size_check = ""
     if expected_size:
         size_check = (
-            f'set NEWSIZE=0\r\n'
-            f'for %%A in ("{new_exe_path}") do set NEWSIZE=%%~zA\r\n'
-            f'if not "%NEWSIZE%"=="{expected_size}" goto skip_move\r\n'
+            'set NEWSIZE=0\r\n'
+            'for %%A in ("%NEWFILE%") do set NEWSIZE=%%~zA\r\n'
+            f'if not "%NEWSIZE%"=="{expected_size}" goto bad_size\r\n'
         )
     script = (
         "@echo off\r\n"
         "setlocal\r\n"
+        f'set "TARGET={current_exe}"\r\n'
+        f'set "NEWFILE={new_exe_path}"\r\n'
+        f'set "OLDFILE={old_exe}"\r\n'
+        f'set "FAILLOG={fail_log}"\r\n'
+        "set WAITED=0\r\n"
+        "set SWAPS=0\r\n"
+        'if exist "%FAILLOG%" del /f /q "%FAILLOG%" >NUL 2>&1\r\n'
+        # --- wait for the running game to exit (up to ~2 minutes) ---
         ":wait\r\n"
         f'%SystemRoot%\\System32\\tasklist.exe /FI "IMAGENAME eq {exe_name}" 2>NUL'
         f' | %SystemRoot%\\System32\\findstr.exe /I "{exe_name}" >NUL\r\n'
-        "if not errorlevel 1 (\r\n"
-        "  %SystemRoot%\\System32\\PING.EXE -n 2 127.0.0.1 >NUL\r\n"
-        "  goto wait\r\n"
-        ")\r\n"
-        "%SystemRoot%\\System32\\PING.EXE -n 2 127.0.0.1 >NUL\r\n"
-        f'if not exist "{new_exe_path}" goto skip_move\r\n'
+        "if errorlevel 1 goto gone\r\n"
+        "set /a WAITED+=1\r\n"
+        "if %WAITED% GEQ 60 goto still_running\r\n"
+        "%SystemRoot%\\System32\\PING.EXE -n 3 127.0.0.1 >NUL\r\n"
+        "goto wait\r\n"
+        # --- grace period, then sanity-check the download ---
+        ":gone\r\n"
+        "%SystemRoot%\\System32\\PING.EXE -n 4 127.0.0.1 >NUL\r\n"
+        'if not exist "%NEWFILE%" goto no_new_file\r\n'
         f"{size_check}"
-        f'move /y "{new_exe_path}" "{current_exe}" >NUL\r\n'
-        ":skip_move\r\n"
-        f'start "" "{current_exe}"\r\n'
+        # --- rename aside, move in, verify, roll back on any failure ---
+        ":swap\r\n"
+        'if exist "%OLDFILE%" del /f /q "%OLDFILE%" >NUL 2>&1\r\n'
+        'move /y "%TARGET%" "%OLDFILE%" >NUL 2>&1\r\n'
+        "if errorlevel 1 goto retry\r\n"
+        'move /y "%NEWFILE%" "%TARGET%" >NUL 2>&1\r\n'
+        "if errorlevel 1 goto rollback\r\n"
+        'if not exist "%TARGET%" goto rollback\r\n'
+        "goto relaunch\r\n"
+        ":rollback\r\n"
+        'move /y "%OLDFILE%" "%TARGET%" >NUL 2>&1\r\n'
+        ":retry\r\n"
+        "set /a SWAPS+=1\r\n"
+        # ~45s of retrying: an antivirus scanning a 40MB exe on close can
+        # easily hold it for longer than a handful of seconds.
+        "if %SWAPS% GEQ 15 goto swap_failed\r\n"
+        "%SystemRoot%\\System32\\PING.EXE -n 3 127.0.0.1 >NUL\r\n"
+        "goto swap\r\n"
+        # --- failure reasons, all of them still relaunch the old build ---
+        ":still_running\r\n"
+        'echo still-running> "%FAILLOG%"\r\n'
+        "goto relaunch\r\n"
+        ":no_new_file\r\n"
+        'echo missing-download> "%FAILLOG%"\r\n'
+        "goto relaunch\r\n"
+        ":bad_size\r\n"
+        'echo bad-size> "%FAILLOG%"\r\n'
+        "goto relaunch\r\n"
+        ":swap_failed\r\n"
+        'echo swap-failed> "%FAILLOG%"\r\n'
+        "goto relaunch\r\n"
+        ":relaunch\r\n"
+        'start "" "%TARGET%"\r\n'
         'del "%~f0"\r\n'
     )
+    return script
+
+
+def apply_update_pc(new_exe_path, expected_size=None):
+    current_exe = os.path.abspath(sys.executable)
+    bat_path = os.path.join(staging_dir(), "_update.bat")
+    script = build_swap_script(current_exe, new_exe_path,
+                               failure_marker_path(), expected_size)
     with open(bat_path, "w", encoding="utf-8") as f:
         f.write(script)
 
@@ -205,6 +309,98 @@ def apply_update_pc(new_exe_path, expected_size=None):
         creationflags=subprocess.CREATE_NO_WINDOW,
         close_fds=True,
     )
+
+
+STALE_MEI_AGE_SECONDS = 6 * 3600
+
+
+def _purge_stale_mei_dirs():
+    """Deletes leftover PyInstaller onefile extraction folders in %TEMP%.
+
+    A onefile build unpacks its whole runtime - python313.dll included -
+    into %TEMP%\\_MEIxxxxxx on every single launch and removes it again on
+    a normal exit. The update path used to hard-exit the process from a
+    worker thread, which skips that cleanup entirely, so one ~40MB folder
+    was left behind per update attempt (38 of them had accumulated on the
+    machine where this was diagnosed). That pile is not just wasted disk:
+    the more junk sits in %TEMP%, the likelier an antivirus scan stalls or
+    interrupts the *next* extraction, and a half-extracted folder is
+    exactly what produces "Failed to load Python DLL ... _MEIxxxxxx\\
+    python313.dll".
+
+    Two guards against deleting a folder that is actually in use: our own
+    _MEIPASS is skipped outright, and so is anything touched recently -
+    another instance of the game could legitimately be running. Cheap
+    enough to be worth doing, so it also runs when not frozen.
+    """
+    temp_root = tempfile.gettempdir()
+    ours = os.path.abspath(getattr(sys, "_MEIPASS", "")) if hasattr(sys, "_MEIPASS") else None
+    cutoff = time.time() - STALE_MEI_AGE_SECONDS
+    removed = 0
+    try:
+        names = os.listdir(temp_root)
+    except OSError:
+        return 0
+    for name in names:
+        if not name.startswith("_MEI"):
+            continue
+        path = os.path.join(temp_root, name)
+        if not os.path.isdir(path):
+            continue
+        if ours and os.path.abspath(path) == ours:
+            continue
+        try:
+            if os.path.getmtime(path) > cutoff:
+                continue
+        except OSError:
+            continue
+        # Rename first: if anything inside is still locked this fails as a
+        # whole and we leave the folder completely alone, rather than
+        # rmtree deleting the unlocked half of a live instance's runtime.
+        tomb = path + ".stale"
+        try:
+            if os.path.exists(tomb):
+                shutil.rmtree(tomb, ignore_errors=True)
+            os.rename(path, tomb)
+        except OSError:
+            continue
+        shutil.rmtree(tomb, ignore_errors=True)
+        removed += 1
+    return removed
+
+
+def _purge_old_exe():
+    """Removes the previous build that apply_update_pc renamed aside.
+
+    It cannot be deleted by the swap script itself - at that moment it is
+    about to become, or has just been, a running process - so the newly
+    started build clears it on the way up.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    old = os.path.abspath(sys.executable) + OLD_EXE_SUFFIX
+    try:
+        if os.path.exists(old):
+            os.remove(old)
+    except OSError:
+        pass
+
+
+def cleanup_previous_update():
+    """Fire-and-forget startup housekeeping, off the main thread.
+
+    Deleting dozens of 40MB folders can take a second or two and must
+    never hold up the title screen, and every step already swallows its
+    own errors, so a daemon thread is enough.
+    """
+    def worker():
+        try:
+            _purge_old_exe()
+            _purge_stale_mei_dirs()
+        except Exception:
+            pass
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def android_download_dir():

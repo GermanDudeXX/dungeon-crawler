@@ -165,6 +165,16 @@ class Game:
         self.update_progress = (0, 0)
         self._update_thread = None
         self._update_download_path = None
+        self._quit_for_update = False
+
+        # Clears the previous build and any leaked onefile extraction
+        # folders left in %TEMP%. Runs on a background thread.
+        updater.cleanup_previous_update()
+        # If the last update could not actually install itself, say so
+        # instead of letting the same update be offered forever with no
+        # hint that anything went wrong. Shown the next time the update
+        # screen is opened, not popped up over the title.
+        self._pending_update_failure = updater.take_failure_marker()
 
     def _apply_pc_ui_scale(self):
         self.ui_scale = 1.3
@@ -1041,6 +1051,11 @@ class Game:
         self.update_phase = "idle"
         self.update_info = None
         self.update_error = None
+        if getattr(self, "_pending_update_failure", None):
+            self.update_error = self.t("update_swap_failed",
+                                       reason=self._pending_update_failure)
+            self.update_phase = "error"
+            self._pending_update_failure = None
         self.state = "update"
 
     def _start_update_check(self):
@@ -1110,10 +1125,15 @@ class Game:
             elif updater.can_self_update():
                 self.update_phase = "restarting"
                 updater.apply_update_pc(dest_path, expected_size=info["size"])
-                # Hard-exit from this worker thread rather than pygame.quit()
-                # (an SDL call, unsafe off the main thread) - the relaunch
-                # batch script is already waiting for this process to die.
-                os._exit(0)
+                # Ask the main loop to shut down rather than calling
+                # pygame.quit() here (an SDL call, unsafe off the main
+                # thread) or os._exit() (which used to be the answer, but
+                # it bypasses PyInstaller's own cleanup - every update
+                # then left a ~40MB _MEI folder behind in %TEMP%, and that
+                # pile is what eventually broke an extraction with
+                # "Failed to load Python DLL"). The relaunch script is
+                # already waiting for this process to disappear.
+                self._quit_for_update = True
             else:
                 self.update_phase = "dev_mode"
 
@@ -1191,6 +1211,11 @@ class Game:
 
     def run(self):
         while True:
+            if self._quit_for_update:
+                # Normal shutdown so the frozen build tears down its own
+                # temp extraction folder before the swap script takes over.
+                pygame.quit()
+                sys.exit()
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     if self.state == "playing":

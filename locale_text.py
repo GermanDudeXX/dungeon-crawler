@@ -127,6 +127,10 @@ STRINGS = {
     "update_title": {"en": "UPDATE", "de": "UPDATE"},
     "update_checking": {"en": "Checking for updates...", "de": "Suche nach Updates..."},
     "update_error_prefix": {"en": "Error: {error}", "de": "Fehler: {error}"},
+    "update_swap_failed": {
+        "en": "The last update could not be installed ({reason}). The previous version was kept. Please try again.",
+        "de": "Das letzte Update konnte nicht installiert werden ({reason}). Die vorherige Version wurde behalten. Bitte versuche es erneut.",
+    },
     "update_up_to_date": {
         "en": "You already have the latest version (Build {build}).",
         "de": "Du hast bereits die neueste Version (Build {build}).",
