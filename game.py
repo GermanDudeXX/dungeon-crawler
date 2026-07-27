@@ -42,6 +42,9 @@ MOVE_REPEAT_INTERVAL_MS = 200
 # affordable now only because most iterations no longer redraw anything
 # (see _should_redraw).
 POLL_HZ = 60
+# How long to wait before retrying music that failed to start. Only ever
+# applies when nothing is playing; a healthy track is never restarted.
+MUSIC_RETRY_COOLDOWN_MS = 5000
 # Frame-counted animation timers still advance at the original rate, so
 # doubling the poll rate does not double animation speed.
 TICK_INTERVAL_MS = 1000 // 30
@@ -133,6 +136,11 @@ class Game:
         self._last_tick_ms = 0
         self._pressed_key = None
         self._pressed_until = 0
+        self._music_track = None
+        # Backdated so the first recovery attempt is allowed immediately;
+        # plain 0 would block it for a whole cooldown right after launch,
+        # which is exactly when a failed first load needs retrying.
+        self._music_retry_ms = -MUSIC_RETRY_COOLDOWN_MS
         # Running from Downloads/Desktop means Windows will block the
         # self-updater later, so offer to install properly first.
         self.state = "install_prompt" if installer.should_offer_install() else "title"
@@ -791,24 +799,25 @@ class Game:
             self._music_track = None
 
     def _music_watchdog(self):
-        """Restart the track if it should be playing but is not.
+        """Recover only from music that never started, never police a
+        track that is already playing.
 
-        Covers a load or a device audio focus change failing transiently -
-        previously any such hiccup meant silence until the player found
-        the settings toggle. Cheap: one get_busy() call per second.
+        The first version restarted whenever pygame reported the mixer as
+        not busy. On the device that reported false negatives, so it
+        reloaded and replayed the track roughly once a second - heard as
+        the music restarting from the top over and over. Two guards now
+        make that impossible: a track we successfully started is left
+        alone entirely, and no restart may happen within
+        MUSIC_RETRY_COOLDOWN_MS of the last one.
         """
         if not self.settings.get("music", True):
             return
+        if self._music_track is not None:
+            return          # something is playing - hands off
         now = pygame.time.get_ticks()
-        if now - getattr(self, "_music_check_ms", 0) < 1000:
+        if now - self._music_retry_ms < MUSIC_RETRY_COOLDOWN_MS:
             return
-        self._music_check_ms = now
-        try:
-            if pygame.mixer.music.get_busy():
-                return
-        except pygame.error:
-            return
-        self._music_track = None
+        self._music_retry_ms = now
         self._play_tier_music(getattr(self, "tier", None) or C.DUNGEON_TIERS[0])
 
     def _build_ui_metrics(self):
