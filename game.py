@@ -375,6 +375,8 @@ class Game:
         self.player = player
 
         self.grid = data["grid"]
+        self.tier = self._tier_for_level(self.dungeon_level)
+        self._play_tier_music(self.tier)
         self.stairs_pos = tuple(data["stairs_pos"])
         up_stairs = data.get("up_stairs_pos")
         self.up_stairs_pos = tuple(up_stairs) if up_stairs else None
@@ -499,6 +501,8 @@ class Game:
 
     def _restore_level_snapshot(self, snap):
         self.grid = snap["grid"]
+        self.tier = self._tier_for_level(self.dungeon_level)
+        self._play_tier_music(self.tier)
         self.stairs_pos = tuple(snap["stairs_pos"])
         up_stairs = snap.get("up_stairs_pos")
         self.up_stairs_pos = tuple(up_stairs) if up_stairs else None
@@ -531,6 +535,9 @@ class Game:
         # up_stairs_pos, ascending always arrives at the level below's own
         # stairs_pos, so the two sides of every staircase line up).
         self.up_stairs_pos = self.rooms[0].center() if self.dungeon_level > 1 else None
+
+        self.tier = self._tier_for_level(self.dungeon_level)
+        self._play_tier_music(self.tier)
 
         self.monsters = []
         self.items = []
@@ -567,13 +574,15 @@ class Game:
             x, y = self._random_floor_in_room(room)
             if not self._is_occupied(x, y):
                 kind = random.choices(monster_kinds, weights=weights, k=1)[0]
-                self.monsters.append(entities.Monster(x, y, kind, elite=self._maybe_elite()))
+                self.monsters.append(entities.Monster(
+                    x, y, kind, elite=self._maybe_elite(), tier_mult=self.tier["mult"]))
 
         if self.dungeon_level % 5 == 0:
             bx, by = self.stairs_pos
             tier = (self.dungeon_level // 5 - 1) % len(C.BOSS_KIND_CYCLE)
             boss_kind = C.BOSS_KIND_CYCLE[tier]
-            self.monsters.append(entities.Monster(bx, by, boss_kind, boss=True))
+            self.monsters.append(entities.Monster(
+                bx, by, boss_kind, boss=True, tier_mult=self.tier["mult"]))
             self.add_log(self.t("log_boss_guards"))
 
         for _ in range(random.randint(1, 3)):
@@ -715,6 +724,49 @@ class Game:
         if self._lang() == "de":
             return loc.ELEMENT_DE.get(elem["name"], elem["name"])
         return elem["name"]
+
+    def _tier_for_level(self, level):
+        """The theme and difficulty multiplier for a dungeon level.
+
+        Themes cycle once the list is exhausted, but the multiplier keeps
+        climbing by TIER_CYCLE_MULT per full cycle so floor 51 is harder
+        than floor 1 rather than looping back to the same difficulty.
+        """
+        index = max(0, (level - 1) // C.LEVELS_PER_TIER)
+        cycle, within = divmod(index, len(C.DUNGEON_TIERS))
+        tier = dict(C.DUNGEON_TIERS[within])
+        tier["mult"] = C.TIER_GROWTH ** index
+        tier["cycle"] = cycle
+        tier["index"] = index
+        return tier
+
+    def _tier_name(self, tier):
+        if self._lang() == "de":
+            name = loc.TIER_DE.get(tier["id"], tier["name"])
+        else:
+            name = tier["name"]
+        # Second time through the themes, mark it so the repeat reads as
+        # deliberate escalation rather than a bug.
+        return f"{name} +{tier['cycle']}" if tier.get("cycle") else name
+
+    def _play_tier_music(self, tier):
+        """Switch the looping background track when the theme changes."""
+        if not self.settings.get("music", True):
+            return
+        track = tier.get("music")
+        if not track or track == getattr(self, "_music_track", None):
+            return
+        path = os.path.join(C.MUSIC_DIR, track)
+        try:
+            pygame.mixer.music.load(path)
+            pygame.mixer.music.set_volume(
+                self.settings.get("volume", sound.MASTER_VOLUME) * 0.6)
+            pygame.mixer.music.play(-1)
+            self._music_track = track
+        except (pygame.error, FileNotFoundError):
+            # Music is optional - a device without a working decoder for
+            # it should still play the game silently.
+            self._music_track = track
 
     def _build_ui_metrics(self):
         # Absolute sizes for the menu screens, scaled from the canvas
@@ -1461,6 +1513,7 @@ class Game:
 
     def _advance_level(self):
         self.level_history[self.dungeon_level] = self._snapshot_current_level()
+        previous_tier = getattr(self, "tier", None)
         self.dungeon_level += 1
         self.add_log(self.t("log_descend_level", level=self.dungeon_level))
         self.sounds.play("stairs")
@@ -1471,6 +1524,9 @@ class Game:
             self._recompute_fov()
         else:
             self.new_level()
+        if previous_tier is None or self.tier["index"] != previous_tier["index"]:
+            self.add_log(self.t("log_new_tier", tier=self._tier_name(self.tier)))
+            self.sounds.play("boss")
         self._check_achievements()
         self._maybe_show_levelup_choice()
 
@@ -2647,6 +2703,7 @@ class Game:
         # largest single item in a gameplay frame. Painting it once into a
         # cached surface turns the per-frame cost into one 0.11ms blit.
         # Invalidated from _recompute_fov and wherever the map is replaced.
+        tier = getattr(self, "tier", None) or C.DUNGEON_TIERS[0]
         surf = pygame.Surface((C.MAP_PIXEL_WIDTH, C.MAP_HEIGHT * C.TILE_SIZE))
         surf.fill(C.COLOR_BG)
         for y in range(C.MAP_HEIGHT):
@@ -2656,9 +2713,9 @@ class Game:
                     continue
                 is_visible = (x, y) in self.visible
                 if row[x] == dungeon.WALL:
-                    color = C.COLOR_WALL if is_visible else C.COLOR_WALL_DIM
+                    color = tier["wall"] if is_visible else tier["wall_dim"]
                 else:
-                    color = C.COLOR_FLOOR if is_visible else C.COLOR_FLOOR_DIM
+                    color = tier["floor"] if is_visible else tier["floor_dim"]
                 pygame.draw.rect(
                     surf, color,
                     (x * C.TILE_SIZE, y * C.TILE_SIZE, C.TILE_SIZE, C.TILE_SIZE),
@@ -2850,7 +2907,9 @@ class Game:
                            f"{self.t('hud_gold')} {self.player.gold}")
         y += row_h
 
-        self.screen.blit(f.render(f"Dungeon Lv {self.dungeon_level}", True, C.COLOR_HUD_TEXT), (left_x, y))
+        tier_label = self._tier_name(getattr(self, "tier", C.DUNGEON_TIERS[0]))
+        self.screen.blit(
+            f.render(f"{tier_label}  Lv {self.dungeon_level}", True, C.COLOR_HUD_TEXT), (left_x, y))
         self.screen.blit(f.render(f"{self.t('hud_kills')} {self.player.kills}", True, C.COLOR_HUD_TEXT), (right_x, y))
         y += row_h
 

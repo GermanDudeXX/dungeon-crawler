@@ -151,6 +151,54 @@ MONSTER_TYPES = {
     },
 }
 
+# Every LEVELS_PER_TIER floors the dungeon changes theme AND gets
+# meaningfully harder - previously difficulty only came from spawning a
+# few more monsters per floor, so deep runs stopped escalating. Each tier
+# repaints the tiles and multiplies monster stats. Past the last entry the
+# themes cycle again while the multiplier keeps climbing (see
+# Game._tier_for_level), so there is no ceiling.
+LEVELS_PER_TIER = 10
+
+DUNGEON_TIERS = [
+    {
+        "id": "crypt", "name": "Crypt",
+        "wall": (60, 60, 70), "wall_dim": (25, 25, 30),
+        "floor": (90, 90, 100), "floor_dim": (35, 35, 40),
+        "music": "crypt.mp3",
+    },
+    {
+        "id": "caverns", "name": "Caverns",
+        "wall": (86, 66, 46), "wall_dim": (34, 27, 20),
+        "floor": (112, 92, 68), "floor_dim": (44, 37, 28),
+        "music": "caverns.mp3",
+    },
+    {
+        "id": "vault", "name": "Iron Vault",
+        "wall": (58, 68, 86), "wall_dim": (24, 28, 36),
+        "floor": (84, 96, 116), "floor_dim": (33, 38, 47),
+        "music": "vault.mp3",
+    },
+    {
+        "id": "inferno", "name": "Inferno",
+        "wall": (96, 44, 34), "wall_dim": (38, 18, 14),
+        "floor": (124, 62, 44), "floor_dim": (48, 25, 18),
+        "music": "caverns.mp3",
+    },
+    {
+        "id": "frost", "name": "Frost Vault",
+        "wall": (72, 92, 108), "wall_dim": (29, 37, 44),
+        "floor": (108, 132, 152), "floor_dim": (43, 53, 61),
+        "music": "vault.mp3",
+    },
+]
+# Monster stats scale as TIER_GROWTH ** tier_index. Deriving it from the
+# index rather than from a per-theme constant is what keeps it monotone:
+# with a per-theme value the multiplier fell back when the themes started
+# over (floor 51 came out easier than floor 50).
+TIER_GROWTH = 1.33
+
+MUSIC_DIR = os.path.join(ASSETS_DIR, "music")
+
 BOSS_KIND_CYCLE = ["orc", "skeleton", "spider", "slime"]
 BOSS_TITLES = {
     "orc": "chieftain",

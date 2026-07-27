@@ -92,7 +92,7 @@ class Player(Entity):
 
 
 class Monster(Entity):
-    def __init__(self, x, y, kind, boss=False, elite=None):
+    def __init__(self, x, y, kind, boss=False, elite=None, tier_mult=1.0):
         stats = C.MONSTER_TYPES[kind]
         char = stats["char"].upper() if boss else stats["char"]
         color = C.COLOR_BOSS if boss else stats["color"]
@@ -119,11 +119,21 @@ class Monster(Entity):
             base_defense = int(base_defense * elite["defense_mult"])
             base_xp = int(base_xp * C.ELITE_XP_MULT)
 
+        # Deeper dungeon tiers scale every monster up (see
+        # constants.DUNGEON_TIERS) - without this, difficulty past the
+        # first few floors came only from spawning slightly more of them.
+        if tier_mult != 1.0:
+            base_hp = max(1, int(base_hp * tier_mult))
+            base_power = max(1, int(base_power * tier_mult))
+            base_defense = int(base_defense * tier_mult)
+            base_xp = max(1, int(base_xp * tier_mult))
+
         self.max_hp = base_hp
         self.hp = self.max_hp
         self.power = base_power
         self.defense = base_defense
         self.xp_reward = base_xp
+        self.tier_mult = tier_mult
         self.is_boss = boss
         self.awake = False
 
