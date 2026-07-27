@@ -12,6 +12,7 @@ import fov
 import locale_text as loc
 import persistence
 import sound
+import installer
 import updater
 
 ON_ANDROID = "ANDROID_ARGUMENT" in os.environ
@@ -122,7 +123,9 @@ class Game:
         self.needs_redraw = True
         self._last_draw_ms = 0
         self._last_tick_ms = 0
-        self.state = "title"
+        # Running from Downloads/Desktop means Windows will block the
+        # self-updater later, so offer to install properly first.
+        self.state = "install_prompt" if installer.should_offer_install() else "title"
         self.stats_return_state = "title"
         self.settings_return_state = "title"
         self.new_best = False
@@ -131,6 +134,8 @@ class Game:
         self._tap_targets = []
         self._setup_touch_controls()
 
+        self.install_phase = "prompt"
+        self.install_error = None
         self.update_return_state = "settings"
         self.update_phase = "idle"
         self.update_info = None
@@ -1232,6 +1237,17 @@ class Game:
         if self.state == "stats":
             self.state = self.stats_return_state
             return
+        if self.state == "install_prompt":
+            if self.install_phase == "prompt":
+                if key == pygame.K_RETURN:
+                    self._do_install()
+                elif key == pygame.K_ESCAPE:
+                    installer.decline()
+                    self.state = "title"
+            elif self.install_phase in ("failed", "done"):
+                self.state = "title"
+            return
+
         if self.state == "tutorial":
             # Paginated, so arrows turn pages instead of leaving.
             if key == pygame.K_LEFT:
@@ -2081,6 +2097,11 @@ class Game:
         )
 
     def render(self):
+        if self.state == "install_prompt":
+            self._render_install_prompt()
+            self._present()
+            return
+
         if self.state == "title":
             self._render_title()
             self._present()
@@ -2175,6 +2196,65 @@ class Game:
         # Register a slightly larger hit area than the drawn box, so a
         # thumb that lands just outside still counts.
         self._tap_targets.append((rect.inflate(self.tap_slop, self.tap_slop), key))
+
+    def _do_install(self):
+        self.install_phase = "working"
+        self.needs_redraw = True
+        self.render()          # paint "Installing..." before we block
+        try:
+            target = installer.install()
+            installer.create_shortcuts(target)
+        except OSError as exc:
+            self.install_error = str(exc)
+            self.install_phase = "failed"
+            self.needs_redraw = True
+            return
+        self.install_phase = "done"
+        self.needs_redraw = True
+        self.render()
+        # Hand over to the installed copy and get out of the way, so the
+        # user can delete the file they downloaded.
+        installer.launch(target)
+        pygame.time.wait(600)
+        pygame.quit()
+        sys.exit()
+
+    def _render_install_prompt(self):
+        self.screen.fill(C.COLOR_BG)
+        self._tap_targets = []
+        cx = C.SCREEN_WIDTH // 2
+
+        if self.install_phase == "working":
+            body = [self.t("install_working")]
+            buttons = []
+        elif self.install_phase == "done":
+            body = [self.t("install_done")]
+            buttons = []
+        elif self.install_phase == "failed":
+            body = self._wrap_text(self.t("install_failed", error=self.install_error or "?"),
+                                   self.f_body, self.content_w)
+            buttons = [(self.t("btn_play_here"), pygame.K_ESCAPE)]
+        else:
+            body = (self._wrap_text(self.t("install_line1"), self.f_body, self.content_w)
+                    + self._wrap_text(self.t("install_line2"), self.f_body, self.content_w)
+                    + [""]
+                    + self._wrap_text(
+                        self.t("install_target", path=installer.default_install_dir()),
+                        self.f_sm, self.content_w))
+            buttons = [(self.t("btn_install"), pygame.K_RETURN),
+                       (self.t("btn_play_here"), pygame.K_ESCAPE)]
+
+        title = self.f_title.render(self.t("install_title"), True, (230, 200, 60))
+        body_h = sum(self.pitch_body if line else self.gap_m for line in body)
+        total = (title.get_height() + self.gap_l + body_h
+                 + (self.gap_xl + self.btn_h if buttons else 0))
+        y = max(self.pad, (C.SCREEN_HEIGHT - total) // 2)
+
+        self.screen.blit(title, title.get_rect(midtop=(cx, y)))
+        y += title.get_height() + self.gap_l
+        y = self._lines_block(body, y)
+        if buttons:
+            self._button_row(buttons, y + self.gap_xl)
 
     def _render_title(self):
         self.screen.fill(C.COLOR_BG)

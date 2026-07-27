@@ -142,6 +142,26 @@ STRINGS = {
         "en": "Installer opened - confirm the install, the app will restart.",
         "de": "Installer geöffnet - bestätige die Installation, die App startet danach neu.",
     },
+    # --- first-run installer (Windows) ---
+    "install_title": {"en": "INSTALL", "de": "INSTALLIEREN"},
+    "install_line1": {
+        "en": "Install Dungeon Crawler so it can update itself and get a Start-menu entry?",
+        "de": "Dungeon Crawler installieren, damit es sich selbst aktualisieren kann und im Startmenü liegt?",
+    },
+    "install_line2": {
+        "en": "Windows blocks updates for programs run straight from Downloads or the Desktop.",
+        "de": "Windows blockiert Updates für Programme, die direkt aus Downloads oder vom Desktop laufen.",
+    },
+    "install_target": {"en": "Install to: {path}", "de": "Installieren nach: {path}"},
+    "btn_install": {"en": "INSTALL", "de": "INSTALLIEREN"},
+    "btn_play_here": {"en": "JUST PLAY", "de": "NUR SPIELEN"},
+    "install_working": {"en": "Installing...", "de": "Installiere..."},
+    "install_done": {
+        "en": "Installed. Starting the installed copy - you can delete this file.",
+        "de": "Installiert. Die installierte Version wird gestartet - diese Datei kannst du löschen.",
+    },
+    "install_failed": {"en": "Install failed: {error}", "de": "Installation fehlgeschlagen: {error}"},
+
     "update_no_permission": {
         "en": ("Windows will not let the game write to {folder}, so the update cannot "
                "replace it there. This is Controlled Folder Access (ransomware "
