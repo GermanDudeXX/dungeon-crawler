@@ -142,6 +142,18 @@ STRINGS = {
         "en": "Installer opened - confirm the install, the app will restart.",
         "de": "Installer geöffnet - bestätige die Installation, die App startet danach neu.",
     },
+    "update_no_permission": {
+        "en": ("Windows will not let the game write to {folder}, so the update cannot "
+               "replace it there. This is Controlled Folder Access (ransomware "
+               "protection) and running as Administrator does not help. Move "
+               "DungeonCrawler.exe into a normal folder (for example C:/Games) and "
+               "try again."),
+        "de": ("Windows erlaubt dem Spiel nicht, in {folder} zu schreiben, deshalb kann "
+               "das Update sich dort nicht ersetzen. Das ist der Überwachte "
+               "Ordnerzugriff (Ransomware-Schutz) - Administratorrechte helfen dabei "
+               "nicht. Verschiebe DungeonCrawler.exe in einen normalen Ordner "
+               "(z.B. C:/Spiele) und versuche es erneut."),
+    },
     "update_dev_mode": {
         "en": "Self-update only works in the built app, not when running from source.",
         "de": "Selbst-Update funktioniert nur in der gebauten App, nicht im Quellcode-Modus.",

@@ -773,6 +773,8 @@ class Game:
         # height so a desktop window or a low-res phone stays in
         # proportion. See constants.UI_REF_HEIGHT for the reference.
         k = C.SCREEN_HEIGHT / C.UI_REF_HEIGHT
+        if not ON_ANDROID:
+            k *= C.UI_DESKTOP_FACTOR
         floor = 120 if ON_ANDROID else 0   # keep a real touch target on phones
 
         def px(n, minimum=0):
@@ -940,6 +942,16 @@ class Game:
     def _start_update_download(self):
         if self.update_phase == "downloading" or self.update_info is None:
             return
+        blocked = updater.install_dir_error()
+        if blocked:
+            # Checked up front rather than after the download: this fails
+            # when the exe lives somewhere Windows will not let an
+            # unsigned app write (Controlled Folder Access covers
+            # Desktop/Documents/Downloads), which running as Administrator
+            # does not change.
+            self.update_error = self.t("update_no_permission", folder=blocked)
+            self.update_phase = "error"
+            return
         self.update_phase = "downloading"
         self.update_progress = (0, self.update_info["size"])
         info = self.update_info
@@ -952,7 +964,7 @@ class Game:
                 if ON_ANDROID:
                     dest_dir = updater.android_download_dir()
                 else:
-                    dest_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
+                    dest_dir = updater.staging_dir()
                 dest_path = os.path.join(dest_dir, info["name"])
                 updater.download_update(info["url"], dest_path, progress_cb)
                 self._update_download_path = dest_path

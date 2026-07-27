@@ -2,6 +2,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import sys
 import urllib.request
 
@@ -84,6 +85,41 @@ def download_update(url, dest_path, progress_cb=None):
     return dest_path
 
 
+def staging_dir():
+    """Where to put the downloaded build and the swap script.
+
+    Deliberately NOT next to the running .exe. Windows' Controlled Folder
+    Access (ransomware protection) blocks writes into Desktop/Documents/
+    Downloads by any app it does not recognise, and an unsigned
+    PyInstaller build is never recognised - so staging beside the exe
+    failed with a permission error that elevating to Administrator does
+    not fix. The per-user temp directory is always writable and is not a
+    protected location.
+    """
+    path = os.path.join(tempfile.gettempdir(), "DungeonCrawlerUpdate")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def install_dir_error():
+    """None if we can replace the running exe, else a reason to show.
+
+    Checked BEFORE downloading ~30MB, so a folder we can never write to
+    fails fast and with an explanation instead of after a long download.
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    target = os.path.dirname(os.path.abspath(sys.executable))
+    probe = os.path.join(target, ".dc_write_test")
+    try:
+        with open(probe, "w") as f:
+            f.write("")
+        os.remove(probe)
+        return None
+    except OSError:
+        return target
+
+
 def can_self_update():
     """PC self-replace only makes sense for an actual frozen .exe, never
     when running from source (sys.executable would be python.exe)."""
@@ -94,7 +130,7 @@ def apply_update_pc(new_exe_path, expected_size=None):
     current_exe = os.path.abspath(sys.executable)
     exe_name = os.path.basename(current_exe)
     exe_dir = os.path.dirname(current_exe)
-    bat_path = os.path.join(exe_dir, "_update.bat")
+    bat_path = os.path.join(staging_dir(), "_update.bat")
 
     # tasklist/findstr/ping are fully-qualified to System32 rather than
     # relying on PATH lookup: if a Unix toolchain (Git for Windows, WSL

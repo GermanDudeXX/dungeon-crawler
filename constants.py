@@ -41,6 +41,13 @@ SCREEN_HEIGHT = MAP_HEIGHT * TILE_SIZE + HUD_HEIGHT
 # SCREEN_HEIGHT/UI_REF_HEIGHT so a smaller canvas (desktop, or a low-res
 # phone) stays proportionate instead of overflowing.
 UI_REF_HEIGHT = 1098
+# Desktop needs its own factor, not just the canvas-height ratio. The
+# ladder above is sized for a phone: a dense screen held at arm's length,
+# where a 48dp touch target is genuinely ~144px. On a monitor one logical
+# pixel is one screen pixel viewed from ~60cm and input is a mouse, so the
+# same numbers come out enormous. This lands the desktop build on roughly
+# the sizes it had before (body text ~16px of glyph, buttons ~54px).
+UI_DESKTOP_FACTOR = 0.46
 
 FONT_TITLE = 130      # screen titles, bold
 FONT_H1 = 90          # section headings, bold
