@@ -131,6 +131,9 @@ class Game:
             self.hud_icons[kind] = pygame.transform.smoothscale(sprite, (w, icon_h))
         self.ladder_sprite = self._load_scaled_sprite(C.LADDER_SPRITE_PATH, C.LADDER_SPRITE_HEIGHT)
         self.merchant_sprite = self._load_scaled_sprite(C.MERCHANT_SPRITE_PATH, C.MERCHANT_SPRITE_HEIGHT)
+        self._tile_sources = self._load_tile_sources()
+        self._tile_cache = {}
+        self._decor = {}
         self.needs_redraw = True
         self._last_draw_ms = 0
         self._last_tick_ms = 0
@@ -298,6 +301,136 @@ class Game:
                 sprites[kind] = sprite
         return sprites
 
+    def _load_tile_sources(self):
+        """Loads the raw 16x16 dungeon tiles once, unscaled.
+
+        Kept separate from the scaled/tinted cache below because the same
+        source frame gets used at several brightnesses and in five
+        different theme colours, and re-reading it from disk for each one
+        would be silly.
+        """
+        sources = {}
+        try:
+            names = os.listdir(C.TILE_SPRITE_DIR)
+        except OSError:
+            return sources
+        for filename in names:
+            if not filename.endswith(".png"):
+                continue
+            try:
+                image = pygame.image.load(
+                    os.path.join(C.TILE_SPRITE_DIR, filename)).convert_alpha()
+            except (pygame.error, FileNotFoundError):
+                continue
+            sources[filename[:-4]] = image
+        return sources
+
+    def _tile(self, name, dim=False):
+        """A theme-tinted, brightness-adjusted, scaled-up dungeon tile.
+
+        Everything is cached per (name, tier, dim) and built at most once
+        per run: the map cache calls this for every explored cell, and
+        rebuilding a tinted surface each time would be far worse than the
+        per-frame tile loop this whole cache exists to avoid.
+        """
+        tier = getattr(self, "tier", None) or C.DUNGEON_TIERS[0]
+        key = (name, tier["id"], dim)
+        cached = self._tile_cache.get(key)
+        if cached is not None:
+            return cached
+
+        source = self._tile_sources.get(name)
+        if source is None:
+            return None
+
+        w, h = source.get_size()
+        scale = C.TILE_SIZE / C.TILE_SOURCE_SIZE
+        # scale, never smoothscale: smoothing 16x16 pixel art up to 24px
+        # blurs every hard edge and it stops reading as pixel art at all.
+        tile = pygame.transform.scale(
+            source, (max(1, round(w * scale)), max(1, round(h * scale))))
+
+        tint = tier.get("tile_tint")
+        if tint:
+            tile = self._tint_tile(tile, tint)
+        if dim:
+            shade = pygame.Surface(tile.get_size()).convert_alpha()
+            shade.fill((int(255 * C.TILE_DIM_FACTOR),) * 3 + (255,))
+            tile.blit(shade, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+
+        self._tile_cache[key] = tile
+        return tile
+
+    @staticmethod
+    def _tint_tile(tile, tint):
+        """Recolours a tile towards a theme colour, keeping its shading.
+
+        The tileset is one warm brown/grey set, but the game has five
+        themes. Rather than ship five tilesets, the tile's own brightness
+        is kept and its hue replaced: a greyscale copy multiplied by the
+        theme colour gives "the same stonework, lit differently", which is
+        what a crypt vs an inferno should look like. Blended back over the
+        original at partial strength so the source's own colour variation
+        does not disappear completely.
+        """
+        try:
+            gray = pygame.transform.grayscale(tile)
+        except (AttributeError, pygame.error):
+            return tile
+        gray = gray.convert_alpha()
+        # Multiplying by a colour can only darken, so lift the greyscale
+        # first - otherwise every theme comes out muddy.
+        gray.fill((90, 90, 90, 0), special_flags=pygame.BLEND_RGBA_ADD)
+        gray.fill(tuple(tint) + (255,), special_flags=pygame.BLEND_RGBA_MULT)
+        out = tile.copy()
+        gray.set_alpha(int(255 * C.TILE_TINT_STRENGTH))
+        out.blit(gray, (0, 0))
+        return out
+
+    def _floor_tile_name(self, x, y):
+        # Deterministic per cell: a real random pick would reshuffle the
+        # entire floor every time the field of view changes and the cache
+        # is repainted, which looks like the dungeon is flickering.
+        return "floor_%d" % (1 + (x * 7 + y * 13 + x * y * 3) % C.FLOOR_VARIANTS)
+
+    def _is_wall(self, x, y):
+        if not (0 <= x < C.MAP_WIDTH and 0 <= y < C.MAP_HEIGHT):
+            return True
+        return self.grid[y][x] == dungeon.WALL
+
+    def _wall_tile_name(self, x, y):
+        """Picks a wall frame from which sides face open floor.
+
+        The tileset is drawn in the usual "walls seen slightly from the
+        front" style, so which frame is right depends on where the empty
+        space is: a wall with floor below it is being looked at from the
+        front and shows its brick face, a wall with floor above it is
+        being looked down on and shows its flat top, and the sides get
+        their own edge pieces.
+
+        Returns None for a wall with no open neighbour at all. Those are
+        the solid rock between rooms - the great majority of the grid -
+        and they must not get a tile: every wall frame in this set is
+        drawn as a *surface* of a wall, so tiling one across a solid rock
+        field gives a striped pattern rather than rock. The caller fills
+        those cells with flat stone colour instead.
+        """
+        south = not self._is_wall(x, y + 1)
+        north = not self._is_wall(x, y - 1)
+        west = not self._is_wall(x - 1, y)
+        east = not self._is_wall(x + 1, y)
+        if south:
+            return "wall_mid"
+        if west and not east:
+            return "wall_left"
+        if east and not west:
+            return "wall_right"
+        if north:
+            return "wall_mid"
+        if west or east:
+            return "wall_top_mid"
+        return None
+
     def _setup_touch_controls(self):
         # Classic two-thumb mobile layout: movement bottom-left, actions
         # bottom-right, each fully inside its own side gutter (not overlaid
@@ -463,6 +596,8 @@ class Game:
         self.monsters = [self._deserialize_monster(m) for m in data["monsters"]]
         self.items = [self._deserialize_item(i) for i in data["items"]]
         self.merchants = [entities.Merchant(m["x"], m["y"]) for m in data.get("merchants", [])]
+        self._decor = {tuple(int(v) for v in pos): name
+                       for pos, name in data.get("decor", [])}
         self.level_history = {
             int(level): snapshot for level, snapshot in data.get("level_history", {}).items()
         }
@@ -523,6 +658,7 @@ class Game:
             "monsters": [self._serialize_monster(m) for m in self.monsters],
             "items": [self._serialize_item(i) for i in self.items],
             "merchants": [{"x": m.x, "y": m.y} for m in self.merchants],
+            "decor": [[list(pos), name] for pos, name in self._decor.items()],
             "level_history": {str(level): snap for level, snap in self.level_history.items()},
         }
 
@@ -593,6 +729,11 @@ class Game:
             "monsters": [self._serialize_monster(m) for m in self.monsters],
             "items": [self._serialize_item(i) for i in self.items],
             "merchants": [{"x": m.x, "y": m.y} for m in self.merchants],
+            # Purely cosmetic, but it has to be remembered: regenerating it
+            # on return would move every skull and banner in the level, and
+            # a room rearranging itself behind the player's back reads as a
+            # bug rather than as decoration.
+            "decor": [[list(pos), name] for pos, name in self._decor.items()],
         }
 
     def _restore_level_snapshot(self, snap):
@@ -609,6 +750,8 @@ class Game:
         self.monsters = [self._deserialize_monster(m) for m in snap["monsters"]]
         self.items = [self._deserialize_item(i) for i in snap["items"]]
         self.merchants = [entities.Merchant(m["x"], m["y"]) for m in snap.get("merchants", [])]
+        self._decor = {tuple(int(v) for v in pos): name
+                       for pos, name in snap.get("decor", [])}
 
     def _save_and_quit(self):
         persistence.save_run(self._build_save_data())
@@ -641,9 +784,49 @@ class Game:
         self.traps = {}
         self.shrine_pos = None
         self.damage_numbers = []
+        self._scatter_decor()
         self._populate_level()
 
         self._recompute_fov()
+
+    # Wall pieces go on wall faces the player can actually see (a wall with
+    # open floor below it), ground pieces on plain floor. Weights are low on
+    # purpose: sparse clutter reads as "a lived-in dungeon", dense clutter
+    # reads as noise and makes it hard to spot items and monsters.
+    WALL_DECOR = ("wall_banner_red", "wall_banner_blue", "wall_banner_green",
+                  "wall_banner_yellow", "wall_hole_1", "wall_hole_2", "wall_goo")
+    FLOOR_DECOR = ("skull", "crate", "column")
+
+    def _scatter_decor(self):
+        """Picks purely cosmetic tiles to overlay on the map.
+
+        Chosen once per level and stored, not rolled inside the map cache
+        repaint - the cache is rebuilt on every field-of-view change, so
+        rolling there would reshuffle the decorations as the player walks.
+        Nothing here blocks movement or spawns on anything important.
+        """
+        self._decor = {}
+        if not self._tile_sources:
+            return
+        blocked = {self.stairs_pos, self.up_stairs_pos}
+        for room in self.rooms:
+            for _ in range(random.randint(0, 3)):
+                x, y = self._random_floor_in_room(room)
+                if (x, y) in blocked or (x, y) in self._decor:
+                    continue
+                # Never on the room's centre: that is where stairs, the
+                # merchant and the shrine get placed.
+                if (x, y) == room.center():
+                    continue
+                self._decor[(x, y)] = random.choice(self.FLOOR_DECOR)
+        for _ in range(C.MAP_WIDTH):
+            x = random.randrange(1, C.MAP_WIDTH - 1)
+            y = random.randrange(1, C.MAP_HEIGHT - 1)
+            if not self._is_wall(x, y) or self._is_wall(x, y + 1):
+                continue
+            if (x, y) in self._decor:
+                continue
+            self._decor[(x, y)] = random.choice(self.WALL_DECOR)
 
     def _maybe_elite(self):
         if self.dungeon_level >= 2 and random.random() < C.ELITE_CHANCE:
@@ -3057,20 +3240,46 @@ class Game:
         tier = getattr(self, "tier", None) or C.DUNGEON_TIERS[0]
         surf = pygame.Surface((C.MAP_PIXEL_WIDTH, C.MAP_HEIGHT * C.TILE_SIZE))
         surf.fill(C.COLOR_BG)
+        ts = C.TILE_SIZE
         for y in range(C.MAP_HEIGHT):
             row = self.grid[y]
             for x in range(C.MAP_WIDTH):
                 if (x, y) not in self.explored:
                     continue
-                is_visible = (x, y) in self.visible
-                if row[x] == dungeon.WALL:
-                    color = tier["wall"] if is_visible else tier["wall_dim"]
-                else:
-                    color = tier["floor"] if is_visible else tier["floor_dim"]
-                pygame.draw.rect(
-                    surf, color,
-                    (x * C.TILE_SIZE, y * C.TILE_SIZE, C.TILE_SIZE, C.TILE_SIZE),
-                )
+                dim = (x, y) not in self.visible
+                is_wall = row[x] == dungeon.WALL
+                name = self._wall_tile_name(x, y) if is_wall else self._floor_tile_name(x, y)
+                tile = self._tile(name, dim) if name else None
+                if is_wall:
+                    # Every wall cell gets flat rock underneath, then its
+                    # frame on top. The frames are wall *surfaces* with
+                    # transparent gaps - a room's bottom edge is a thin
+                    # ledge band and nothing else - so without a fill they
+                    # hang in mid-air as floating stripes. Deliberately the
+                    # *dim* colour even when lit: this is unlit rock behind
+                    # the wall face, and at the lit colour it matched the
+                    # floor tiles closely enough that rooms and solid rock
+                    # were hard to tell apart.
+                    rock = tier["wall_dim"]
+                    if dim:
+                        rock = tuple(int(c * C.TILE_DIM_FACTOR) for c in rock)
+                    pygame.draw.rect(surf, rock, (x * ts, y * ts, ts, ts))
+                if tile is None:
+                    # Solid rock, or a missing tileset - a flat fill in the
+                    # theme colour, so a missing asset degrades to the old
+                    # look instead of an invisible dungeon.
+                    if not is_wall:
+                        color = tier["floor_dim"] if dim else tier["floor"]
+                        pygame.draw.rect(surf, color, (x * ts, y * ts, ts, ts))
+                    continue
+                # Tiles taller than one cell (wall fronts, columns) hang
+                # upwards out of their cell, the way the tileset is drawn.
+                surf.blit(tile, (x * ts, y * ts + ts - tile.get_height()))
+                decor = self._decor.get((x, y))
+                if decor:
+                    piece = self._tile(decor, dim)
+                    if piece is not None:
+                        surf.blit(piece, (x * ts, y * ts + ts - piece.get_height()))
         self._map_cache = surf
 
     def _render_map(self, ox=0, oy=0):

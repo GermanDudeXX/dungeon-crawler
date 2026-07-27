@@ -96,6 +96,27 @@ LADDER_SPRITE_HEIGHT = int(TILE_SIZE * 1.3)
 MERCHANT_SPRITE_PATH = os.path.join(ASSETS_DIR, "merchant.png")
 MERCHANT_SPRITE_HEIGHT = int(TILE_SIZE * 1.6)
 
+# Dungeon tiles (0x72 DungeonTileset II, CC0). 16x16 source art scaled up
+# to TILE_SIZE with transform.scale - never smoothscale, which turns
+# pixel art into mush. Painted once per FOV change into the map cache,
+# never per frame.
+TILE_SPRITE_DIR = os.path.join(ASSETS_DIR, "tiles")
+TILE_SOURCE_SIZE = 16
+
+# How many distinct floor variants exist (floor_1..floor_N). Picked per
+# cell from a hash of its coordinates so the pattern is stable - random
+# per repaint would make the whole floor shimmer every time the field of
+# view changes.
+FLOOR_VARIANTS = 8
+
+# Tiles the player has already seen but cannot currently see are drawn
+# darker rather than in a separate "dim" colour, so one set of art covers
+# both states.
+TILE_DIM_FACTOR = 0.42
+# Strength of the per-tier colour wash over the grey/brown source art, so
+# five dungeon themes come out of one tileset instead of five.
+TILE_TINT_STRENGTH = 0.55
+
 # Written fresh before every build (CI for Android, the local PyInstaller
 # command for Windows) with that build's git commit count - never committed
 # to the repo itself. Lets a running build compare itself against the
@@ -194,30 +215,35 @@ DUNGEON_TIERS = [
         "id": "crypt", "name": "Crypt",
         "wall": (60, 60, 70), "wall_dim": (25, 25, 30),
         "floor": (90, 90, 100), "floor_dim": (35, 35, 40),
+        "tile_tint": (150, 152, 178),
         "music": "crypt.mp3",
     },
     {
         "id": "caverns", "name": "Caverns",
         "wall": (86, 66, 46), "wall_dim": (34, 27, 20),
         "floor": (112, 92, 68), "floor_dim": (44, 37, 28),
+        "tile_tint": (214, 172, 126),
         "music": "caverns.mp3",
     },
     {
         "id": "vault", "name": "Iron Vault",
         "wall": (58, 68, 86), "wall_dim": (24, 28, 36),
         "floor": (84, 96, 116), "floor_dim": (33, 38, 47),
+        "tile_tint": (134, 158, 196),
         "music": "vault.mp3",
     },
     {
         "id": "inferno", "name": "Inferno",
         "wall": (96, 44, 34), "wall_dim": (38, 18, 14),
         "floor": (124, 62, 44), "floor_dim": (48, 25, 18),
+        "tile_tint": (206, 112, 78),
         "music": "caverns.mp3",
     },
     {
         "id": "frost", "name": "Frost Vault",
         "wall": (72, 92, 108), "wall_dim": (29, 37, 44),
         "floor": (108, 132, 152), "floor_dim": (43, 53, 61),
+        "tile_tint": (158, 198, 220),
         "music": "vault.mp3",
     },
 ]
