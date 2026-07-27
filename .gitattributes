@@ -1,0 +1,8 @@
+# The CA bundle must round-trip byte for byte - line-ending translation
+# would rewrite it on checkout, and it is a trust anchor, not source code.
+*.pem -text
+# Binary assets: never translate.
+*.png binary
+*.mp3 binary
+*.apk binary
+*.exe binary
