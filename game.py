@@ -118,6 +118,14 @@ class Game:
         self.player_sprite_right, self.player_sprite_left, self.player_sprite_large = self._load_player_sprite()
         self.monster_sprites = self._load_monster_sprites()
         self.item_sprites = self._load_item_sprites()
+        # The HUD used ASCII stand-ins ("/", "[", "!", "$") for icons even
+        # though the real art is already loaded - these are that art,
+        # rescaled once to HUD row height.
+        icon_h = max(18, self.f_sm.get_height() + self.gap_s // 2)
+        self.hud_icons = {}
+        for kind, sprite in self.item_sprites.items():
+            w = max(1, int(sprite.get_width() * (icon_h / sprite.get_height())))
+            self.hud_icons[kind] = pygame.transform.smoothscale(sprite, (w, icon_h))
         self.ladder_sprite = self._load_scaled_sprite(C.LADDER_SPRITE_PATH, C.LADDER_SPRITE_HEIGHT)
         self.merchant_sprite = self._load_scaled_sprite(C.MERCHANT_SPRITE_PATH, C.MERCHANT_SPRITE_HEIGHT)
         self.needs_redraw = True
@@ -3035,90 +3043,128 @@ class Game:
         overlay.fill((200, 30, 30))
         self.screen.blit(overlay, (C.MAP_OFFSET_X, 0))
 
+    def _hud_chip(self, x, y, h, icon, text, text_color=None, icon_color=None,
+                  min_w=0):
+        """A rounded pill holding an icon and a value.
+
+        icon is either a key into self.hud_icons (real item art) or a
+        single character to draw as a coloured glyph when no art exists
+        for it.
+        """
+        f = self.f_sm
+        art = self.hud_icons.get(icon) if isinstance(icon, str) else None
+        glyph = None if art else f.render(str(icon), True, icon_color or C.COLOR_TEXT)
+        label = f.render(text, True, text_color or C.COLOR_TEXT)
+        icon_w = art.get_width() if art else glyph.get_width()
+        pad = self.gap_s
+        w = max(min_w, pad + icon_w + self.gap_s // 2 + label.get_width() + pad)
+        rect = pygame.Rect(x, y, w, h)
+        pygame.draw.rect(self.screen, C.COLOR_SURFACE_HI, rect, border_radius=h // 3)
+        cx = x + pad
+        if art:
+            self.screen.blit(art, art.get_rect(midleft=(cx, rect.centery)))
+        else:
+            self.screen.blit(glyph, glyph.get_rect(midleft=(cx, rect.centery)))
+        self.screen.blit(label, label.get_rect(
+            midleft=(cx + icon_w + self.gap_s // 2, rect.centery)))
+        return w
+
+    def _hud_bar(self, x, y, w, h, ratio, bg, fg, text):
+        """A rounded bar with its numbers sitting on top of it."""
+        r = h // 2
+        pygame.draw.rect(self.screen, bg, (x, y, w, h), border_radius=r)
+        if ratio > 0:
+            pygame.draw.rect(self.screen, fg,
+                             (x, y, max(h, int(w * min(1.0, ratio))), h), border_radius=r)
+        label = self.f_sm.render(text, True, C.COLOR_TEXT)
+        self.screen.blit(label, label.get_rect(center=(x + w // 2, y + h // 2)))
+
     def _render_hud(self):
-        # Laid out from the actual band height and the shared font ladder
-        # rather than from self.ui_scale, so it stays readable however the
-        # map/HUD split lands on a given device.
+        # Uses the full width: the touch controls now sit above the band
+        # (see _setup_touch_controls), so the old habit of indenting all
+        # HUD content by the gutter left a third of the row empty.
         hud_y = C.MAP_HEIGHT * C.TILE_SIZE
         pygame.draw.rect(self.screen, C.COLOR_HUD_BG, (0, hud_y, C.SCREEN_WIDTH, C.HUD_HEIGHT))
-        # A hairline separates the HUD from the dungeon instead of the two
-        # dark areas blending into each other.
         pygame.draw.rect(self.screen, C.COLOR_BORDER, (0, hud_y, C.SCREEN_WIDTH, 2))
 
         f = self.f_sm
-        row_h = f.get_linesize() + self.gap_s // 2
-        pad = self.gap_m
-        ox = C.MAP_OFFSET_X
-        left_x = ox + pad
-        col_w = (C.SCREEN_WIDTH - ox - pad * 2) // 2
-        right_x = left_x + col_w
-        y = hud_y + self.gap_s
+        gap = self.gap_s
+        chip_h = f.get_height() + gap
+        left = self.pad
+        right_edge = C.SCREEN_WIDTH - self.pad
+        y = hud_y + gap
 
-        bar_w = min(col_w - pad * 2, int(col_w * 0.55))
-        bar_h = f.get_height()
+        # --- row 1: health and experience, numbers inside the bars ---
+        bar_h = chip_h
+        bar_w = (right_edge - left - gap) // 2
+        self._hud_bar(left, y, bar_w, bar_h,
+                      self.player.hp / self.player.max_hp,
+                      C.COLOR_HP_BAR_BG, C.COLOR_HP_BAR_FG,
+                      f"{max(0, self.player.hp)} / {self.player.max_hp}")
+        self._hud_bar(left + bar_w + gap, y, bar_w, bar_h,
+                      self.player.xp / self.player.xp_to_next,
+                      C.COLOR_XP_BAR_BG, C.COLOR_XP_BAR_FG,
+                      f"Lv {self.player.level}   {self.player.xp} / {self.player.xp_to_next} XP")
+        y += bar_h + gap
 
-        r = bar_h // 2
-        pygame.draw.rect(self.screen, C.COLOR_HP_BAR_BG, (left_x, y, bar_w, bar_h), border_radius=r)
-        hp_ratio = max(0, self.player.hp / self.player.max_hp)
-        if hp_ratio > 0:
-            pygame.draw.rect(self.screen, C.COLOR_HP_BAR_FG,
-                             (left_x, y, max(bar_h, int(bar_w * hp_ratio)), bar_h), border_radius=r)
-        self.screen.blit(f.render(f"HP {max(0, self.player.hp)}/{self.player.max_hp}", True,
-                                  C.COLOR_HUD_TEXT), (left_x + bar_w + self.gap_s, y))
-
-        pygame.draw.rect(self.screen, C.COLOR_XP_BAR_BG, (right_x, y, bar_w, bar_h), border_radius=r)
-        xp_ratio = self.player.xp / self.player.xp_to_next
-        if xp_ratio > 0:
-            pygame.draw.rect(self.screen, C.COLOR_XP_BAR_FG,
-                             (right_x, y, max(bar_h, int(bar_w * xp_ratio)), bar_h), border_radius=r)
-        self.screen.blit(
-            f.render(f"Lv {self.player.level}  XP {self.player.xp}/{self.player.xp_to_next}",
-                     True, C.COLOR_HUD_TEXT), (right_x + bar_w + self.gap_s, y))
-        y += row_h
-
-        # Two columns: equipment left, resources right. Icons reuse the
-        # same glyph and colour these items have on the map.
+        # --- rows 2-3: chips on the left, combat log filling the right ---
+        # The chips alone left no vertical room for the log (measured: 0
+        # lines fit), and the right-hand half of these rows was empty, so
+        # the log moves there rather than being dropped.
         weapon_color = C.RARITY_BY_ID.get(self.player.weapon_rarity_id, {}).get("color", C.COLOR_TEXT)
-        weapon_suffix = f" [{self.te(self.player.weapon_element_id)}]" if self.player.weapon_element_id else ""
-        self._hud_icon_row(left_x, y, "/", weapon_color,
-                           f"{self.tn(self.player.weapon_name)} (+{self.player.weapon_bonus}){weapon_suffix}",
-                           label_color=weapon_color)
-        self._hud_icon_row(right_x, y, "!", C.COLOR_POTION,
-                           f"{self.t('hud_potions')} {self.player.potions}")
-        y += row_h
-
+        weapon_text = f"{self.tn(self.player.weapon_name)} +{self.player.weapon_bonus}"
+        if self.player.weapon_element_id:
+            weapon_text += f" · {self.te(self.player.weapon_element_id)}"
         armor_color = C.RARITY_BY_ID.get(self.player.armor_rarity_id, {}).get("color", C.COLOR_TEXT)
-        self._hud_icon_row(left_x, y, "[", armor_color,
-                           f"{self.tn(self.player.armor_name)} (+{self.player.armor_bonus})",
-                           label_color=armor_color)
-        self._hud_icon_row(right_x, y, "$", C.COLOR_GOLD,
-                           f"{self.t('hud_gold')} {self.player.gold}")
-        y += row_h
-
-        tier_label = self._tier_name(getattr(self, "tier", C.DUNGEON_TIERS[0]))
-        self.screen.blit(
-            f.render(f"{tier_label}  Lv {self.dungeon_level}", True, C.COLOR_HUD_TEXT), (left_x, y))
-        self.screen.blit(f.render(f"{self.t('hud_kills')} {self.player.kills}", True, C.COLOR_HUD_TEXT), (right_x, y))
-        y += row_h
-
         scrolls = self.player.scrolls
-        scroll_line = (f"{self.t('hud_scrolls_label')} F:{scrolls['fireball']}  "
-                       f"T:{scrolls['teleport']}  V:{scrolls['reveal']}")
-        if self.player.poison_turns > 0:
-            scroll_line += f"    {self.t('hud_poisoned')}"
-            scroll_color = C.COLOR_POISON
-        else:
-            scroll_color = C.COLOR_HELP_TEXT
-        self.screen.blit(f.render(scroll_line, True, scroll_color), (left_x, y))
-        y += row_h
+        tier_label = self._tier_name(getattr(self, "tier", C.DUNGEON_TIERS[0]))
 
-        # Fill whatever is left with the most recent log lines, oldest
-        # first, so the newest is always visible at the bottom.
+        row2 = [
+            ("weapon", weapon_text, weapon_color, None),
+            ("armor", f"{self.tn(self.player.armor_name)} +{self.player.armor_bonus}",
+             armor_color, None),
+        ]
+        row3 = [
+            ("potion", str(self.player.potions), None, C.COLOR_POTION),
+            ("gold", str(self.player.gold), C.COLOR_GOLD, C.COLOR_GOLD),
+            ("scroll", f"F {scrolls['fireball']}   T {scrolls['teleport']}   V {scrolls['reveal']}",
+             None, None),
+        ]
+        if self.player.poison_turns > 0:
+            row3.append(("!", self.t("hud_poisoned"), C.COLOR_POISON, C.COLOR_POISON))
+
+        chips_right = left
+        row_y = y
+        for row in (row2, row3):
+            x = left
+            for icon, text, tcol, icol in row:
+                x += self._hud_chip(x, row_y, chip_h, icon, text,
+                                    text_color=tcol, icon_color=icol) + gap
+            chips_right = max(chips_right, x)
+            row_y += chip_h + gap
+
+        # Depth and kills, on their own line under the chips.
+        stat = self.f_sm.render(
+            f"{tier_label}  ·  {self.t('hud_kills')} {self.player.kills}",
+            True, C.COLOR_TEXT_DIM)
+        self.screen.blit(stat, (left, row_y))
+
+        # Log to the right of the chips, newest at the bottom, using
+        # whatever width the chips did not need.
         log_font = self.f_xs
-        log_pitch = log_font.get_linesize() + 2
-        room = max(0, (hud_y + C.HUD_HEIGHT - self.gap_s - y) // log_pitch)
-        for i, message in enumerate(self.log[-room:] if room else []):
-            self.screen.blit(log_font.render(message, True, C.COLOR_LOG_TEXT), (left_x, y + i * log_pitch))
+        pitch = log_font.get_linesize() + 3
+        log_x = max(chips_right + gap, left + int((right_edge - left) * 0.5))
+        log_w = right_edge - log_x
+        avail = hud_y + C.HUD_HEIGHT - gap - y
+        room = max(0, avail // pitch)
+        if room and log_w > self.btn_min_w:
+            lines = []
+            for message in self.log[-room:]:
+                wrapped = self._wrap_text(message, log_font, log_w)
+                lines.extend(wrapped or [message])
+            for i, line in enumerate(lines[-room:]):
+                self.screen.blit(log_font.render(line, True, C.COLOR_LOG_TEXT),
+                                 (log_x, y + i * pitch))
 
     def _hud_icon_row(self, x, y, char, color, text, label_color=None):
         icon = self.f_sm.render(char, True, color)
