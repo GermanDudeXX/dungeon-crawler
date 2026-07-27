@@ -134,6 +134,8 @@ class Game:
         self._tile_sources = self._load_tile_sources()
         self._tile_cache = {}
         self._decor = {}
+        self._name_cache = {}
+        self._badge_cache = {}
         self.needs_redraw = True
         self._last_draw_ms = 0
         self._last_tick_ms = 0
@@ -1090,6 +1092,10 @@ class Game:
         self.f_body = pygame.font.Font(None, px(C.FONT_BODY))
         self.f_sm = pygame.font.Font(None, px(C.FONT_SM))
         self.f_xs = pygame.font.Font(None, px(C.FONT_XS))
+        # Nameplates float over the dungeon at tile scale, not UI scale, so
+        # this one is sized against the tile rather than the ladder above -
+        # at f_xs a name is wider than the monster it belongs to.
+        self.f_tiny = pygame.font.Font(None, max(11, int(C.TILE_SIZE * 0.62)))
 
         self.btn_h = px(C.BTN_H, floor)
         self.btn_h_hero = px(C.BTN_H_HERO, floor)
@@ -1668,17 +1674,26 @@ class Game:
                 self.settings_return_state = "title"
                 self.state = "settings"
             elif key == pygame.K_n:
-                self.start_new_run()
+                self.state = "difficulty_select"
             elif key in (pygame.K_RETURN, pygame.K_SPACE):
                 if self.save_data:
                     self.continue_run()
                 else:
-                    self.start_new_run()
+                    self.state = "difficulty_select"
+            return
+
+        if self.state == "difficulty_select":
+            if key == pygame.K_ESCAPE:
+                self.state = "title"
+            elif key in self.DIFFICULTY_KEYS:
+                index = self.DIFFICULTY_KEYS.index(key)
+                if index < len(C.DIFFICULTIES):
+                    self.start_new_run(C.DIFFICULTIES[index]["id"])
             return
 
         if self.state == "dead":
             if key == pygame.K_r:
-                self.start_new_run()
+                self.state = "difficulty_select"
             elif key == pygame.K_s:
                 self.stats_return_state = "dead"
                 self.state = "stats"
@@ -2517,6 +2532,11 @@ class Game:
             self._present()
             return
 
+        if self.state == "difficulty_select":
+            self._render_difficulty_select()
+            self._present()
+            return
+
         if self.state == "stats":
             self._render_stats()
             self._present()
@@ -2583,6 +2603,7 @@ class Game:
             self.screen.fill(C.COLOR_BG, (0, 0, C.SCREEN_WIDTH, slack))
         self._render_map(ox, oy)
         self._render_entities(ox, oy)
+        self._render_nameplates(ox, oy)
         self._render_damage_numbers(ox, oy)
         self._render_flash()
         self._render_minimap()
@@ -2749,6 +2770,83 @@ class Game:
         y = self._lines_block(lines, y) + self.gap_l
         y += self._button_row(row1, y, primary_first=True) + self.btn_gap
         self._button_row(row2, y, font=row2_font)
+
+    # 1..4 pick a difficulty on the select screen. Kept next to the
+    # renderer so the key a card claims and the key it advertises cannot
+    # drift apart.
+    DIFFICULTY_KEYS = (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4)
+
+    def _render_difficulty_select(self):
+        self.screen.fill(C.COLOR_BG)
+        self._tap_targets = []
+        y = self._screen_header(self.t("difficulty_title"))
+        y = self._lines_block(
+            self._wrap_text(self.t("difficulty_hint"), self.f_sm, self.content_w),
+            y, font=self.f_sm, pitch=self.pitch_sm,
+            color=C.COLOR_TEXT_DIM) + self.gap_l
+
+        current = self.settings.get("difficulty", C.DEFAULT_DIFFICULTY)
+        cards = C.DIFFICULTIES[:len(self.DIFFICULTY_KEYS)]
+        card_w = min(self.content_w // len(cards) - self.gap_s,
+                     self.content_w // 3)
+        rows = [self._difficulty_rows(d) for d in cards]
+        # Sized for the *longest* card so all four match, and derived from
+        # the same gaps the drawing loop below uses - hardcore has an
+        # extra price line, and guessing the height meant that line landed
+        # underneath its own button.
+        body_h = max(len(r) for r in rows) * self.pitch_xs
+        card_h = (self.gap_s + self.f_h1.get_height() + self.gap_s + body_h
+                  + self.gap_m + self.btn_h + self.gap_s)
+
+        # Sit the cards a third of the way down the space below the header
+        # rather than hard against it. Dead centre reads as bottom-heavy
+        # here, because the header is already pinned to the very top.
+        back_h = self.btn_h + self.gap_l
+        y = max(y, y + (C.SCREEN_HEIGHT - y - card_h - back_h) // 3)
+
+        total_w = card_w * len(cards) + self.gap_s * (len(cards) - 1)
+        x = (C.SCREEN_WIDTH - total_w) // 2
+        for card, key, lines in zip(cards, self.DIFFICULTY_KEYS, rows):
+            rect = pygame.Rect(x, y, card_w, card_h)
+            selected = card["id"] == current
+            self._panel(rect, border=card["color"] if selected else None)
+            name = self.f_h1.render(self._difficulty_name(card), True, card["color"])
+            self.screen.blit(name, name.get_rect(midtop=(rect.centerx, rect.y + self.gap_s)))
+            ly = rect.y + self.gap_s + name.get_height() + self.gap_s
+            for line in lines:
+                surf = self.f_xs.render(line, True, C.COLOR_TEXT_DIM)
+                self.screen.blit(surf, surf.get_rect(midtop=(rect.centerx, ly)))
+                ly += self.pitch_xs
+            btn = pygame.Rect(rect.x + self.gap_s, rect.bottom - self.btn_h - self.gap_s,
+                              card_w - 2 * self.gap_s, self.btn_h)
+            self._draw_tap_button(btn, self.t("btn_choose"), key, font=self.f_sm,
+                                  primary=selected)
+            x += card_w + self.gap_s
+
+        self._button_row([(self.t("btn_back"), pygame.K_ESCAPE)],
+                         y + card_h + self.gap_l)
+
+    def _difficulty_rows(self, card):
+        """The four numbers that actually differ between difficulties.
+
+        Shown as plain multipliers rather than prose: a player comparing
+        four cards side by side wants to see 2.0x next to 1.0x, not read
+        four sentences.
+        """
+        rows = [
+            self.t("difficulty_row_hp", value=self._mult_text(card["player_hp"])),
+            self.t("difficulty_row_damage", value=self._mult_text(card["player_damage"])),
+            self.t("difficulty_row_enemy_hp", value=self._mult_text(card["enemy_hp"])),
+            self.t("difficulty_row_enemy_damage", value=self._mult_text(card["enemy_damage"])),
+        ]
+        markup = card.get("shop_markup_per_level", 0.0)
+        if markup:
+            rows.append(self.t("difficulty_row_prices", percent=int(markup * 100)))
+        return rows
+
+    @staticmethod
+    def _mult_text(value):
+        return ("%.2f" % value).rstrip("0").rstrip(".") + "x"
 
     def _render_stats(self):
         self.screen.fill(C.COLOR_BG)
@@ -3312,6 +3410,123 @@ class Game:
 
         self._draw_player(ox, oy)
 
+    def _render_nameplates(self, ox=0, oy=0):
+        """Name, level, health bar and status icons above each monster.
+
+        Until now the only way to know what you were fighting, how hurt it
+        was, or whether your last hit had actually set it on fire was the
+        message log. The bar is drawn directly; the text is cached, since
+        the same handful of strings would otherwise be re-rasterised for
+        every monster on every frame - re-rendering text per frame is
+        exactly what once dropped this game to 3.9 fps on a real phone.
+        """
+        ts = C.TILE_SIZE
+        bar_h = max(2, ts // 8)
+        for monster in self.monsters:
+            if (monster.x, monster.y) not in self.visible:
+                continue
+            if not monster.is_alive():
+                continue
+            cx = int(monster.render_x * ts + ts / 2 + ox)
+            # Everything stacks upwards from just above the monster's head,
+            # so a monster with no status effects has no gap where the
+            # icons would have been: status icons, then name, then bar.
+            y = int(monster.render_y * ts + oy) - max(1, ts // 10)
+
+            badges = [b for b in C.STATUS_BADGES if getattr(monster, b["field"], 0) > 0]
+            if badges:
+                y -= self._draw_status_badges(badges, cx, y)
+
+            label = self._nameplate_text(monster)
+            if label is not None:
+                self.screen.blit(label, label.get_rect(midbottom=(cx, y)))
+                y -= label.get_height()
+
+            width = max(ts, int(ts * 1.1))
+            ratio = max(0.0, min(1.0, monster.hp / max(1, monster.max_hp)))
+            bar = pygame.Rect(cx - width // 2, y - bar_h, width, bar_h)
+            pygame.draw.rect(self.screen, (18, 10, 12), bar.inflate(2, 2))
+            pygame.draw.rect(self.screen, C.COLOR_HP_BAR_BG, bar)
+            if ratio > 0:
+                pygame.draw.rect(self.screen, self._nameplate_hp_color(monster),
+                                 (bar.x, bar.y, max(1, int(width * ratio)), bar_h))
+
+    @staticmethod
+    def _nameplate_hp_color(monster):
+        if monster.is_boss:
+            return C.COLOR_BOSS
+        if monster.elite_name:
+            return monster.color
+        return C.COLOR_HP_BAR_FG
+
+    def _nameplate_text(self, monster):
+        key = (monster.kind, monster.elite_name, monster.level, self._lang())
+        cached = self._name_cache.get(key)
+        if cached is None:
+            name = self._monster_display_name(monster)
+            text = f"{name} {self.t('nameplate_level', level=monster.level)}"
+            color = C.COLOR_BOSS if monster.is_boss else (
+                monster.color if monster.elite_name else C.COLOR_TEXT_DIM)
+            cached = self._f_tiny_outlined(text, color)
+            self._name_cache[key] = cached
+        return cached
+
+    def _f_tiny_outlined(self, text, color):
+        """Small text with a hard black outline.
+
+        Nameplates sit on top of the dungeon, not on a panel, and the
+        tileset has both near-black rock and pale stone in it - plain text
+        disappears into one or the other depending on where the monster is
+        standing. Rendering the string five times is fine here because the
+        result is cached.
+        """
+        body = self.f_tiny.render(text, True, color)
+        shadow = self.f_tiny.render(text, True, (0, 0, 0))
+        out = pygame.Surface((body.get_width() + 2, body.get_height() + 2),
+                             pygame.SRCALPHA)
+        for dx, dy in ((0, 1), (2, 1), (1, 0), (1, 2)):
+            out.blit(shadow, (dx, dy))
+        out.blit(body, (1, 1))
+        return out
+
+    def _status_pip(self, badge):
+        """One status effect as a small filled chip with a letter in it.
+
+        A bare coloured letter at this size is a few pixels of thin
+        strokes - "!" for stunned came out almost invisible against the
+        stonework. A solid chip is a colour you can read at a glance even
+        when you cannot make out the letter, which is what actually
+        matters mid-fight; the letter tells you which one once you look.
+        """
+        glyph = self.f_tiny.render(badge["char"], True, (12, 12, 14))
+        size = max(glyph.get_height(), glyph.get_width() + 3)
+        chip = pygame.Surface((size, size), pygame.SRCALPHA)
+        radius = max(1, size // 4)
+        pygame.draw.rect(chip, (10, 10, 12), (0, 0, size, size), border_radius=radius)
+        pygame.draw.rect(chip, badge["color"], (1, 1, size - 2, size - 2),
+                         border_radius=radius)
+        chip.blit(glyph, glyph.get_rect(center=(size // 2, size // 2)))
+        return chip
+
+    def _draw_status_badges(self, badges, cx, bottom):
+        """Draws the icon row with its bottom edge at `bottom`, and returns
+        how tall it was so the caller can stack the name above it."""
+        gap = max(1, C.TILE_SIZE // 12)
+        chips = []
+        for badge in badges:
+            chip = self._badge_cache.get(badge["char"])
+            if chip is None:
+                chip = self._status_pip(badge)
+                self._badge_cache[badge["char"]] = chip
+            chips.append(chip)
+        height = max(c.get_height() for c in chips)
+        total = sum(c.get_width() for c in chips) + gap * (len(chips) - 1)
+        x = cx - total // 2
+        for chip in chips:
+            self.screen.blit(chip, (x, bottom - chip.get_height()))
+            x += chip.get_width() + gap
+        return height
+
     def _draw_player(self, ox=0, oy=0):
         sprite = self.player_sprite_left if self.player.facing < 0 else self.player_sprite_right
         if sprite is None:
@@ -3504,6 +3719,8 @@ class Game:
         ]
         if self.player.poison_turns > 0:
             row3.append(("!", self.t("hud_poisoned"), C.COLOR_POISON, C.COLOR_POISON))
+        if self.player.bleed_turns > 0:
+            row3.append(("!", self.t("hud_bleeding"), C.COLOR_DANGER, C.COLOR_DANGER))
 
         chips_right = left
         row_y = y

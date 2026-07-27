@@ -255,12 +255,23 @@ STRINGS = {
     "log_status_bleed": {"en": "{monster} is bleeding!", "de": "{monster} blutet!"},
     "log_status_slow": {"en": "{monster} is slowed!", "de": "{monster} wird verlangsamt!"},
     "hud_bleeding": {"en": "Bleeding", "de": "Blutend"},
+    # Floats above a monster's head, so it has to stay short in both
+    # languages - "Lv" reads as a level marker in German too.
+    "nameplate_level": {"en": "Lv{level}", "de": "St{level}"},
 
     # --- difficulty ---
     "difficulty_title": {"en": "DIFFICULTY", "de": "SCHWIERIGKEIT"},
     "difficulty_hint": {
         "en": "Chosen once per run. Affects your health and damage, the enemies', and prices.",
         "de": "Gilt für den ganzen Lauf: dein Leben und Schaden, das der Gegner, und die Preise.",
+    },
+    "difficulty_row_hp": {"en": "Your health {value}", "de": "Dein Leben {value}"},
+    "difficulty_row_damage": {"en": "Your damage {value}", "de": "Dein Schaden {value}"},
+    "difficulty_row_enemy_hp": {"en": "Enemy health {value}", "de": "Gegner-Leben {value}"},
+    "difficulty_row_enemy_damage": {"en": "Enemy damage {value}", "de": "Gegner-Schaden {value}"},
+    "difficulty_row_prices": {
+        "en": "Prices +{percent}% per floor",
+        "de": "Preise +{percent}% pro Ebene",
     },
     "log_boss_enrage": {"en": "{monster} flies into a rage!", "de": "{monster} gerät in Rage!"},
     "log_boss_summon": {"en": "{monster} summons a minion!", "de": "{monster} beschwört einen Diener!"},
@@ -435,6 +446,21 @@ TUTORIAL_SECTIONS = {
             "Every 5th dungeon level a boss guards the stairs - watch its health bar at the top.",
             "Discovered monsters are recorded in the Bestiary (title screen).",
         ]),
+        ("Status Effects", [
+            "Monsters show a health bar, their name and level, and icons for what is on them.",
+            "F burning and G poisoned deal damage every turn; B bleeding does the most.",
+            "Every critical hit you land causes bleeding.",
+            "! stunned skips the monster's turn; S slowed makes it act only every other turn.",
+            "W weakened cuts the monster's defence, so your hits land harder.",
+            "Elemental weapons apply these: fire burns, poison poisons, frost slows and weakens,",
+            "   lightning stuns.",
+        ]),
+        ("Difficulty", [
+            "Chosen at the start of every run - Easy, Normal, Hard or Hardcore.",
+            "It scales your health and damage, the monsters' health and damage, and shop prices.",
+            "Hard and Hardcore also make merchants charge more the deeper you go.",
+            "XP is never scaled, so a harder run is genuinely harder, not just slower.",
+        ]),
         ("Loot & Gold", [
             "$  gold - spend it with merchants (walk into the cyan 'M').",
             "/  weapons and [  armor auto-equip if they're an upgrade.",
@@ -467,6 +493,22 @@ TUTORIAL_SECTIONS = {
             "Farblich markierte 'Elite'-Monster sind stärker, geben aber deutlich mehr XP.",
             "Alle 5 Dungeon-Ebenen bewacht ein Boss die Treppe - beachte seine Lebensleiste oben.",
             "Entdeckte Monster werden im Bestiarium gespeichert (Titelbildschirm).",
+        ]),
+        ("Statuseffekte", [
+            "Monster zeigen eine Lebensleiste, Namen und Stufe, sowie Symbole für ihre Effekte.",
+            "F Brennen und G Gift verursachen jede Runde Schaden; B Bluten am meisten.",
+            "Jeder kritische Treffer von dir lässt den Gegner bluten.",
+            "! Betäubt lässt die Runde des Monsters ausfallen;",
+            "   S Verlangsamt lässt es nur jede zweite Runde handeln.",
+            "W Geschwächt senkt die Verteidigung des Monsters, deine Treffer wirken stärker.",
+            "Elementarwaffen lösen das aus: Feuer brennt, Gift vergiftet,",
+            "   Frost verlangsamt und schwächt, Blitz betäubt.",
+        ]),
+        ("Schwierigkeit", [
+            "Wird zu Beginn jedes Laufs gewählt - Einfach, Normal, Schwer oder Hardcore.",
+            "Sie skaliert dein Leben und deinen Schaden, das der Monster, und die Ladenpreise.",
+            "Bei Schwer und Hardcore verlangen Händler pro Ebene zusätzlich mehr.",
+            "XP wird nie skaliert - ein schwerer Lauf ist wirklich schwerer, nicht nur länger.",
         ]),
         ("Beute & Gold", [
             "$  Gold - gib es bei Händlern aus (laufe in das cyanfarbene 'M').",
