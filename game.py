@@ -149,6 +149,7 @@ class Game:
 
         self.install_phase = "prompt"
         self.install_error = None
+        self._shortcut_status = None
         self.update_return_state = "settings"
         self.update_phase = "idle"
         self.update_info = None
@@ -907,6 +908,12 @@ class Game:
                 y += self.gap_m
         return y
 
+    def _make_desktop_shortcut(self):
+        ok = installer.create_desktop_shortcut()
+        self._shortcut_status = self.t(
+            "settings_shortcut_ok" if ok else "settings_shortcut_fail")
+        self.needs_redraw = True
+
     def _toggle_music(self):
         on = not self.settings.get("music", True)
         self.settings["music"] = on
@@ -1342,6 +1349,8 @@ class Game:
                 self._cycle_volume()
             elif key == pygame.K_m:
                 self._toggle_music()
+            elif key == pygame.K_k and not ON_ANDROID:
+                self._make_desktop_shortcut()
             elif key == pygame.K_u:
                 self._open_update_screen("settings")
                 self._start_update_check()
@@ -2628,6 +2637,11 @@ class Game:
             (self.t("settings_update_label", build=updater.current_build()),
              self.t("btn_check_update"), pygame.K_u),
         ]
+        if not ON_ANDROID:
+            rows.append((
+                self._shortcut_status or self.t("settings_shortcut_label"),
+                self.t("btn_create"), pygame.K_k,
+            ))
         # Label left, button right on one shared row - stacking the label
         # above its button needs 5 extra rows and overflows.
         btn_w = max(self._btn_w(b) for _, b, _ in rows)

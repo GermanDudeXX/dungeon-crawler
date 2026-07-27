@@ -75,6 +75,68 @@ def should_offer_install():
     return is_frozen() and not is_installed() and not has_declined()
 
 
+def desktop_dir():
+    """Where the user's Desktop actually is.
+
+    Not simply ~/Desktop: with OneDrive's "back up your folders" enabled
+    the real Desktop is ~/OneDrive/Desktop, while the old ~/Desktop often
+    still exists as a leftover. Writing the shortcut there puts it
+    somewhere the user never sees - which is exactly what happened.
+    Windows itself is the only reliable source, so ask it.
+    """
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "[Environment]::GetFolderPath('Desktop')"],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            capture_output=True, text=True, timeout=15, check=False,
+        ).stdout.strip()
+        if out and os.path.isdir(out):
+            return out
+    except (OSError, subprocess.SubprocessError):
+        pass
+    for candidate in (os.path.join(os.environ.get("OneDrive", ""), "Desktop"),
+                      os.path.join(os.path.expanduser("~"), "Desktop")):
+        if candidate and os.path.isdir(candidate):
+            return candidate
+    return None
+
+
+def desktop_shortcut_path():
+    d = desktop_dir()
+    return os.path.join(d, f"{APP_NAME}.lnk") if d else None
+
+
+def has_desktop_shortcut():
+    p = desktop_shortcut_path()
+    return bool(p and os.path.exists(p))
+
+
+def create_desktop_shortcut(target_exe=None):
+    """Make just the desktop shortcut. Returns True if it now exists.
+
+    Points at the *installed* copy when there is one, so the shortcut
+    keeps working after the file the user launched is deleted. Refuses
+    when not frozen: sys.executable is then the Python interpreter, and
+    a shortcut to python.exe would look like it worked but launch
+    nothing (caught exactly that way in testing).
+    """
+    if target_exe is None:
+        if not is_frozen():
+            return False
+        installed = installed_exe_path()
+        target_exe = installed if os.path.exists(installed) else current_exe()
+    target = target_exe
+    path = desktop_shortcut_path()
+    if not path:
+        return False
+    try:
+        _make_shortcut(path, target, os.path.dirname(target))
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return os.path.exists(path)
+
+
 def _make_shortcut(link_path, target, working_dir):
     """Create a .lnk via WScript.Shell.
 
@@ -120,8 +182,8 @@ def create_shortcuts(target_exe):
         except (OSError, subprocess.SubprocessError):
             pass
 
-    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-    if os.path.isdir(desktop):
+    desktop = desktop_dir()
+    if desktop:
         try:
             link = os.path.join(desktop, f"{APP_NAME}.lnk")
             _make_shortcut(link, target_exe, target_dir)
