@@ -765,7 +765,7 @@ class Game:
         try:
             pygame.mixer.music.load(path)
             pygame.mixer.music.set_volume(
-                self.settings.get("volume", sound.MASTER_VOLUME) * 0.6)
+                self.settings.get("volume", sound.MASTER_VOLUME))
             pygame.mixer.music.play(-1)
             self._music_track = track
         except (pygame.error, FileNotFoundError):
@@ -908,7 +908,7 @@ class Game:
         # Keep the background track in step with the volume setting -
         # otherwise turning the sound down leaves the music blaring.
         try:
-            pygame.mixer.music.set_volume(new_volume * 0.6)
+            pygame.mixer.music.set_volume(new_volume)
         except pygame.error:
             pass
         persistence.save_settings(self.settings)
