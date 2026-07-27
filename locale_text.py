@@ -93,6 +93,7 @@ STRINGS = {
     "settings_touch_label": {"en": "On-screen touch buttons: {state}", "de": "Bildschirm-Tasten: {state}"},
     "settings_lang_label": {"en": "Language: {state}", "de": "Sprache: {state}"},
     "settings_volume_label": {"en": "Sound volume: {state}", "de": "Lautstärke: {state}"},
+    "settings_music_label": {"en": "Music: {state}", "de": "Musik: {state}"},
     "settings_hint": {
         "en": "Tap TOGGLE or press C (controls) / L (language) / V (volume)      ESC: back",
         "de": "Tippe UMSCHALTEN oder drücke C (Tasten) / L (Sprache) / V (Lautstärke)      ESC: zurück",

@@ -853,6 +853,22 @@ class Game:
                 y += self.gap_m
         return y
 
+    def _toggle_music(self):
+        on = not self.settings.get("music", True)
+        self.settings["music"] = on
+        persistence.save_settings(self.settings)
+        if on:
+            # Forget the current track so _play_tier_music actually
+            # restarts it rather than treating it as already playing.
+            self._music_track = None
+            self._play_tier_music(getattr(self, "tier", C.DUNGEON_TIERS[0]))
+        else:
+            try:
+                pygame.mixer.music.stop()
+            except pygame.error:
+                pass
+            self._music_track = None
+
     def _toggle_touch_controls(self):
         self.settings["show_touch_controls"] = not self.settings.get("show_touch_controls", True)
         persistence.save_settings(self.settings)
@@ -882,6 +898,12 @@ class Game:
         new_volume = self.VOLUME_LEVELS[idx]
         self.settings["volume"] = new_volume
         self.sounds.set_volume(new_volume)
+        # Keep the background track in step with the volume setting -
+        # otherwise turning the sound down leaves the music blaring.
+        try:
+            pygame.mixer.music.set_volume(new_volume * 0.6)
+        except pygame.error:
+            pass
         persistence.save_settings(self.settings)
         if new_volume > 0:
             self.sounds.play("equip")
@@ -1071,19 +1093,10 @@ class Game:
                     self.needs_redraw = True
 
             if self._should_redraw():
-                t0 = pygame.time.get_ticks()
                 self.render()
-                # render() ends in _present(), which times itself -
-                # subtract that to get drawing-only time.
-                flip = getattr(self, "_perf_flip_frame", 0.0)
-                self._perf_draw_ms = (getattr(self, "_perf_draw_ms", 0.0)
-                                      + (pygame.time.get_ticks() - t0) - flip)
-                self._perf_flip_ms = getattr(self, "_perf_flip_ms", 0.0) + flip
-                self._perf_flip_frame = 0.0
                 self.needs_redraw = False
                 self._last_draw_ms = pygame.time.get_ticks()
             self.clock.tick(POLL_HZ)
-            self._log_fps()
 
     def _should_redraw(self):
         # This is a turn-based game: between the player's moves the screen
@@ -1114,38 +1127,8 @@ class Game:
         # display surface, then present. See the comment where self.screen
         # is created for why nothing draws into the display surface
         # directly.
-        t = pygame.time.get_ticks()
         self.display.blit(self.screen, (0, 0))
         pygame.display.flip()
-        self._perf_flip_frame = getattr(self, "_perf_flip_frame", 0.0) + (pygame.time.get_ticks() - t)
-
-    def _log_fps(self):
-        # TEMPORARY DIAGNOSTIC - remove once the lag work is done.
-        # Prints the real achieved framerate and the render-only cost once a
-        # second, so we can see on a real device whether we're actually
-        # holding the 30fps the frame-counted input repeat assumes.
-        if not ON_ANDROID:
-            return
-        self._fps_frames = getattr(self, "_fps_frames", 0) + 1
-        now = pygame.time.get_ticks()
-        last = getattr(self, "_fps_last", None)
-        if last is None:
-            self._fps_last = now
-            return
-        if now - last >= 1000:
-            n = max(1, self._fps_frames)
-            draw = getattr(self, "_perf_draw_ms", 0.0) / n
-            flip = getattr(self, "_perf_flip_ms", 0.0) / n
-            print(f"[perf] {self._fps_frames * 1000 / (now - last):.1f} fps "
-                  f"draw={draw:.0f}ms flip={flip:.0f}ms "
-                  f"canvas={C.SCREEN_WIDTH}x{C.SCREEN_HEIGHT} "
-                  f"bits={self.screen.get_bitsize()}/{self.display.get_bitsize()} "
-                  f"hwaccel={bool(self.display.get_flags() & pygame.HWSURFACE)} "
-                  f"state={self.state}")
-            self._fps_frames = 0
-            self._perf_draw_ms = 0.0
-            self._perf_flip_ms = 0.0
-            self._fps_last = now
 
     def _handle_movement_repeat(self):
         keys = pygame.key.get_pressed()
@@ -1260,6 +1243,8 @@ class Game:
                 self._toggle_language()
             elif key == pygame.K_v:
                 self._cycle_volume()
+            elif key == pygame.K_m:
+                self._toggle_music()
             elif key == pygame.K_u:
                 self._open_update_screen("settings")
                 self._start_update_check()
@@ -2422,21 +2407,34 @@ class Game:
     def _render_settings(self):
         self.screen.fill(C.COLOR_BG)
         self._tap_targets = []
-        y = self._screen_header(self.t("settings_title"))
+
+        # BACK sits top-left rather than under the rows: with five
+        # settings a full-width button row at the bottom no longer fits,
+        # and shrinking the rows to make room would take them under the
+        # 48dp touch minimum.
+        back_w = self._btn_w(self.t("btn_back"))
+        self._draw_tap_button((self.pad, self.pad, back_w, self.btn_h),
+                              self.t("btn_back"), pygame.K_ESCAPE)
+        title = self.f_title.render(self.t("settings_title"), True, (230, 200, 60))
+        self.screen.blit(title, title.get_rect(
+            midtop=(C.SCREEN_WIDTH // 2, self.pad + max(0, (self.btn_h - title.get_height()) // 2))))
+        y = self.pad + max(self.btn_h, title.get_height()) + self.gap_m
 
         touch_state = self.t("on") if self.settings.get("show_touch_controls", True) else self.t("off")
         lang_state = self.t("lang_de") if self._lang() == "de" else self.t("lang_en")
         volume = self.settings.get("volume", sound.MASTER_VOLUME)
+        music_state = self.t("on") if self.settings.get("music", True) else self.t("off")
         rows = [
             (self.t("settings_touch_label", state=touch_state), self.t("btn_toggle"), pygame.K_c),
             (self.t("settings_lang_label", state=lang_state), self.t("btn_toggle"), pygame.K_l),
             (self.t("settings_volume_label", state=f"{int(round(volume * 100))}%"),
              self.t("btn_toggle"), pygame.K_v),
+            (self.t("settings_music_label", state=music_state), self.t("btn_toggle"), pygame.K_m),
             (self.t("settings_update_label", build=updater.current_build()),
              self.t("btn_check_update"), pygame.K_u),
         ]
         # Label left, button right on one shared row - stacking the label
-        # above its button (as before) needs 4 extra rows and overflows.
+        # above its button needs 5 extra rows and overflows.
         btn_w = max(self._btn_w(b) for _, b, _ in rows)
         for label, btn, key in rows:
             text = self.f_body.render(label, True, C.COLOR_HUD_TEXT)
@@ -2444,14 +2442,6 @@ class Game:
             self._draw_tap_button(
                 (C.SCREEN_WIDTH - self.pad - btn_w, y, btn_w, self.btn_h), btn, key)
             y += self.btn_h + self.btn_gap
-
-        y += self.gap_m
-        self._button_row([(self.t("btn_back"), pygame.K_ESCAPE)], y)
-
-        if not ON_ANDROID:
-            hint = self.f_sm.render(self.t("settings_hint"), True, C.COLOR_HELP_TEXT)
-            self.screen.blit(hint, hint.get_rect(
-                midbottom=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT - self.pad)))
 
     def _render_confirm_disable_touch(self):
         self.screen.fill(C.COLOR_BG)
