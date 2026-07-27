@@ -3,7 +3,7 @@ title = Dungeon Crawler
 package.name = dungeoncrawler
 package.domain = com.germandudexx
 source.dir = .
-source.include_exts = py,png,jpg,jpeg,ttf,json,txt,mp3,ogg
+source.include_exts = py,png,jpg,jpeg,ttf,json,txt,mp3,ogg,pem
 source.exclude_dirs = p4a-recipes
 version = 0.1
 

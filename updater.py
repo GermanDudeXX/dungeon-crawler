@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import ssl
 import subprocess
 import tempfile
 import sys
@@ -9,6 +10,21 @@ import urllib.request
 import constants as C
 
 ON_ANDROID = "ANDROID_ARGUMENT" in os.environ
+
+
+def _ssl_context():
+    """A verifying SSL context that works on Android too.
+
+    Falls back to the platform default when the bundle is missing, and
+    never disables verification: this module downloads an executable that
+    is then run, so an unverified transport would be a real hole.
+    """
+    try:
+        if os.path.exists(C.CA_BUNDLE_PATH):
+            return ssl.create_default_context(cafile=C.CA_BUNDLE_PATH)
+    except (ssl.SSLError, OSError):
+        pass
+    return ssl.create_default_context()
 
 RELEASE_TAG = "android-latest" if ON_ANDROID else "windows-latest"
 ASSET_EXT = ".apk" if ON_ANDROID else ".exe"
@@ -30,7 +46,8 @@ def check_for_update():
     already up to date. Raises on any network/parse failure - callers must
     catch and show a friendly error, never let this crash the game."""
     req = urllib.request.Request(API_URL, headers=_HEADERS)
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT,
+                                context=_ssl_context()) as resp:
         data = json.loads(resp.read().decode("utf-8"))
 
     match = re.search(r"Build:\s*(\d+)", data.get("body") or "")
@@ -53,7 +70,8 @@ def check_for_update():
 def download_update(url, dest_path, progress_cb=None):
     req = urllib.request.Request(url, headers=_HEADERS)
     tmp_path = dest_path + ".part"
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT,
+                                context=_ssl_context()) as resp:
         total = int(resp.headers.get("Content-Length", 0))
         done = 0
         with open(tmp_path, "wb") as f:

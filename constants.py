@@ -101,6 +101,12 @@ MERCHANT_SPRITE_HEIGHT = int(TILE_SIZE * 1.6)
 # to the repo itself. Lets a running build compare itself against the
 # commit count baked into the latest GitHub release to know if it's stale.
 BUILD_VERSION_PATH = os.path.join(ASSETS_DIR, "build_version.txt")
+# Bundled CA roots. Android's system trust store is not in a form OpenSSL
+# reads, and python-for-android ships no bundle, so HTTPS to GitHub failed
+# with CERTIFICATE_VERIFY_FAILED. Shipping the roots keeps verification ON
+# - the updater downloads code that then runs, so turning verification off
+# would be the wrong fix.
+CA_BUNDLE_PATH = os.path.join(ASSETS_DIR, "cacert.pem")
 GITHUB_REPO = "GermanDudeXX/dungeon-crawler"
 
 FOV_RADIUS = 8
