@@ -126,6 +126,9 @@ class Game:
         # Running from Downloads/Desktop means Windows will block the
         # self-updater later, so offer to install properly first.
         self.state = "install_prompt" if installer.should_offer_install() else "title"
+        # Start the track immediately instead of waiting for a run to
+        # begin, so the menus have music too.
+        self._play_tier_music(C.DUNGEON_TIERS[0])
         self.stats_return_state = "title"
         self.settings_return_state = "title"
         self.new_best = False
@@ -764,14 +767,38 @@ class Game:
         path = os.path.join(C.MUSIC_DIR, track)
         try:
             pygame.mixer.music.load(path)
+            pygame.mixer.music.play(-1)
             pygame.mixer.music.set_volume(
                 self.settings.get("volume", sound.MASTER_VOLUME))
-            pygame.mixer.music.play(-1)
             self._music_track = track
         except (pygame.error, FileNotFoundError):
-            # Music is optional - a device without a working decoder for
-            # it should still play the game silently.
-            self._music_track = track
+            # Deliberately do NOT record the track here. Doing so made a
+            # single failed load permanent: the guard above then matched
+            # forever and nothing retried, which is why music only ever
+            # started after toggling it off and on again (that path resets
+            # _music_track). Leaving it unset lets _music_watchdog retry.
+            self._music_track = None
+
+    def _music_watchdog(self):
+        """Restart the track if it should be playing but is not.
+
+        Covers a load or a device audio focus change failing transiently -
+        previously any such hiccup meant silence until the player found
+        the settings toggle. Cheap: one get_busy() call per second.
+        """
+        if not self.settings.get("music", True):
+            return
+        now = pygame.time.get_ticks()
+        if now - getattr(self, "_music_check_ms", 0) < 1000:
+            return
+        self._music_check_ms = now
+        try:
+            if pygame.mixer.music.get_busy():
+                return
+        except pygame.error:
+            return
+        self._music_track = None
+        self._play_tier_music(getattr(self, "tier", None) or C.DUNGEON_TIERS[0])
 
     def _build_ui_metrics(self):
         # Absolute sizes for the menu screens, scaled from the canvas
@@ -1108,6 +1135,8 @@ class Game:
                 elif self.state == "confirm_disable_touch" and self.touch_warning_timer > 0:
                     self.touch_warning_timer -= 1
                     self.needs_redraw = True
+
+            self._music_watchdog()
 
             if self._should_redraw():
                 self.render()
