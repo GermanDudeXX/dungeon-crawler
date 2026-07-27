@@ -105,7 +105,24 @@ GITHUB_REPO = "GermanDudeXX/dungeon-crawler"
 
 FOV_RADIUS = 8
 
-COLOR_BG = (10, 10, 14)
+# --- theme -------------------------------------------------------------
+# One palette everything draws from, instead of grey boxes with grey
+# borders. Two surface levels give depth without gradients or shadows
+# (both expensive per frame at this resolution), and a single warm accent
+# marks whatever the primary action on a screen is.
+COLOR_SURFACE = (23, 27, 36)        # panels/cards sitting on the background
+COLOR_SURFACE_HI = (33, 40, 52)     # raised: buttons, active states
+COLOR_BORDER = (52, 62, 78)         # normal outline
+COLOR_BORDER_HI = (86, 102, 126)    # emphasised outline
+COLOR_ACCENT = (232, 181, 75)       # gold - primary action, titles
+COLOR_ACCENT_DIM = (120, 92, 34)    # accent used as a subtle underline
+COLOR_ON_ACCENT = (22, 18, 8)       # text drawn on top of the accent fill
+COLOR_TEXT = (230, 234, 242)
+COLOR_TEXT_DIM = (150, 162, 181)
+COLOR_DANGER = (224, 91, 91)
+COLOR_SUCCESS = (91, 201, 138)
+
+COLOR_BG = (13, 15, 20)
 COLOR_WALL = (60, 60, 70)
 COLOR_WALL_DIM = (25, 25, 30)
 COLOR_FLOOR = (90, 90, 100)
@@ -115,14 +132,14 @@ COLOR_STAIRS = (255, 215, 0)
 COLOR_STAIRS_UP = (150, 200, 255)
 COLOR_POTION = (255, 60, 120)
 COLOR_BOSS = (230, 60, 220)
-COLOR_HUD_BG = (20, 20, 26)
-COLOR_HUD_TEXT = (220, 220, 220)
-COLOR_HP_BAR_BG = (60, 20, 20)
-COLOR_HP_BAR_FG = (200, 40, 40)
-COLOR_XP_BAR_BG = (30, 30, 55)
-COLOR_XP_BAR_FG = (90, 90, 220)
-COLOR_LOG_TEXT = (180, 180, 190)
-COLOR_HELP_TEXT = (140, 140, 150)
+COLOR_HUD_BG = COLOR_SURFACE
+COLOR_HUD_TEXT = COLOR_TEXT
+COLOR_HP_BAR_BG = (58, 26, 30)
+COLOR_HP_BAR_FG = (214, 68, 72)
+COLOR_XP_BAR_BG = (28, 34, 58)
+COLOR_XP_BAR_FG = (104, 124, 232)
+COLOR_LOG_TEXT = COLOR_TEXT_DIM
+COLOR_HELP_TEXT = COLOR_TEXT_DIM
 COLOR_GOLD = (255, 210, 60)
 COLOR_MERCHANT = (80, 200, 220)
 COLOR_POISON = (110, 200, 90)

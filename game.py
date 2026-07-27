@@ -123,6 +123,8 @@ class Game:
         self.needs_redraw = True
         self._last_draw_ms = 0
         self._last_tick_ms = 0
+        self._pressed_key = None
+        self._pressed_until = 0
         # Running from Downloads/Desktop means Windows will block the
         # self-updater later, so offer to install properly first.
         self.state = "install_prompt" if installer.should_offer_install() else "title"
@@ -843,7 +845,7 @@ class Game:
         f = font or self.f_body
         return max(self.btn_min_w, f.size(label)[0] + 2 * self.btn_pad_x)
 
-    def _button_row(self, entries, y, height=None, font=None):
+    def _button_row(self, entries, y, height=None, font=None, primary_first=False):
         """Lay out (label, key) buttons left-to-right as one centred row.
 
         Widths come from the measured label, so a longer translation
@@ -854,17 +856,27 @@ class Game:
         widths = [self._btn_w(label, f) for label, _ in entries]
         total = sum(widths) + self.btn_gap * (len(entries) - 1)
         x = C.SCREEN_WIDTH // 2 - total // 2
-        for (label, key), w in zip(entries, widths):
-            self._draw_tap_button((x, y, w, h), label, key, font=f)
+        for i, ((label, key), w) in enumerate(zip(entries, widths)):
+            self._draw_tap_button((x, y, w, h), label, key, font=f,
+                                  primary=(primary_first and i == 0))
             x += w + self.btn_gap
         return h
 
-    def _screen_header(self, title, color=(230, 200, 60), y=None):
-        """Draw a screen title at the top; returns the y below it."""
+    def _screen_header(self, title, color=None, y=None):
+        """Draw a screen title with an accent rule; returns the y below it."""
         y = self.pad if y is None else y
-        surf = self.f_title.render(title, True, color)
-        self.screen.blit(surf, surf.get_rect(midtop=(C.SCREEN_WIDTH // 2, y)))
-        return y + surf.get_height() + self.gap_m
+        surf = self.f_title.render(title, True, color or C.COLOR_ACCENT)
+        rect = surf.get_rect(midtop=(C.SCREEN_WIDTH // 2, y))
+        self.screen.blit(surf, rect)
+        rule_w = max(surf.get_width() // 3, self.btn_min_w // 2)
+        rule_h = max(3, self.gap_s // 4)
+        pygame.draw.rect(
+            self.screen, color or C.COLOR_ACCENT,
+            (C.SCREEN_WIDTH // 2 - rule_w // 2, rect.bottom + self.gap_s // 2,
+             rule_w, rule_h),
+            border_radius=rule_h,
+        )
+        return rect.bottom + self.gap_s // 2 + rule_h + self.gap_m
 
     def _lines_block(self, lines, y, font=None, pitch=None, color=None, x=None):
         """Draw centred (or left-aligned when x is given) lines.
@@ -1107,9 +1119,11 @@ class Game:
                 if event.type == pygame.KEYDOWN:
                     self._handle_key(event.key)
                 elif event.type == pygame.MOUSEBUTTONDOWN:
+                    self._note_press(event.pos)
                     self._handle_tap(event.pos)
                 elif event.type == pygame.MOUSEBUTTONUP:
                     self.touch_direction = None
+                    self._pressed_key = None
 
             # Movement repeat is wall-clock based, so it benefits from the
             # faster poll rate directly.
@@ -1135,6 +1149,11 @@ class Game:
                 elif self.state == "confirm_disable_touch" and self.touch_warning_timer > 0:
                     self.touch_warning_timer -= 1
                     self.needs_redraw = True
+
+            if (getattr(self, "_pressed_key", None) is not None
+                    and pygame.time.get_ticks() > getattr(self, "_pressed_until", 0)):
+                self._pressed_key = None
+                self.needs_redraw = True
 
             self._music_watchdog()
 
@@ -1220,6 +1239,19 @@ class Game:
 
     def _spawn_damage_number(self, x, y, text, color):
         self.damage_numbers.append({"x": x, "y": y, "text": text, "color": color, "timer": 30, "max_timer": 30})
+
+    def _note_press(self, pos):
+        """Remember which button is under the finger, for the pressed look.
+
+        Cleared on release, and after a short delay for key presses, which
+        have no release event of their own here.
+        """
+        self._pressed_key = None
+        for rect, key in self._tap_targets:
+            if rect.collidepoint(pos):
+                self._pressed_key = key
+                self._pressed_until = pygame.time.get_ticks() + 140
+                break
 
     def _handle_tap(self, pos):
         if self.state != "playing":
@@ -2215,13 +2247,45 @@ class Game:
 
         self._present()
 
-    def _draw_tap_button(self, rect, label, key, font=None):
+    def _panel(self, rect, fill=None, border=None, radius=None, shadow=True):
+        """A rounded surface with a soft edge, used for cards and buttons.
+
+        The "shadow" is a single darker rounded rect offset downwards
+        rather than a real blur: blurring would mean a per-frame alpha
+        surface, which profiling showed is exactly the kind of cost that
+        made this game unplayable on a phone.
+        """
         rect = pygame.Rect(rect)
-        radius = max(8, rect.height // 8)
-        pygame.draw.rect(self.screen, (45, 45, 58), rect, border_radius=radius)
-        pygame.draw.rect(self.screen, (130, 130, 150), rect, width=3, border_radius=radius)
-        text = (font or self.f_body).render(label, True, C.COLOR_HUD_TEXT)
-        self.screen.blit(text, text.get_rect(center=rect.center))
+        radius = rect.height // 4 if radius is None else radius
+        if shadow:
+            pygame.draw.rect(self.screen, C.COLOR_BG,
+                             rect.move(0, max(2, rect.height // 22)), border_radius=radius)
+        pygame.draw.rect(self.screen, fill or C.COLOR_SURFACE, rect, border_radius=radius)
+        pygame.draw.rect(self.screen, border or C.COLOR_BORDER, rect,
+                         width=2, border_radius=radius)
+        return rect
+
+    def _draw_tap_button(self, rect, label, key, font=None, primary=False):
+        """primary=True marks the main action - filled accent, not outlined."""
+        rect = pygame.Rect(rect)
+        radius = rect.height // 4
+        pressed = key == getattr(self, "_pressed_key", None)
+
+        if primary:
+            fill = C.COLOR_ACCENT_DIM if pressed else C.COLOR_ACCENT
+            border = C.COLOR_ACCENT
+            text_color = C.COLOR_ON_ACCENT
+        else:
+            fill = C.COLOR_SURFACE_HI if pressed else C.COLOR_SURFACE
+            border = C.COLOR_BORDER_HI if pressed else C.COLOR_BORDER
+            text_color = C.COLOR_TEXT
+
+        # Pressing sinks the button onto its own shadow.
+        draw_rect = rect.move(0, max(2, rect.height // 22)) if pressed else rect
+        self._panel(draw_rect, fill=fill, border=border, radius=radius,
+                    shadow=not pressed)
+        text = (font or self.f_body).render(label, True, text_color)
+        self.screen.blit(text, text.get_rect(center=draw_rect.center))
         # Register a slightly larger hit area than the drawn box, so a
         # thumb that lands just outside still counts.
         self._tap_targets.append((rect.inflate(self.tap_slop, self.tap_slop), key))
@@ -2273,7 +2337,7 @@ class Game:
             buttons = [(self.t("btn_install"), pygame.K_RETURN),
                        (self.t("btn_play_here"), pygame.K_ESCAPE)]
 
-        title = self.f_title.render(self.t("install_title"), True, (230, 200, 60))
+        title = self.f_title.render(self.t("install_title"), True, C.COLOR_ACCENT)
         body_h = sum(self.pitch_body if line else self.gap_m for line in body)
         total = (title.get_height() + self.gap_l + body_h
                  + (self.gap_xl + self.btn_h if buttons else 0))
@@ -2283,7 +2347,8 @@ class Game:
         y += title.get_height() + self.gap_l
         y = self._lines_block(body, y)
         if buttons:
-            self._button_row(buttons, y + self.gap_xl)
+            self._button_row(buttons, y + self.gap_xl,
+                             primary_first=self.install_phase == "prompt")
 
     def _render_title(self):
         self.screen.fill(C.COLOR_BG)
@@ -2319,7 +2384,7 @@ class Game:
             if sum(widths) + self.btn_gap * (len(row2) - 1) <= self.content_w:
                 break
 
-        title_surf = self.f_title.render("DUNGEON CRAWLER", True, (230, 200, 60))
+        title_surf = self.f_title.render("DUNGEON CRAWLER", True, C.COLOR_ACCENT)
         text_h = sum(self.pitch_body if l else self.gap_m for l in lines)
         total = (title_surf.get_height() + self.gap_m
                  + (sprite.get_height() + self.gap_m if sprite else 0)
@@ -2333,7 +2398,7 @@ class Game:
             self.screen.blit(sprite, sprite.get_rect(midtop=(C.SCREEN_WIDTH // 2, y)))
             y += sprite.get_height() + self.gap_m
         y = self._lines_block(lines, y) + self.gap_l
-        y += self._button_row(row1, y) + self.btn_gap
+        y += self._button_row(row1, y, primary_first=True) + self.btn_gap
         self._button_row(row2, y, font=row2_font)
 
     def _render_stats(self):
@@ -2409,7 +2474,7 @@ class Game:
                 name = "???"
 
             self.screen.blit(self.f_body.render(char, True, color), (char_x, y))
-            name_color = color if discovered else (110, 110, 120)
+            name_color = color if discovered else C.COLOR_TEXT_DIM
             self.screen.blit(self.f_body.render(name, True, name_color), (name_x, y))
 
             if discovered:
@@ -2470,7 +2535,7 @@ class Game:
         y = self._screen_header(title)
 
         for heading, body in pages[self.tutorial_page]:
-            self.screen.blit(self.f_h1.render(heading, True, (120, 200, 255)), (self.pad, y))
+            self.screen.blit(self.f_h1.render(heading, True, C.COLOR_XP_BAR_FG), (self.pad, y))
             y += self.f_h1.get_linesize() + self.gap_s
             for line in body:
                 self.screen.blit(self.f_sm.render(line, True, C.COLOR_HUD_TEXT),
@@ -2511,7 +2576,7 @@ class Game:
             (self.t("btn_settings"), pygame.K_o),
             (self.t("btn_save_quit"), pygame.K_q),
         ]
-        title = self.f_title.render(self.t("pause_title"), True, (230, 200, 60))
+        title = self.f_title.render(self.t("pause_title"), True, C.COLOR_ACCENT)
         total = (title.get_height() + self.gap_l
                  + len(buttons) * self.btn_h + (len(buttons) - 1) * self.btn_gap)
         y = max(self.pad, (C.SCREEN_HEIGHT - total) // 2)
@@ -2521,8 +2586,9 @@ class Game:
         # One uniform width for the stack, driven by the longest label so
         # German and English both line up.
         w = max(self._btn_w(label) for label, _ in buttons)
-        for label, key in buttons:
-            self._draw_tap_button((C.SCREEN_WIDTH // 2 - w // 2, y, w, self.btn_h), label, key)
+        for i, (label, key) in enumerate(buttons):
+            self._draw_tap_button((C.SCREEN_WIDTH // 2 - w // 2, y, w, self.btn_h),
+                                  label, key, primary=(i == 0))
             y += self.btn_h + self.btn_gap
 
     def _render_settings(self):
@@ -2536,7 +2602,7 @@ class Game:
         back_w = self._btn_w(self.t("btn_back"))
         self._draw_tap_button((self.pad, self.pad, back_w, self.btn_h),
                               self.t("btn_back"), pygame.K_ESCAPE)
-        title = self.f_title.render(self.t("settings_title"), True, (230, 200, 60))
+        title = self.f_title.render(self.t("settings_title"), True, C.COLOR_ACCENT)
         self.screen.blit(title, title.get_rect(
             midtop=(C.SCREEN_WIDTH // 2, self.pad + max(0, (self.btn_h - title.get_height()) // 2))))
         y = self.pad + max(self.btn_h, title.get_height()) + self.gap_m
@@ -2579,7 +2645,7 @@ class Game:
         seconds_left = (self.touch_warning_timer + 29) // 30
         confirm_label = self.t("btn_confirm") if ready else f"{self.t('btn_confirm')} ({seconds_left})"
 
-        title = self.f_title.render(self.t("touch_warn_title"), True, (230, 80, 80))
+        title = self.f_title.render(self.t("touch_warn_title"), True, C.COLOR_DANGER)
         total = (title.get_height() + self.gap_l + len(body) * self.pitch_body
                  + self.gap_xl + self.btn_h_hero)
         y = max(self.pad, (C.SCREEN_HEIGHT - total) // 2)
@@ -2599,10 +2665,10 @@ class Game:
         if ready:
             self._draw_tap_button(rect, confirm_label, pygame.K_RETURN)
         else:
-            radius = max(8, rect.height // 8)
-            pygame.draw.rect(self.screen, (30, 30, 36), rect, border_radius=radius)
-            pygame.draw.rect(self.screen, (70, 70, 80), rect, width=3, border_radius=radius)
-            label = self.f_body.render(confirm_label, True, (110, 110, 120))
+            radius = rect.height // 4
+            pygame.draw.rect(self.screen, C.COLOR_SURFACE, rect, border_radius=radius)
+            pygame.draw.rect(self.screen, C.COLOR_BORDER, rect, width=2, border_radius=radius)
+            label = self.f_body.render(confirm_label, True, C.COLOR_TEXT_DIM)
             self.screen.blit(label, label.get_rect(center=rect.center))
 
     def _render_update(self):
@@ -2662,7 +2728,7 @@ class Game:
         if phase not in ("downloading", "restarting"):
             row.append((self.t("btn_back"), pygame.K_ESCAPE))
         if row:
-            self._button_row(row, y)
+            self._button_row(row, y, primary_first=(phase in ("available", "error", "needs_permission")))
 
     def _wrap_text(self, text, font, max_width):
         words = text.split(" ")
@@ -2685,7 +2751,7 @@ class Game:
         self._tap_targets = []
         cx = C.SCREEN_WIDTH // 2
 
-        title = self.f_title.render(self.t("levelup_title"), True, (230, 200, 60))
+        title = self.f_title.render(self.t("levelup_title"), True, C.COLOR_ACCENT)
         hint = self.f_sm.render(self.t("levelup_hint"), True, C.COLOR_HELP_TEXT)
 
         card_h = (self.f_h1.get_linesize() + self.gap_s + self.pitch_body
@@ -2704,8 +2770,8 @@ class Game:
         for i, perk in enumerate(self.perk_choices):
             x = x0 + i * (card_w + self.gap_l)
             card = pygame.Rect(x, y, card_w, card_h)
-            pygame.draw.rect(self.screen, (28, 28, 38), card, border_radius=self.gap_m)
-            pygame.draw.rect(self.screen, (120, 120, 150), card, width=3, border_radius=self.gap_m)
+            self._panel(card, fill=C.COLOR_SURFACE, border=C.COLOR_BORDER_HI,
+                        radius=self.gap_m)
 
             cy = y + self.gap_s
             name = self.f_h1.render(f"{i + 1}. {self._perk_name(perk)}", True, (255, 255, 255))
@@ -2718,10 +2784,9 @@ class Game:
             # strip stays only so it is obvious the card is tappable.
             strip = pygame.Rect(x + self.gap_m, card.bottom - self.btn_h - self.gap_s,
                                 card_w - 2 * self.gap_m, self.btn_h)
-            radius = max(8, strip.height // 8)
-            pygame.draw.rect(self.screen, (45, 45, 58), strip, border_radius=radius)
-            pygame.draw.rect(self.screen, (130, 130, 150), strip, width=3, border_radius=radius)
-            label = self.f_body.render(self.t("btn_choose"), True, C.COLOR_HUD_TEXT)
+            self._panel(strip, fill=C.COLOR_ACCENT, border=C.COLOR_ACCENT,
+                        radius=strip.height // 4, shadow=False)
+            label = self.f_body.render(self.t("btn_choose"), True, C.COLOR_ON_ACCENT)
             self.screen.blit(label, label.get_rect(center=strip.center))
             self._tap_targets.append((card, keys[i]))
 
@@ -2778,10 +2843,14 @@ class Game:
         bar_w = min(self.content_w, C.SCREEN_WIDTH // 2)
         bar_h = self.f_sm.get_linesize() + self.gap_s
         x, y = C.SCREEN_WIDTH // 2 - bar_w // 2, self.gap_s
-        pygame.draw.rect(self.screen, (40, 10, 40), (x, y, bar_w, bar_h))
+        rad = bar_h // 2
+        pygame.draw.rect(self.screen, (38, 14, 40), (x, y, bar_w, bar_h), border_radius=rad)
         ratio = max(0, boss.hp / boss.max_hp)
-        pygame.draw.rect(self.screen, C.COLOR_BOSS, (x, y, int(bar_w * ratio), bar_h))
-        pygame.draw.rect(self.screen, (200, 200, 210), (x, y, bar_w, bar_h), width=2)
+        if ratio > 0:
+            pygame.draw.rect(self.screen, C.COLOR_BOSS,
+                             (x, y, max(bar_h, int(bar_w * ratio)), bar_h), border_radius=rad)
+        pygame.draw.rect(self.screen, C.COLOR_BORDER_HI, (x, y, bar_w, bar_h),
+                         width=2, border_radius=rad)
         boss_name = self._monster_display_name(boss).upper()
         name_text = self.font.render(f"{boss_name}  {max(0, boss.hp)}/{boss.max_hp}", True, (255, 255, 255))
         self.screen.blit(name_text, name_text.get_rect(center=(C.SCREEN_WIDTH // 2, y + bar_h // 2)))
@@ -2972,6 +3041,9 @@ class Game:
         # map/HUD split lands on a given device.
         hud_y = C.MAP_HEIGHT * C.TILE_SIZE
         pygame.draw.rect(self.screen, C.COLOR_HUD_BG, (0, hud_y, C.SCREEN_WIDTH, C.HUD_HEIGHT))
+        # A hairline separates the HUD from the dungeon instead of the two
+        # dark areas blending into each other.
+        pygame.draw.rect(self.screen, C.COLOR_BORDER, (0, hud_y, C.SCREEN_WIDTH, 2))
 
         f = self.f_sm
         row_h = f.get_linesize() + self.gap_s // 2
@@ -2985,15 +3057,20 @@ class Game:
         bar_w = min(col_w - pad * 2, int(col_w * 0.55))
         bar_h = f.get_height()
 
-        pygame.draw.rect(self.screen, C.COLOR_HP_BAR_BG, (left_x, y, bar_w, bar_h))
+        r = bar_h // 2
+        pygame.draw.rect(self.screen, C.COLOR_HP_BAR_BG, (left_x, y, bar_w, bar_h), border_radius=r)
         hp_ratio = max(0, self.player.hp / self.player.max_hp)
-        pygame.draw.rect(self.screen, C.COLOR_HP_BAR_FG, (left_x, y, int(bar_w * hp_ratio), bar_h))
+        if hp_ratio > 0:
+            pygame.draw.rect(self.screen, C.COLOR_HP_BAR_FG,
+                             (left_x, y, max(bar_h, int(bar_w * hp_ratio)), bar_h), border_radius=r)
         self.screen.blit(f.render(f"HP {max(0, self.player.hp)}/{self.player.max_hp}", True,
                                   C.COLOR_HUD_TEXT), (left_x + bar_w + self.gap_s, y))
 
-        pygame.draw.rect(self.screen, C.COLOR_XP_BAR_BG, (right_x, y, bar_w, bar_h))
+        pygame.draw.rect(self.screen, C.COLOR_XP_BAR_BG, (right_x, y, bar_w, bar_h), border_radius=r)
         xp_ratio = self.player.xp / self.player.xp_to_next
-        pygame.draw.rect(self.screen, C.COLOR_XP_BAR_FG, (right_x, y, int(bar_w * xp_ratio), bar_h))
+        if xp_ratio > 0:
+            pygame.draw.rect(self.screen, C.COLOR_XP_BAR_FG,
+                             (right_x, y, max(bar_h, int(bar_w * xp_ratio)), bar_h), border_radius=r)
         self.screen.blit(
             f.render(f"Lv {self.player.level}  XP {self.player.xp}/{self.player.xp_to_next}",
                      True, C.COLOR_HUD_TEXT), (right_x + bar_w + self.gap_s, y))
@@ -3001,7 +3078,7 @@ class Game:
 
         # Two columns: equipment left, resources right. Icons reuse the
         # same glyph and colour these items have on the map.
-        weapon_color = C.RARITY_BY_ID.get(self.player.weapon_rarity_id, {}).get("color", (215, 215, 230))
+        weapon_color = C.RARITY_BY_ID.get(self.player.weapon_rarity_id, {}).get("color", C.COLOR_TEXT)
         weapon_suffix = f" [{self.te(self.player.weapon_element_id)}]" if self.player.weapon_element_id else ""
         self._hud_icon_row(left_x, y, "/", weapon_color,
                            f"{self.tn(self.player.weapon_name)} (+{self.player.weapon_bonus}){weapon_suffix}",
@@ -3010,7 +3087,7 @@ class Game:
                            f"{self.t('hud_potions')} {self.player.potions}")
         y += row_h
 
-        armor_color = C.RARITY_BY_ID.get(self.player.armor_rarity_id, {}).get("color", (170, 170, 185))
+        armor_color = C.RARITY_BY_ID.get(self.player.armor_rarity_id, {}).get("color", C.COLOR_TEXT)
         self._hud_icon_row(left_x, y, "[", armor_color,
                            f"{self.tn(self.player.armor_name)} (+{self.player.armor_bonus})",
                            label_color=armor_color)
@@ -3050,11 +3127,12 @@ class Game:
         self.screen.blit(label, (x + self.f_sm.size("XX")[0], y))
 
     def _draw_touch_button(self, rect, label, active=False):
-        radius = max(6, rect.height // 8)
-        fill = (90, 90, 110) if active else (40, 40, 50)
-        pygame.draw.rect(self.screen, fill, rect, border_radius=radius)
-        pygame.draw.rect(self.screen, (150, 150, 170), rect, width=3, border_radius=radius)
-        text = self.f_sm.render(label, True, C.COLOR_HUD_TEXT)
+        radius = rect.height // 4
+        fill = C.COLOR_ACCENT if active else C.COLOR_SURFACE
+        border = C.COLOR_ACCENT if active else C.COLOR_BORDER
+        self._panel(rect, fill=fill, border=border, radius=radius, shadow=not active)
+        text = self.f_sm.render(label, True,
+                                C.COLOR_ON_ACCENT if active else C.COLOR_TEXT)
         self.screen.blit(text, text.get_rect(center=rect.center))
 
     def _render_touch_controls(self):
@@ -3085,7 +3163,7 @@ class Game:
         if self.new_best:
             lines.append(best_line)
 
-        title = self.f_title.render(self.t("gameover_title"), True, (200, 40, 40))
+        title = self.f_title.render(self.t("gameover_title"), True, C.COLOR_DANGER)
         total = (title.get_height() + self.gap_l + len(lines) * self.pitch_body
                  + self.gap_xl + self.btn_h_hero)
         y = max(self.pad, (C.SCREEN_HEIGHT - total) // 2)
@@ -3103,4 +3181,4 @@ class Game:
             (self.t("btn_restart"), pygame.K_r),
             (self.t("btn_stats"), pygame.K_s),
             (self.t("btn_quit"), pygame.K_ESCAPE),
-        ], y, height=self.btn_h_hero)
+        ], y, height=self.btn_h_hero, primary_first=True)
