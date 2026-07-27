@@ -58,6 +58,7 @@ DEFAULT_SETTINGS = {
     "show_touch_controls": True,
     "volume": 0.4,
     "music": True,
+    "difficulty": "normal",
 }
 
 DEFAULT_STATS = {

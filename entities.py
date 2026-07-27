@@ -30,11 +30,15 @@ class Entity:
 
 
 class Player(Entity):
-    def __init__(self, x, y):
+    def __init__(self, x, y, hp_mult=1.0):
         super().__init__(x, y, "@", C.COLOR_PLAYER, "you")
         self.facing = 1
-        self.max_hp = 20
-        self.hp = 20
+        # The difficulty's HP multiplier is baked into the pool itself
+        # rather than applied on read, so every later +max_hp (level-ups,
+        # Vitality perk, potions) stacks on top of the adjusted base
+        # instead of being silently rescaled too.
+        self.max_hp = max(5, int(round(20 * hp_mult)))
+        self.hp = self.max_hp
         self.base_power = 4
         self.base_defense = 1
         self.weapon_bonus = 0
@@ -52,6 +56,7 @@ class Player(Entity):
         self.gold = 0
         self.scrolls = {"fireball": 0, "teleport": 0, "reveal": 0}
         self.poison_turns = 0
+        self.bleed_turns = 0
         self.potions_drunk_this_run = 0
         self.bonus_crit_chance = 0.0
         self.bonus_damage_reduction = 0.0
@@ -92,7 +97,8 @@ class Player(Entity):
 
 
 class Monster(Entity):
-    def __init__(self, x, y, kind, boss=False, elite=None, tier_mult=1.0):
+    def __init__(self, x, y, kind, boss=False, elite=None, tier_mult=1.0,
+                 level=1, diff_hp=1.0, diff_damage=1.0):
         stats = C.MONSTER_TYPES[kind]
         char = stats["char"].upper() if boss else stats["char"]
         color = C.COLOR_BOSS if boss else stats["color"]
@@ -128,6 +134,14 @@ class Monster(Entity):
             base_defense = int(base_defense * tier_mult)
             base_xp = max(1, int(base_xp * tier_mult))
 
+        # The chosen difficulty scales health and damage but deliberately
+        # NOT xp: otherwise Hardcore would also hand out double experience
+        # and partly undo its own difficulty.
+        if diff_hp != 1.0:
+            base_hp = max(1, int(round(base_hp * diff_hp)))
+        if diff_damage != 1.0:
+            base_power = max(1, int(round(base_power * diff_damage)))
+
         self.max_hp = base_hp
         self.hp = self.max_hp
         self.power = base_power
@@ -136,6 +150,9 @@ class Monster(Entity):
         self.tier_mult = tier_mult
         self.is_boss = boss
         self.awake = False
+        # Shown on the nameplate above the monster - the dungeon floor it
+        # was spawned on, which is what its stats were scaled by.
+        self.level = level
 
         self.ranged = stats.get("ranged", False)
         self.speed = stats.get("speed", 1) + (elite["speed_bonus"] if elite and "speed_bonus" in elite else 0)
@@ -152,6 +169,11 @@ class Monster(Entity):
         self.burn_turns = 0
         self.weaken_turns = 0
         self.stun_turns = 0
+        self.bleed_turns = 0
+        self.slow_turns = 0
+        # Flips every turn while slowed so the monster acts on half of
+        # them; see Game._enemy_turn.
+        self.slow_skip = False
 
         # Boss-only signature mechanics (see Game._boss_special_action) -
         # harmless no-ops on regular monsters, which never check them.

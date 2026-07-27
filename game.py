@@ -339,13 +339,49 @@ class Game:
         self.save_button = pygame.Rect(
             C.SCREEN_WIDTH - self.gap_m - menu_w, self.gap_m, menu_w, self.btn_h)
 
-    def start_new_run(self):
+    def _diff(self):
+        """The chosen difficulty's multiplier set, never None."""
+        return C.DIFFICULTY_BY_ID.get(
+            getattr(self, "difficulty", C.DEFAULT_DIFFICULTY),
+            C.DIFFICULTY_BY_ID[C.DEFAULT_DIFFICULTY],
+        )
+
+    def _difficulty_name(self, diff):
+        if self._lang() == "de":
+            return loc.DIFFICULTY_DE.get(diff["id"], diff["name"])
+        return diff["name"]
+
+    def _make_monster(self, x, y, kind, boss=False, elite=None, tier_mult=None):
+        """Every monster spawn goes through here.
+
+        Centralising it is what keeps the floor's tier multiplier and the
+        run's difficulty applied consistently - summoned minions and
+        ambushers used to be created with the bare base stats, so on deep
+        floors a boss's adds were harmless.
+        """
+        d = self._diff()
+        if tier_mult is None:
+            tier_mult = getattr(self, "tier", {}).get("mult", 1.0)
+        return entities.Monster(
+            x, y, kind, boss=boss, elite=elite, tier_mult=tier_mult,
+            level=getattr(self, "dungeon_level", 1),
+            diff_hp=d["enemy_hp"], diff_damage=d["enemy_damage"],
+        )
+
+    def start_new_run(self, difficulty=None):
         persistence.delete_save()
         self.save_data = None
 
+        if difficulty is not None:
+            self.difficulty = difficulty
+            self.settings["difficulty"] = difficulty
+            persistence.save_settings(self.settings)
+        else:
+            self.difficulty = self.settings.get("difficulty", C.DEFAULT_DIFFICULTY)
+
         self.dungeon_level = 1
         self.log = []
-        self.player = entities.Player(0, 0)
+        self.player = entities.Player(0, 0, hp_mult=self._diff()["player_hp"])
         self.level_history = {}
         self.shake_timer = 0
         self.shake_intensity = 0
@@ -367,6 +403,7 @@ class Game:
             self.start_new_run()
             return
 
+        self.difficulty = data.get("difficulty", C.DEFAULT_DIFFICULTY)
         self.dungeon_level = data["dungeon_level"]
         self.log = list(data.get("log", []))
 
@@ -392,6 +429,7 @@ class Game:
         player.gold = p.get("gold", 0)
         player.scrolls = dict(p.get("scrolls", {"fireball": 0, "teleport": 0, "reveal": 0}))
         player.poison_turns = p.get("poison_turns", 0)
+        player.bleed_turns = p.get("bleed_turns", 0)
         player.potions_drunk_this_run = p.get("potions_drunk_this_run", 0)
         player.bonus_crit_chance = p.get("bonus_crit_chance", 0.0)
         player.bonus_damage_reduction = p.get("bonus_damage_reduction", 0.0)
@@ -440,6 +478,7 @@ class Game:
     def _build_save_data(self):
         p = self.player
         return {
+            "difficulty": getattr(self, "difficulty", C.DEFAULT_DIFFICULTY),
             "dungeon_level": self.dungeon_level,
             "log": self.log,
             "player": {
@@ -452,6 +491,7 @@ class Game:
                 "level": p.level, "xp": p.xp, "xp_to_next": p.xp_to_next,
                 "potions": p.potions, "kills": p.kills, "facing": p.facing,
                 "gold": p.gold, "scrolls": dict(p.scrolls), "poison_turns": p.poison_turns,
+                "bleed_turns": p.bleed_turns,
                 "potions_drunk_this_run": p.potions_drunk_this_run,
                 "bonus_crit_chance": p.bonus_crit_chance,
                 "bonus_damage_reduction": p.bonus_damage_reduction,
@@ -481,6 +521,14 @@ class Game:
         return {
             "x": m.x, "y": m.y, "kind": m.kind, "boss": m.is_boss, "hp": m.hp, "awake": m.awake,
             "elite_name": m.elite_name, "is_split_child": m.is_split_child, "enraged": m.enraged,
+            # The derived combat stats are stored outright rather than
+            # recomputed on load. Rebuilding from kind+elite alone dropped
+            # the floor's tier multiplier entirely, so revisiting a deep
+            # level (or reloading a deep save) reset every monster to its
+            # level-1 base stats while keeping its saved hp - which could
+            # leave hp far above max_hp.
+            "level": m.level, "max_hp": m.max_hp, "power": m.power,
+            "defense": m.defense, "xp_reward": m.xp_reward, "tier_mult": m.tier_mult,
         }
 
     @staticmethod
@@ -488,12 +536,23 @@ class Game:
         elite = None
         if m.get("elite_name"):
             elite = next((e for e in C.ELITE_MODIFIERS if e["name"] == m["elite_name"]), None)
-        monster = entities.Monster(m["x"], m["y"], m["kind"], boss=m["boss"], elite=elite)
-        monster.hp = m["hp"]
+        monster = entities.Monster(
+            m["x"], m["y"], m["kind"], boss=m["boss"], elite=elite,
+            tier_mult=m.get("tier_mult", 1.0), level=m.get("level", 1),
+        )
+        if "max_hp" in m:
+            monster.max_hp = m["max_hp"]
+            monster.power = m["power"]
+            monster.defense = m["defense"]
+            monster.xp_reward = m["xp_reward"]
+        monster.hp = min(m["hp"], monster.max_hp)
         monster.awake = m["awake"]
         monster.is_split_child = m.get("is_split_child", False)
         monster.enraged = m.get("enraged", False)
-        if monster.enraged:
+        if monster.enraged and "max_hp" not in m:
+            # Older saves stored no derived stats, so the enrage bonus has
+            # to be re-applied by hand; newer ones already have it baked
+            # into the saved power.
             monster.power = int(monster.power * 1.5)
         return monster
 
@@ -601,15 +660,14 @@ class Game:
             x, y = self._random_floor_in_room(room)
             if not self._is_occupied(x, y):
                 kind = random.choices(monster_kinds, weights=weights, k=1)[0]
-                self.monsters.append(entities.Monster(
-                    x, y, kind, elite=self._maybe_elite(), tier_mult=self.tier["mult"]))
+                self.monsters.append(self._make_monster(
+                    x, y, kind, elite=self._maybe_elite()))
 
         if self.dungeon_level % 5 == 0:
             bx, by = self.stairs_pos
             tier = (self.dungeon_level // 5 - 1) % len(C.BOSS_KIND_CYCLE)
             boss_kind = C.BOSS_KIND_CYCLE[tier]
-            self.monsters.append(entities.Monster(
-                bx, by, boss_kind, boss=True, tier_mult=self.tier["mult"]))
+            self.monsters.append(self._make_monster(bx, by, boss_kind, boss=True))
             self.add_log(self.t("log_boss_guards"))
 
         for _ in range(random.randint(1, 3)):
@@ -1511,18 +1569,29 @@ class Game:
         self._maybe_show_levelup_choice()
 
     def _tick_poison(self):
-        if self.player.poison_turns <= 0:
-            return
-        self.player.poison_turns -= 1
-        dmg = C.POISON_DAMAGE_PER_TURN
-        self.player.hp -= dmg
-        self._spawn_damage_number(self.player.x, self.player.y, str(dmg), C.COLOR_POISON)
-        self.add_log(self.t("log_poison_damage", dmg=dmg))
-        if self.player.hp <= 0:
-            self.add_log(self.t("log_succumb_poison"))
-            self.sounds.play("death")
-            self.state = "dead"
-            self._finalize_run()
+        """Damage-over-time the player is carrying, one turn's worth.
+
+        Poison and bleed are both handled here so a single call site in
+        _player_turn covers everything that ticks down on the player.
+        """
+        for field, per_turn, color, log_key, death_key in (
+            ("poison_turns", C.POISON_DAMAGE_PER_TURN, C.COLOR_POISON,
+             "log_poison_damage", "log_succumb_poison"),
+            ("bleed_turns", C.BLEED_DAMAGE_PER_TURN, C.COLOR_DANGER,
+             "log_bleed_damage", "log_succumb_bleed"),
+        ):
+            if getattr(self.player, field) <= 0:
+                continue
+            setattr(self.player, field, getattr(self.player, field) - 1)
+            self.player.hp -= per_turn
+            self._spawn_damage_number(self.player.x, self.player.y, str(per_turn), color)
+            self.add_log(self.t(log_key, dmg=per_turn))
+            if self.player.hp <= 0:
+                self.add_log(self.t(death_key))
+                self.sounds.play("death")
+                self.state = "dead"
+                self._finalize_run()
+                return
 
     def _tick_regen(self):
         if not self.player.regen_interval or self.player.hp >= self.player.max_hp:
@@ -1606,7 +1675,7 @@ class Game:
                 break
             if not dungeon.is_walkable(self.grid, x, y) or self._is_occupied(x, y):
                 continue
-            monster = entities.Monster(x, y, random.choice(kinds), elite=self._maybe_elite())
+            monster = self._make_monster(x, y, random.choice(kinds), elite=self._maybe_elite())
             monster.awake = True
             self.monsters.append(monster)
             spawned += 1
@@ -1711,14 +1780,24 @@ class Game:
         self._check_achievements()
         self._maybe_show_levelup_choice()
 
+    def _shop_price(self, stock):
+        """Listed price after the difficulty's per-floor markup.
+
+        On the harder settings the merchant stops being a reliable safety
+        valve the deeper you go, which is the point.
+        """
+        markup = self._diff()["shop_markup_per_level"] * max(0, self.dungeon_level - 1)
+        return int(round(stock["price"] * (1 + markup)))
+
     def _buy_item(self, index):
         if index < 0 or index >= len(C.SHOP_STOCK):
             return
         stock = C.SHOP_STOCK[index]
-        if self.player.gold < stock["price"]:
+        price = self._shop_price(stock)
+        if self.player.gold < price:
             self.add_log(self.t("log_not_enough_gold"))
             return
-        self.player.gold -= stock["price"]
+        self.player.gold -= price
         if stock["kind"] == "potion":
             self.player.potions += 1
         elif stock["kind"] == "scroll":
@@ -1802,6 +1881,8 @@ class Game:
         damage = max(1, attacker.power - defense)
         if crit:
             damage *= 2
+        if attacker is self.player:
+            damage = max(1, int(round(damage * self._diff()["player_damage"])))
 
         element_status_applied = None
         if attacker is self.player and self.player.weapon_element_id:
@@ -1817,6 +1898,11 @@ class Game:
                 status_field = elem["status"]
                 setattr(defender, status_field, max(getattr(defender, status_field, 0), elem["duration"]))
                 element_status_applied = status_field
+                if self.player.weapon_element_id == "frost":
+                    # Frost carries two effects, not one: the defence
+                    # debuff it always had, plus the slow that makes it
+                    # actual crowd control rather than a damage variant.
+                    defender.slow_turns = max(getattr(defender, "slow_turns", 0), C.SLOW_TURNS)
 
         if defender is self.player and self.player.bonus_damage_reduction:
             damage = max(1, round(damage * (1 - self.player.bonus_damage_reduction)))
@@ -1853,6 +1939,15 @@ class Game:
         if getattr(attacker, "poisons_on_hit", False) and defender is self.player and defender.hp > 0:
             defender.poison_turns = max(defender.poison_turns, 5)
             self.add_log(self.t("log_poison_bite"))
+
+        # A critical melee hit opens a wound. This is what gives crits a
+        # payoff beyond the doubled number - and it is deliberately not
+        # tied to any element, so an unenchanted weapon benefits too.
+        if crit and defender.hp > 0:
+            defender.bleed_turns = max(getattr(defender, "bleed_turns", 0), C.BLEED_TURNS)
+            if defender is not self.player:
+                self.add_log(self.t("log_status_bleed",
+                                    monster=self._monster_named(defender, "nom")))
 
         if element_status_applied and defender.hp > 0:
             log_key = self._ELEMENT_STATUS_LOG_KEY[element_status_applied]
@@ -1893,7 +1988,7 @@ class Game:
                 break
             if not dungeon.is_walkable(self.grid, x, y) or self._is_occupied(x, y):
                 continue
-            child = entities.Monster(x, y, parent.kind)
+            child = self._make_monster(x, y, parent.kind)
             child.max_hp = max(1, parent.max_hp // 2)
             child.hp = child.max_hp
             child.power = parent.power
@@ -2050,8 +2145,28 @@ class Game:
                 self._on_monster_death(monster)
                 return stunned
 
+        if monster.bleed_turns > 0:
+            monster.bleed_turns -= 1
+            dmg = C.BLEED_DAMAGE_PER_TURN
+            monster.hp -= dmg
+            self._spawn_damage_number(monster.x, monster.y, str(dmg), C.COLOR_DANGER)
+            if monster.hp <= 0:
+                self._on_monster_death(monster)
+                return stunned
+
         if monster.weaken_turns > 0:
             monster.weaken_turns -= 1
+
+        if monster.slow_turns > 0:
+            monster.slow_turns -= 1
+            # Acts on every other turn while slowed. Flipping the flag
+            # here (rather than counting turns elsewhere) means the very
+            # first turn after being frozen is always a lost one.
+            monster.slow_skip = not monster.slow_skip
+            if monster.slow_skip:
+                stunned = True
+        else:
+            monster.slow_skip = False
 
         return stunned
 
@@ -2133,7 +2248,7 @@ class Game:
         random.shuffle(spots)
         for x, y in spots:
             if dungeon.is_walkable(self.grid, x, y) and not self._is_occupied(x, y):
-                minion = entities.Monster(x, y, "skeleton")
+                minion = self._make_monster(x, y, "skeleton")
                 minion.awake = True
                 self.monsters.append(minion)
                 self.add_log(self.t("log_boss_summon", monster=self._monster_named(boss, "nom")))
@@ -2841,7 +2956,7 @@ class Game:
         row_h = max(self.btn_h, min(self.btn_h, (avail - self.gap_s * (n - 1)) // max(1, n)))
         buy_w = self._btn_w(self.t("btn_buy"))
         for i, stock in enumerate(C.SHOP_STOCK):
-            label = f"{i + 1}. {self.tn(stock['name'])} - {stock['price']} {self.t('gold_word')}"
+            label = f"{i + 1}. {self.tn(stock['name'])} - {self._shop_price(stock)} {self.t('gold_word')}"
             text = self.f_body.render(label, True, C.COLOR_HUD_TEXT)
             self.screen.blit(text, text.get_rect(midleft=(self.pad, y + row_h // 2)))
             self._draw_tap_button(

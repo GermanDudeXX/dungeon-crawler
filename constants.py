@@ -265,6 +265,49 @@ ELEMENT_WEAPON_CHANCE = 0.3
 ELEMENT_MIN_LEVEL = 2
 BURN_DAMAGE_PER_TURN = 3
 WEAKEN_DEFENSE_MULT = 0.6
+# Bleed is the crit-only counterpart to poison: roughly double the damage
+# over half the duration, so it matters in the fight it started rather
+# than being a slow drain. Applied by any critical melee hit (see
+# Game._attack), independent of whatever element the weapon carries.
+BLEED_DAMAGE_PER_TURN = 5
+BLEED_TURNS = 2
+# Frost additionally slows: a slowed monster only gets to act on every
+# other turn (see Game._enemy_turn), which is what turns the element from
+# "slightly more damage" into real crowd control.
+SLOW_TURNS = 3
+
+# Every status a monster (or the player) can carry, in the order they are
+# drawn above the health bar. "field" is the attribute holding the
+# remaining turn count; "char" is the single-glyph badge.
+STATUS_BADGES = [
+    {"field": "burn_turns", "char": "F", "color": (255, 100, 30)},
+    {"field": "poison_turns", "char": "G", "color": (110, 200, 90)},
+    {"field": "bleed_turns", "char": "B", "color": (224, 60, 60)},
+    {"field": "stun_turns", "char": "!", "color": (255, 230, 80)},
+    {"field": "slow_turns", "char": "S", "color": (120, 200, 255)},
+    {"field": "weaken_turns", "char": "W", "color": (150, 170, 220)},
+]
+
+# Difficulty multipliers, chosen once per run. player_hp scales the
+# starting/max pool, the two damage numbers scale dealt/received damage,
+# and shop_markup_per_level makes the merchant progressively gouge you on
+# the harder settings instead of being a flat safety valve.
+DIFFICULTIES = [
+    {"id": "easy", "name": "Easy", "player_damage": 1.0, "player_hp": 2.0,
+     "enemy_hp": 0.75, "enemy_damage": 0.5, "shop_markup_per_level": 0.0,
+     "color": (91, 201, 138)},
+    {"id": "normal", "name": "Normal", "player_damage": 1.0, "player_hp": 1.0,
+     "enemy_hp": 1.0, "enemy_damage": 1.0, "shop_markup_per_level": 0.0,
+     "color": (230, 234, 242)},
+    {"id": "hard", "name": "Hard", "player_damage": 1.2, "player_hp": 0.75,
+     "enemy_hp": 1.25, "enemy_damage": 1.25, "shop_markup_per_level": 0.20,
+     "color": (232, 181, 75)},
+    {"id": "hardcore", "name": "Hardcore", "player_damage": 0.5, "player_hp": 0.5,
+     "enemy_hp": 2.0, "enemy_damage": 2.0, "shop_markup_per_level": 0.50,
+     "color": (224, 91, 91)},
+]
+DIFFICULTY_BY_ID = {d["id"]: d for d in DIFFICULTIES}
+DEFAULT_DIFFICULTY = "normal"
 
 PERKS = [
     {"id": "power", "name": "Brute Strength", "desc": "+2 Power", "power": 2},

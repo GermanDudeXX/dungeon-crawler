@@ -96,27 +96,40 @@ Von der Ideen-Liste waren **12 Punkte drin, 7 halb, 25+ offen**, Tränke 1 von 3
   xp_reward/tier_mult/level ✔ **(behebt echten Bug: beim Laden/Zurückkehren
   verloren Monster ihre Tier-Skalierung und hp konnte > max_hp sein)**
 
-### Welle 1 — NOCH ZU TUN
-1. Alle `entities.Monster(` Aufrufe in game.py auf `self._make_monster(` umstellen
-   (Stellen: `_populate_level` ×2, `_spawn_shrine_ambush`, `_spawn_slime_children`,
-   `_boss_summon_skeleton`). Achtung: `_spawn_slime_children` überschreibt Stats
-   danach eh selbst.
-2. `_attack`: Spieler-Schadensmultiplikator (`_diff()["player_damage"]`),
-   **Bluten bei Krit**, **Frost setzt zusätzlich `slow_turns`**.
-3. `_tick_monster_status`: bleed-Tick + slow-Tick.
-4. `_tick_poison` → in `_tick_status_player` umbauen: Gift **und** Bluten.
-5. `_enemy_turn`: `slow_skip` auswerten (nur jede 2. Runde handeln).
-6. **`_render_nameplates()`** — neu, nach `_render_entities` aufrufen:
-   pro sichtbarem Monster HP-Balken + `Name Lv{n}` + Status-Badges.
-   **Perf:** Namens-Surfaces in `self._name_cache` (dict) cachen, kleine Font
-   `self.f_tiny` aus `_build_ui_metrics`.
-7. Schwierigkeitsauswahl: neuer State `difficulty_select`, aus dem Titel bei
-   NEUER LAUF; `_render_difficulty_select()`; Tasten 1–4.
-8. Shop-Aufschlag: `shop_markup_per_level` in `_buy_item` + `_render_shop`.
-9. `persistence.py`: `"difficulty": "normal"` in `DEFAULT_SETTINGS`.
-10. `locale_text.py`: `DIFFICULTY_DE`, `difficulty_title`, `difficulty_hint`,
-    `hud_bleeding`, `log_bleed_damage`, `log_status_bleed`, `log_status_slow`,
-    Statuszeile im Tutorial.
+### Welle 1 — Stand nach Commit 2 (Session-Limit erreicht)
+**FERTIG und getestet** (alle 9 Regressionssuiten grün, Werte geprüft:
+easy/normal/hard/hardcore → Ork-HP 10/14/18/28, Trankpreis Ebene 5 12/12/22/36):
+- Alle Spawns laufen über `self._make_monster(` — Tier- und Schwierigkeits-
+  Skalierung greift jetzt auch bei beschworenen Minions und Hinterhalten
+- `_attack`: Spieler-Schadensmultiplikator, **Bluten bei jedem Krit**,
+  **Frost setzt zusätzlich `slow_turns`**
+- `_tick_monster_status`: bleed-Tick + slow (alternierend, erste Runde fällt aus —
+  geprüft: Muster `[True, False, True, False]`)
+- `_tick_poison` deckt jetzt Gift **und** Bluten ab
+- Shop-Aufschlag `_shop_price()` in `_buy_item` + `_render_shop`
+- `persistence.py`: `"difficulty": "normal"` in DEFAULT_SETTINGS
+- `locale_text.py`: `DIFFICULTY_DE`, `difficulty_title/hint`, `hud_bleeding`,
+  `log_bleed_damage`, `log_succumb_bleed`, `log_status_bleed`, `log_status_slow`
+
+**REST VON WELLE 1 — als Nächstes dran:**
+1. `_enemy_turn`: prüfen, ob `slow_skip` dort noch zusätzlich ausgewertet werden
+   muss — aktuell wird der Skip über den `stunned`-Rückgabewert von
+   `_tick_monster_status` transportiert, das *sollte* reichen (dieselbe
+   `continue`-Stelle wie bei Betäubung), ist aber noch nicht end-to-end getestet.
+2. **`_render_nameplates()`** — neu, in `render()` direkt nach
+   `_render_entities(ox, oy)` aufrufen: pro sichtbarem Monster HP-Balken +
+   `Name Lv{n}` + Status-Badges aus `C.STATUS_BADGES`.
+   **Perf-Pflicht:** Namens-Surfaces in `self._name_cache` (dict) cachen,
+   kleine Font `self.f_tiny` in `_build_ui_metrics` anlegen. Niemals pro Frame
+   neu rendern — das war die Ursache der alten 3,9-fps-Katastrophe.
+3. Schwierigkeitsauswahl-Screen: neuer State `difficulty_select`, vom Titel aus
+   bei NEUER LAUF (`pygame.K_n`) statt direkt `start_new_run()`;
+   `_render_difficulty_select()` mit 4 Karten (Farben stehen in
+   `C.DIFFICULTIES[*]["color"]`), Tasten 1–4 → `start_new_run(id)`.
+   **Funktioniert schon ohne Screen** — es greift dann `settings["difficulty"]`.
+4. HUD: Blutungs-Chip analog zum Gift-Chip in `_render_hud` (`hud_bleeding`).
+5. Tutorial: Abschnitt über Status-Effekte ergänzen.
+6. `CHANGELOG.md` + `assets/build_version.txt` hochzählen, ausliefern.
 
 ### Test/Release-Ritual (bei JEDEM Abschluss)
 ```

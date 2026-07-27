@@ -217,6 +217,8 @@ STRINGS = {
     "log_boss_guards": {"en": "A powerful presence guards the stairs...", "de": "Eine mächtige Präsenz bewacht die Treppe..."},
     "log_poison_damage": {"en": "Poison deals {dmg} damage.", "de": "Gift verursacht {dmg} Schaden."},
     "log_succumb_poison": {"en": "You succumb to the poison.", "de": "Du erliegst dem Gift."},
+    "log_bleed_damage": {"en": "You bleed for {dmg} damage.", "de": "Du blutest und verlierst {dmg} Leben."},
+    "log_succumb_bleed": {"en": "You bleed out.", "de": "Du verblutest."},
     "log_trap_damage": {"en": "You trigger a {trap}! -{dmg} HP.", "de": "Du löst eine {trap} aus! -{dmg} HP."},
     "log_trap_finish": {"en": "The trap finishes you off.", "de": "Die Falle tötet dich."},
     "log_trap_poison": {"en": "You trigger a {trap}! You are poisoned.", "de": "Du löst eine {trap} aus! Du bist vergiftet."},
@@ -246,6 +248,16 @@ STRINGS = {
     "log_status_weaken": {"en": "{monster} is chilled and weakened!", "de": "{monster} wird erstarrt und geschwächt!"},
     "log_status_stun": {"en": "{monster} is stunned!", "de": "{monster} wird betäubt!"},
     "log_status_poison": {"en": "{monster} is poisoned!", "de": "{monster} wird vergiftet!"},
+    "log_status_bleed": {"en": "{monster} is bleeding!", "de": "{monster} blutet!"},
+    "log_status_slow": {"en": "{monster} is slowed!", "de": "{monster} wird verlangsamt!"},
+    "hud_bleeding": {"en": "Bleeding", "de": "Blutend"},
+
+    # --- difficulty ---
+    "difficulty_title": {"en": "DIFFICULTY", "de": "SCHWIERIGKEIT"},
+    "difficulty_hint": {
+        "en": "Chosen once per run. Affects your health and damage, the enemies', and prices.",
+        "de": "Gilt für den ganzen Lauf: dein Leben und Schaden, das der Gegner, und die Preise.",
+    },
     "log_boss_enrage": {"en": "{monster} flies into a rage!", "de": "{monster} gerät in Rage!"},
     "log_boss_summon": {"en": "{monster} summons a minion!", "de": "{monster} beschwört einen Diener!"},
     "log_boss_web": {"en": "{monster} spits venom at you from afar!", "de": "{monster} spuckt dich aus der Ferne mit Gift an!"},
@@ -346,6 +358,13 @@ TIER_DE = {
     "vault": "Eisenverlies",
     "inferno": "Flammenreich",
     "frost": "Frostgruft",
+}
+
+DIFFICULTY_DE = {
+    "easy": "Einfach",
+    "normal": "Normal",
+    "hard": "Schwer",
+    "hardcore": "Hardcore",
 }
 
 RARITY_DE = {
