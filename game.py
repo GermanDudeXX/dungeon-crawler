@@ -398,12 +398,15 @@ class Game:
         self.new_best = False
         self.damage_numbers = []
         self.boss_banner_timer = 0
-        self.pending_perk_count = 0
-        self.perk_choices = []
+        self.pending_perk_count = data.get("pending_perk_count", 0)
+        by_id = {p["id"]: p for p in C.PERKS}
+        self.perk_choices = [by_id[i] for i in data.get("perk_choices", []) if i in by_id]
 
         self._recompute_fov()
         self.add_log(self.t("log_continue_descent"))
         self.state = "playing"
+        # Owed a perk from before the save - ask for it now.
+        self._maybe_show_levelup_choice()
 
     def _build_save_data(self):
         p = self.player
@@ -433,6 +436,11 @@ class Game:
             "explored": [list(t) for t in self.explored],
             "traps": [[list(pos), kind] for pos, kind in self.traps.items()],
             "shrine_pos": list(self.shrine_pos) if self.shrine_pos else None,
+            # A level-up that has not been spent yet. Without this a
+            # save & quit between levelling and picking silently threw the
+            # perk away, permanently - the run just lost a bonus.
+            "pending_perk_count": self.pending_perk_count,
+            "perk_choices": [p["id"] for p in self.perk_choices],
             "monsters": [self._serialize_monster(m) for m in self.monsters],
             "items": [self._serialize_item(i) for i in self.items],
             "merchants": [{"x": m.x, "y": m.y} for m in self.merchants],
