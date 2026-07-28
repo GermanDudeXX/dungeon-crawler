@@ -139,6 +139,8 @@ class Game:
         self._potion_sprite_cache = {}
         self.bag_page = 0
         self.shop_stock = None
+        self._class_sprite_cache = {}
+        self.pending_difficulty = None
         self.needs_redraw = True
         self._last_draw_ms = 0
         self._last_tick_ms = 0
@@ -506,6 +508,67 @@ class Game:
             return loc.DIFFICULTY_DE.get(diff["id"], diff["name"])
         return diff["name"]
 
+    def _class(self):
+        return C.CLASS_BY_ID.get(
+            getattr(self, "char_class", C.DEFAULT_CLASS),
+            C.CLASS_BY_ID[C.DEFAULT_CLASS])
+
+    def _class_name(self, klass):
+        if self._lang() == "de":
+            return loc.CLASS_DE.get(klass["id"], klass["name"])
+        return klass["name"]
+
+    def _class_blurb(self, klass):
+        if self._lang() == "de":
+            return loc.CLASS_BLURB_DE.get(klass["id"], klass["blurb"])
+        return klass["blurb"]
+
+    def _apply_class(self, klass):
+        """The class's opening hand: stats, kit and starting flasks.
+
+        Everything here is additive on top of a normal level-1 player, so
+        a class is a different start rather than a different rulebook -
+        nothing downstream needs to know which one was chosen.
+        """
+        p = self.player
+        p.base_power += klass.get("power", 0)
+        p.base_defense += klass.get("defense", 0)
+        p.bonus_crit_chance += klass.get("crit", 0.0)
+        p.bonus_elemental_chance += klass.get("elemental_chance", 0.0)
+
+        weapon_index = klass.get("start_weapon")
+        if weapon_index is not None:
+            weapon = C.WEAPON_TYPES[weapon_index]
+            p.weapon_name, p.weapon_bonus = weapon["name"], weapon["bonus"]
+        armor_index = klass.get("start_armor")
+        if armor_index is not None:
+            armor = C.ARMOR_TYPES[armor_index]
+            p.armor_name, p.armor_bonus = armor["name"], armor["bonus"]
+
+        p.potion_counts = {}
+        for potion_id, count in klass.get("start_potions", {}).items():
+            p.add_potion(potion_id, count)
+        for scroll, count in klass.get("start_scrolls", {}).items():
+            p.scrolls[scroll] = p.scrolls.get(scroll, 0) + count
+
+        self._use_class_sprite(klass)
+
+    def _use_class_sprite(self, klass):
+        """Swaps the hero on the map to the chosen class's art.
+
+        Picking a class and then still playing as the same figure would
+        make the choice feel cosmetic in reverse - the one place it should
+        obviously show is the character you are looking at all game.
+        Falls back to the original sprite if the art is missing.
+        """
+        sprite = self._class_sprite(klass["id"], C.PLAYER_SPRITE_HEIGHT)
+        if sprite is None:
+            return
+        self.player_sprite_right = sprite
+        self.player_sprite_left = pygame.transform.flip(sprite, True, False)
+        w, h = sprite.get_size()
+        self.player_sprite_large = pygame.transform.scale(sprite, (w * 2, h * 2))
+
     def _make_monster(self, x, y, kind, boss=False, elite=None, tier_mult=None):
         """Every monster spawn goes through here.
 
@@ -523,7 +586,7 @@ class Game:
             diff_hp=d["enemy_hp"], diff_damage=d["enemy_damage"],
         )
 
-    def start_new_run(self, difficulty=None):
+    def start_new_run(self, difficulty=None, char_class=None):
         persistence.delete_save()
         self.save_data = None
 
@@ -534,9 +597,22 @@ class Game:
         else:
             self.difficulty = self.settings.get("difficulty", C.DEFAULT_DIFFICULTY)
 
+        if char_class is not None:
+            self.char_class = char_class
+            self.settings["char_class"] = char_class
+            persistence.save_settings(self.settings)
+        else:
+            self.char_class = self.settings.get("char_class", C.DEFAULT_CLASS)
+
         self.dungeon_level = 1
         self.log = []
-        self.player = entities.Player(0, 0, hp_mult=self._diff()["player_hp"])
+        # The class and the difficulty both scale the health pool, and both
+        # do it at creation rather than on read, so every later +max_hp
+        # stacks on the adjusted base instead of being rescaled again.
+        klass = self._class()
+        self.player = entities.Player(
+            0, 0, hp_mult=self._diff()["player_hp"] * klass["hp_mult"])
+        self._apply_class(klass)
         self.level_history = {}
         self.shake_timer = 0
         self.shake_intensity = 0
@@ -559,6 +635,10 @@ class Game:
             return
 
         self.difficulty = data.get("difficulty", C.DEFAULT_DIFFICULTY)
+        self.char_class = data.get("char_class", C.DEFAULT_CLASS)
+        # The stats are already in the save; only the art has to be
+        # re-applied, or a loaded run comes back as the default hero.
+        self._use_class_sprite(self._class())
         self.dungeon_level = data["dungeon_level"]
         self.log = list(data.get("log", []))
 
@@ -657,6 +737,7 @@ class Game:
         p = self.player
         return {
             "difficulty": getattr(self, "difficulty", C.DEFAULT_DIFFICULTY),
+            "char_class": getattr(self, "char_class", C.DEFAULT_CLASS),
             "dungeon_level": self.dungeon_level,
             "log": self.log,
             "player": {
@@ -2033,7 +2114,21 @@ class Game:
             elif key in self.DIFFICULTY_KEYS:
                 index = self.DIFFICULTY_KEYS.index(key)
                 if index < len(C.DIFFICULTIES):
-                    self.start_new_run(C.DIFFICULTIES[index]["id"])
+                    # Remember it and move on to the class picker; the run
+                    # itself only starts once both are chosen.
+                    self.pending_difficulty = C.DIFFICULTIES[index]["id"]
+                    self.state = "class_select"
+            return
+
+        if self.state == "class_select":
+            if key == pygame.K_ESCAPE:
+                self.state = "difficulty_select"
+            elif key in self.CLASS_KEYS:
+                index = self.CLASS_KEYS.index(key)
+                if index < len(C.CLASSES):
+                    self.start_new_run(
+                        getattr(self, "pending_difficulty", None),
+                        C.CLASSES[index]["id"])
             return
 
         if self.state == "dead":
@@ -3246,6 +3341,11 @@ class Game:
             self._present()
             return
 
+        if self.state == "class_select":
+            self._render_class_select()
+            self._present()
+            return
+
         if self.state == "bag":
             self._render_bag()
             self._present()
@@ -3561,6 +3661,112 @@ class Game:
     @staticmethod
     def _mult_text(value):
         return ("%.2f" % value).rstrip("0").rstrip(".") + "x"
+
+    CLASS_KEYS = (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4)
+
+    def _render_class_select(self):
+        self.screen.fill(C.COLOR_BG)
+        self._tap_targets = []
+        y = self._screen_header(self.t("class_title"))
+        y = self._lines_block(
+            self._wrap_text(self.t("class_hint"), self.f_sm, self.content_w),
+            y, font=self.f_sm, pitch=self.pitch_sm, color=C.COLOR_TEXT_DIM) + self.gap_m
+
+        current = self.settings.get("char_class", C.DEFAULT_CLASS)
+        cards = C.CLASSES[:len(self.CLASS_KEYS)]
+        card_w = min(self.content_w // len(cards) - self.gap_s, self.content_w // 3)
+
+        rows = [self._class_rows(k) for k in cards]
+        # Sized from the card, not the font: this is the one screen where
+        # the hero art is meant to be looked at rather than glanced past.
+        sprite_h = max(64, int(card_w * 0.22))
+        body_h = max(len(r) for r in rows) * self.pitch_xs
+        blurb_h = 2 * self.pitch_xs
+        card_h = (self.gap_s + sprite_h + self.gap_s + self.f_h1.get_height()
+                  + self.gap_s + body_h + blurb_h + self.gap_m + self.btn_h + self.gap_s)
+
+        back_h = self.btn_h + self.gap_l
+        y = max(y, y + (C.SCREEN_HEIGHT - y - card_h - back_h) // 3)
+
+        total_w = card_w * len(cards) + self.gap_s * (len(cards) - 1)
+        x = (C.SCREEN_WIDTH - total_w) // 2
+        for klass, key, lines in zip(cards, self.CLASS_KEYS, rows):
+            rect = pygame.Rect(x, y, card_w, card_h)
+            selected = klass["id"] == current
+            self._panel(rect, border=klass["color"] if selected else None)
+
+            ly = rect.y + self.gap_s
+            sprite = self._class_sprite(klass["id"], sprite_h)
+            if sprite is not None:
+                self.screen.blit(sprite, sprite.get_rect(midtop=(rect.centerx, ly)))
+            ly += sprite_h + self.gap_s
+
+            name = self.f_h1.render(self._class_name(klass), True, klass["color"])
+            self.screen.blit(name, name.get_rect(midtop=(rect.centerx, ly)))
+            ly += name.get_height() + self.gap_s
+
+            for line in lines:
+                surf = self.f_xs.render(line, True, C.COLOR_TEXT_DIM)
+                self.screen.blit(surf, surf.get_rect(midtop=(rect.centerx, ly)))
+                ly += self.pitch_xs
+            for line in self._wrap_text(self._class_blurb(klass), self.f_xs,
+                                        card_w - 2 * self.gap_s)[:2]:
+                surf = self.f_xs.render(line, True, C.COLOR_TEXT)
+                self.screen.blit(surf, surf.get_rect(midtop=(rect.centerx, ly)))
+                ly += self.pitch_xs
+
+            btn = pygame.Rect(rect.x + self.gap_s, rect.bottom - self.btn_h - self.gap_s,
+                              card_w - 2 * self.gap_s, self.btn_h)
+            self._draw_tap_button(btn, self.t("btn_choose"), key, font=self.f_sm,
+                                  primary=selected)
+            x += card_w + self.gap_s
+
+        self._button_row([(self.t("btn_back"), pygame.K_ESCAPE)], y + card_h + self.gap_l)
+
+    def _class_rows(self, klass):
+        rows = [
+            self.t("class_row_hp", value=self._mult_text(klass["hp_mult"])),
+            self.t("class_row_power", value=self._signed(klass.get("power", 0))),
+            self.t("class_row_defense", value=self._signed(klass.get("defense", 0))),
+            self.t("class_row_crit", value=self._signed_percent(klass.get("crit", 0.0))),
+        ]
+        if klass.get("elemental_chance"):
+            rows.append(self.t("class_row_elemental",
+                               value=self._signed_percent(klass["elemental_chance"])))
+        return rows
+
+    @staticmethod
+    def _signed(value):
+        return f"+{value}" if value >= 0 else str(value)
+
+    @staticmethod
+    def _signed_percent(value):
+        pct = int(round(value * 100))
+        return f"+{pct}%" if pct >= 0 else f"{pct}%"
+
+    def _class_sprite(self, class_id, height):
+        """The class's portrait, scaled and cached.
+
+        Pixel art again, so transform.scale - the class screen is the one
+        place these are shown large, and smoothscale would blur them into
+        a smear at four times their native size.
+        """
+        key = (class_id, height)
+        cached = self._class_sprite_cache.get(key)
+        if cached is not None:
+            return cached
+        klass = C.CLASS_BY_ID.get(class_id)
+        if klass is None:
+            return None
+        path = os.path.join(C.CLASS_SPRITE_DIR, f"{klass['sprite']}.png")
+        try:
+            image = pygame.image.load(path).convert_alpha()
+        except (pygame.error, FileNotFoundError):
+            return None
+        w, h = image.get_size()
+        sprite = pygame.transform.scale(image, (max(1, round(w * height / h)), height))
+        self._class_sprite_cache[key] = sprite
+        return sprite
 
     # Keys 1..9 pick a row in the potion bag.
     BAG_KEYS = (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4, pygame.K_5,

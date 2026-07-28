@@ -623,6 +623,47 @@ HAZARD_TYPES = {
 SUPERBOSS_LEVEL = 25
 SUPERBOSS_MULT = 3.0
 
+# --- character classes ---------------------------------------------------
+# Picked once per run, after the difficulty. Each is a different opening
+# hand rather than a different set of rules: same controls, same systems,
+# different numbers and starting kit. Multipliers apply to the base pool
+# at creation, exactly like the difficulty's, so later gains stack on top
+# instead of being rescaled.
+CLASS_SPRITE_DIR = os.path.join(ASSETS_DIR, "classes")
+CLASSES = [
+    {
+        "id": "warrior", "name": "Warrior", "sprite": "knight_m_idle_anim_f0",
+        "color": (214, 160, 84),
+        "hp_mult": 1.4, "power": 1, "defense": 2, "crit": -0.02,
+        "start_potions": {"healing": 2},
+        "start_scrolls": {},
+        # Indices into WEAPON_TYPES / ARMOR_TYPES, or None for bare hands.
+        "start_weapon": 0, "start_armor": 0,
+        "blurb": "Tough and armoured. Forgives mistakes.",
+    },
+    {
+        "id": "rogue", "name": "Rogue", "sprite": "elf_m_idle_anim_f0",
+        "color": (120, 214, 140),
+        "hp_mult": 0.85, "power": 2, "defense": 0, "crit": 0.15,
+        "start_potions": {"healing": 1, "haste": 1},
+        "start_scrolls": {"teleport": 1},
+        "start_weapon": 1, "start_armor": None,
+        "blurb": "Fragile, fast, and crits constantly.",
+    },
+    {
+        "id": "mage", "name": "Mage", "sprite": "wizzard_m_idle_anim_f0",
+        "color": (150, 170, 255),
+        "hp_mult": 0.8, "power": 0, "defense": 0, "crit": 0.05,
+        "elemental_chance": 0.35,
+        "start_potions": {"healing": 1, "shield": 1},
+        "start_scrolls": {"fireball": 2, "reveal": 1},
+        "start_weapon": None, "start_armor": None,
+        "blurb": "Weak in melee, but scrolls and elements answer to you.",
+    },
+]
+CLASS_BY_ID = {c["id"]: c for c in CLASSES}
+DEFAULT_CLASS = "warrior"
+
 MERCHANT_CHANCE_PER_LEVEL = 0.35
 SHOP_STOCK = [
     {"kind": "potion", "name": "Healing Potion", "price": 12},

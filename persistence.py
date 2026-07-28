@@ -59,6 +59,7 @@ DEFAULT_SETTINGS = {
     "volume": 0.4,
     "music": True,
     "difficulty": "normal",
+    "char_class": "warrior",
 }
 
 DEFAULT_STATS = {

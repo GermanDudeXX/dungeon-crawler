@@ -334,6 +334,19 @@ STRINGS = {
     "log_shield_absorbed": {"en": "Your ward absorbs {amount} damage.", "de": "Dein Schutzschild absorbiert {amount} Schaden."},
     "hud_shield": {"en": "Ward", "de": "Schild"},
 
+    # --- character class ---
+    "class_title": {"en": "CHOOSE YOUR HERO", "de": "WÄHLE DEINEN HELDEN"},
+    "class_hint": {
+        "en": "A different start, not different rules: same controls, different numbers and kit.",
+        "de": "Ein anderer Start, keine anderen Regeln: gleiche Steuerung, andere Werte und Ausrüstung.",
+    },
+    "class_row_hp": {"en": "Health {value}", "de": "Leben {value}"},
+    "class_row_power": {"en": "Power {value}", "de": "Angriff {value}"},
+    "class_row_defense": {"en": "Defence {value}", "de": "Verteidigung {value}"},
+    "class_row_crit": {"en": "Crit {value}", "de": "Krit {value}"},
+    "class_row_elemental": {"en": "Elemental {value}", "de": "Elementar {value}"},
+    "hud_class": {"en": "{name}", "de": "{name}"},
+
     # --- difficulty ---
     "difficulty_title": {"en": "DIFFICULTY", "de": "SCHWIERIGKEIT"},
     "difficulty_hint": {
@@ -501,6 +514,18 @@ TIER_DE = {
     "frost": "Frostgruft",
 }
 
+CLASS_DE = {
+    "warrior": "Krieger",
+    "rogue": "Schurke",
+    "mage": "Magier",
+}
+
+CLASS_BLURB_DE = {
+    "warrior": "Zäh und gepanzert. Verzeiht Fehler.",
+    "rogue": "Zerbrechlich, schnell, trifft ständig kritisch.",
+    "mage": "Schwach im Nahkampf, aber Rollen und Elemente gehorchen dir.",
+}
+
 DIFFICULTY_DE = {
     "easy": "Einfach",
     "normal": "Normal",
@@ -581,6 +606,20 @@ TUTORIAL_SECTIONS = {
             "Elemental weapons apply these: fire burns, poison poisons, frost slows and weakens,",
             "   lightning stuns.",
         ]),
+        ("Heroes & Potions", [
+            "At the start of a run you pick a difficulty, then a hero.",
+            "Warrior: tough and armoured. Rogue: fragile but crits constantly.",
+            "Mage: weak in melee, but starts with scrolls and enchants his hits.",
+            "I / the BAG button opens your potions: thirty kinds, each with its own effect.",
+            "G / HEAL drinks whichever one is selected - the HUD names it.",
+            "Buffs last a number of turns and stack; the HUD counts them down.",
+        ]),
+        ("Rooms & Dangers", [
+            "Every 3rd floor has a mini-boss; every 5th, a real boss whose stairs stay barred.",
+            "Treasure chests are guarded - kill the guardian first. Some chests are mimics.",
+            "Lava, collapsing floors and spike beds are visible: walk around them.",
+            "Bosses change phase as they weaken - the bar above shows which one.",
+        ]),
         ("Difficulty", [
             "Chosen at the start of every run - Easy, Normal, Hard or Hardcore.",
             "It scales your health and damage, the monsters' health and damage, and shop prices.",
@@ -629,6 +668,20 @@ TUTORIAL_SECTIONS = {
             "W Geschwächt senkt die Verteidigung des Monsters, deine Treffer wirken stärker.",
             "Elementarwaffen lösen das aus: Feuer brennt, Gift vergiftet,",
             "   Frost verlangsamt und schwächt, Blitz betäubt.",
+        ]),
+        ("Helden & Tränke", [
+            "Zu Beginn eines Laufs wählst du erst die Schwierigkeit, dann einen Helden.",
+            "Krieger: zäh und gepanzert. Schurke: zerbrechlich, aber trifft ständig kritisch.",
+            "Magier: schwach im Nahkampf, startet aber mit Rollen und verzaubert seine Treffer.",
+            "I / BEUTEL öffnet deine Tränke: dreißig Sorten, jede mit eigener Wirkung.",
+            "G / HEILEN trinkt den ausgewählten - das HUD nennt seinen Namen.",
+            "Effekte halten eine Anzahl Runden und stapeln sich; das HUD zählt sie herunter.",
+        ]),
+        ("Räume & Gefahren", [
+            "Jede 3. Ebene hat einen Mini-Boss; jede 5. einen Boss, dessen Treppe versperrt ist.",
+            "Schatztruhen sind bewacht - töte erst den Wächter. Manche Truhen sind Mimiks.",
+            "Lava, einstürzende Böden und Stachelbetten sind sichtbar: geh drum herum.",
+            "Bosse wechseln die Phase, wenn sie schwächer werden - die Leiste oben zeigt welche.",
         ]),
         ("Schwierigkeit", [
             "Wird zu Beginn jedes Laufs gewählt - Einfach, Normal, Schwer oder Hardcore.",
