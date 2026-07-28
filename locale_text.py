@@ -413,6 +413,30 @@ STRINGS = {
         "de": "Testraum: alles einmal, was der Dungeon hergibt.",
     },
 
+    # --- test-room tools ---
+    "tools_title": {"en": "TEST TOOLS", "de": "TEST-WERKZEUGE"},
+    "btn_tools": {"en": "TOOLS", "de": "TOOLS"},
+    "btn_use": {"en": "USE", "de": "AUSFÜHREN"},
+    "tools_status": {
+        "en": "Health {hp} / {max_hp}      Gold {gold}      Godmode: {god}",
+        "de": "Leben {hp} / {max_hp}      Gold {gold}      Godmode: {god}",
+    },
+    "tool_gold_up": {"en": "Give {amount} gold", "de": "{amount} Gold geben"},
+    "tool_gold_down": {"en": "Take {amount} gold", "de": "{amount} Gold abziehen"},
+    "tool_hp_up": {"en": "Give {amount} health", "de": "{amount} Leben geben"},
+    "tool_hp_down": {"en": "Take {amount} health", "de": "{amount} Leben abziehen"},
+    "tool_hp_full": {"en": "Heal to full", "de": "Voll heilen"},
+    "tool_godmode_on": {"en": "Turn godmode ON", "de": "Godmode EINschalten"},
+    "tool_godmode_off": {"en": "Turn godmode OFF", "de": "Godmode AUSschalten"},
+    "log_godmode_on": {
+        "en": "Godmode on - nothing can hurt you.",
+        "de": "Godmode an - nichts kann dir mehr schaden.",
+    },
+    "log_godmode_off": {
+        "en": "Godmode off - you are mortal again.",
+        "de": "Godmode aus - du bist wieder sterblich.",
+    },
+
     # --- character class ---
     "class_title": {"en": "CHOOSE YOUR HERO", "de": "WÄHLE DEINEN HELDEN"},
     "class_hint": {

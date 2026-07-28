@@ -157,6 +157,10 @@ class Game:
         self._use_class_sprite(self._class())
         self.particles = []
         self.hitstop_timer = 0
+        # Only ever true in the test room, and it gates the cheat panel:
+        # none of this should be reachable from a real run.
+        self.test_room = False
+        self.godmode = False
         self.needs_redraw = True
         self._last_draw_ms = 0
         self._last_tick_ms = 0
@@ -505,6 +509,14 @@ class Game:
             right_edge - self.potion_button.width, scroll_y - g - scroll_size,
             self.potion_button.width, scroll_size)
 
+        # The test room's cheat panel, directly above the bag. Laid out
+        # unconditionally so the geometry never depends on game state;
+        # it is only drawn and only tappable inside the test room.
+        self.tools_button = pygame.Rect(
+            right_edge - self.potion_button.width,
+            self.bag_button.top - g - scroll_size,
+            self.potion_button.width, scroll_size)
+
         # Pinned to the top-right corner - the only touch route back to the
         # pause menu, so it stays visible even with the other controls off.
         menu_w = min(self._btn_w(self.t("touch_menu"), self.f_sm),
@@ -659,6 +671,8 @@ class Game:
         self.damage_numbers = []
         self.particles = []
         self.hitstop_timer = 0
+        self.test_room = False
+        self.godmode = False
         self.boss_banner_timer = 0
         self.pending_perk_count = 0
         self.perk_choices = []
@@ -766,6 +780,8 @@ class Game:
         self.damage_numbers = []
         self.particles = []
         self.hitstop_timer = 0
+        self.test_room = False
+        self.godmode = False
         self.boss_banner_timer = 0
         self.pending_perk_count = data.get("pending_perk_count", 0)
         by_id = {p["id"]: p for p in C.PERKS}
@@ -1272,6 +1288,86 @@ class Game:
         self.add_log(self.t("log_mimic", monster=self._monster_named(mimic, "nom")))
         self._attack(mimic, self.player)
 
+    # The test room's cheat panel. Kept as data so the screen, the keys
+    # and the tap targets cannot drift apart, and so adding a tool is one
+    # entry rather than three edits.
+    TOOL_KEYS = (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4,
+                 pygame.K_5, pygame.K_6)
+    TOOL_GOLD_STEP = 250
+    TOOL_HP_STEP = 10
+
+    def _tools(self):
+        p = self.player
+        return [
+            ("gold_up", self.t("tool_gold_up", amount=self.TOOL_GOLD_STEP)),
+            ("gold_down", self.t("tool_gold_down", amount=self.TOOL_GOLD_STEP)),
+            ("hp_up", self.t("tool_hp_up", amount=self.TOOL_HP_STEP)),
+            ("hp_down", self.t("tool_hp_down", amount=self.TOOL_HP_STEP)),
+            ("hp_full", self.t("tool_hp_full")),
+            ("godmode", self.t("tool_godmode_off" if self.godmode
+                               else "tool_godmode_on")),
+        ]
+
+    def _use_tool(self, index):
+        tools = self._tools()
+        if index < 0 or index >= len(tools):
+            return
+        tool = tools[index][0]
+        p = self.player
+
+        if tool == "gold_up":
+            p.gold += self.TOOL_GOLD_STEP
+        elif tool == "gold_down":
+            p.gold = max(0, p.gold - self.TOOL_GOLD_STEP)
+        elif tool == "hp_up":
+            # Raises the ceiling too, so "more health" keeps working past
+            # full rather than silently doing nothing.
+            p.max_hp += self.TOOL_HP_STEP
+            p.hp += self.TOOL_HP_STEP
+        elif tool == "hp_down":
+            # Never to zero: this is a knob for trying things out, and a
+            # knob that can end the run by one tap too many is a trap.
+            p.hp = max(1, p.hp - self.TOOL_HP_STEP)
+        elif tool == "hp_full":
+            p.hp = p.max_hp
+        elif tool == "godmode":
+            self.godmode = not self.godmode
+            self.add_log(self.t("log_godmode_on" if self.godmode
+                                else "log_godmode_off"))
+        self.sounds.play("equip")
+
+    def _render_tools(self):
+        self.screen.fill(C.COLOR_BG)
+        self._tap_targets = []
+        y = self._screen_header(self.t("tools_title"), color=C.COLOR_ACCENT)
+
+        p = self.player
+        status = self.t("tools_status", hp=max(0, p.hp), max_hp=p.max_hp,
+                        gold=p.gold,
+                        god=self.t("on" if self.godmode else "off"))
+        line = self.f_body.render(status, True, C.COLOR_HUD_TEXT)
+        self.screen.blit(line, line.get_rect(midtop=(C.SCREEN_WIDTH // 2, y)))
+        y += line.get_height() + self.gap_m
+
+        tools = self._tools()
+        bottom = C.SCREEN_HEIGHT - self.pad - self.btn_h - self.gap_l
+        row_h = max(self.btn_h // 2,
+                    min(self.btn_h,
+                        (bottom - y - self.btn_gap * (len(tools) - 1)) // len(tools)))
+        use_w = self._btn_w(self.t("btn_use"), self.f_sm)
+        for i, (tool_id, label) in enumerate(tools):
+            color = C.COLOR_ACCENT if tool_id == "godmode" and self.godmode else C.COLOR_HUD_TEXT
+            text = self.f_sm.render(f"{i + 1}. {label}", True, color)
+            self.screen.blit(text, text.get_rect(midleft=(self.pad, y + row_h // 2)))
+            self._draw_tap_button(
+                (C.SCREEN_WIDTH - self.pad - use_w, y, use_w, row_h),
+                self.t("btn_use"), self.TOOL_KEYS[i], font=self.f_sm,
+                primary=(tool_id == "godmode" and self.godmode))
+            y += row_h + self.btn_gap
+
+        self._button_row([(self.t("btn_back"), pygame.K_ESCAPE)],
+                         C.SCREEN_HEIGHT - self.pad - self.btn_h)
+
     def start_test_room(self):
         """One open floor holding one of everything the game can produce.
 
@@ -1284,6 +1380,7 @@ class Game:
         self.start_new_run(self.settings.get("difficulty", C.DEFAULT_DIFFICULTY),
                            self.settings.get("char_class", C.DEFAULT_CLASS))
         self.dungeon_level = 12
+        self.test_room = True
         self._build_test_room()
         self.add_log(self.t("log_testroom"))
         self.state = "playing"
@@ -1548,8 +1645,9 @@ class Game:
         if info.get("one_shot"):
             del self.hazards[pos]
             self._map_cache = None
-        damage = info["damage"]
-        self.player.hp -= damage
+        damage = self._hurt_player(info["damage"])
+        if not damage:
+            return
         self._spawn_damage_number(self.player.x, self.player.y, str(damage), info["color"])
         self.add_log(self.t(f"log_hazard_{kind}", dmg=damage))
         self.sounds.play("player_hurt")
@@ -2337,6 +2435,9 @@ class Game:
         if self.bag_button.collidepoint(pos):
             self._open_bag()
             return
+        if self.test_room and self.tools_button.collidepoint(pos):
+            self.state = "tools"
+            return
         for name, rect in self.scroll_buttons.items():
             if rect.collidepoint(pos):
                 self._use_scroll(name)
@@ -2501,6 +2602,13 @@ class Game:
                 self._smith_buy(key - pygame.K_1)
             return
 
+        if self.state == "tools":
+            if key == pygame.K_ESCAPE:
+                self.state = "playing"
+            elif key in self.TOOL_KEYS:
+                self._use_tool(self.TOOL_KEYS.index(key))
+            return
+
         if self.state == "bag":
             self._bag_key(key)
             return
@@ -2518,6 +2626,8 @@ class Game:
             self._drink_potion()
         elif key == pygame.K_i:
             self._open_bag()
+        elif key == pygame.K_k and self.test_room:
+            self.state = "tools"
         elif key == pygame.K_f:
             self._use_scroll("fireball")
         elif key == pygame.K_t:
@@ -2594,6 +2704,20 @@ class Game:
         self._check_achievements()
         self._maybe_show_levelup_choice()
 
+    def _hurt_player(self, amount):
+        """Applies damage to the player, or none at all in godmode.
+
+        Every route that can hurt the player goes through here - melee,
+        poison and bleed, traps, hazards - so godmode is one check rather
+        than four, and the next thing that can hurt you cannot forget to
+        honour it. Returns what was actually taken off, so callers can
+        skip their own log line and shake when nothing happened.
+        """
+        if self.godmode:
+            return 0
+        self.player.hp -= amount
+        return amount
+
     def _tick_poison(self):
         """Damage-over-time the player is carrying, one turn's worth.
 
@@ -2609,7 +2733,8 @@ class Game:
             if getattr(self.player, field) <= 0:
                 continue
             setattr(self.player, field, getattr(self.player, field) - 1)
-            self.player.hp -= per_turn
+            if not self._hurt_player(per_turn):
+                continue
             self._spawn_damage_number(self.player.x, self.player.y, str(per_turn), color)
             self.add_log(self.t(log_key, dmg=per_turn))
             if self.player.hp <= 0:
@@ -2633,8 +2758,9 @@ class Game:
         info = C.TRAP_TYPES[kind]
         trap_name = self._trap_display_name(kind)
         if kind == "spike":
-            dmg = random.randint(info["min_damage"], info["max_damage"])
-            self.player.hp -= dmg
+            dmg = self._hurt_player(random.randint(info["min_damage"], info["max_damage"]))
+            if not dmg:
+                return
             self._spawn_damage_number(*pos, str(dmg), C.COLOR_TRAP)
             self.add_log(self.t("log_trap_damage", trap=trap_name, dmg=dmg))
             self.sounds.play("player_hurt")
@@ -3299,7 +3425,10 @@ class Game:
             self.player.shield -= absorbed
             damage -= absorbed
 
-        defender.hp -= damage
+        if defender is self.player:
+            damage = self._hurt_player(damage)
+        else:
+            defender.hp -= damage
 
         if self._lang() == "de":
             attacker_label = "Du" if attacker is self.player else self._monster_named(attacker, "nom")
@@ -3898,6 +4027,11 @@ class Game:
 
         if self.state == "smith":
             self._render_smith()
+            self._present()
+            return
+
+        if self.state == "tools":
+            self._render_tools()
             self._present()
             return
 
@@ -5519,6 +5653,8 @@ class Game:
             self._draw_touch_button(rect, label, active=(self.touch_direction == vector))
         self._draw_touch_button(self.potion_button, self.t("touch_heal"))
         self._draw_touch_button(self.bag_button, self.t("btn_bag"))
+        if self.test_room:
+            self._draw_touch_button(self.tools_button, self.t("btn_tools"))
         scroll_labels = {"fireball": "F", "teleport": "T", "reveal": "V"}
         for name, rect in self.scroll_buttons.items():
             self._draw_touch_button(rect, scroll_labels[name])
