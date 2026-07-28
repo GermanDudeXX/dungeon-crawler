@@ -1037,28 +1037,83 @@ class Game:
                   "wall_banner_yellow", "wall_hole_1", "wall_hole_2", "wall_goo")
     FLOOR_DECOR = ("skull", "crate", "column")
 
+    def blocks_movement(self, x, y):
+        """A wall, or a solid object standing on the floor.
+
+        The single answer to "can anything be here" - movement, spawning
+        and placement all ask this rather than each testing the grid and
+        then forgetting about the crates.
+        """
+        if not dungeon.is_walkable(self.grid, x, y):
+            return True
+        return self._decor.get((x, y)) in C.BLOCKING_DECOR
+
+    def _reachable_from(self, start):
+        """Every tile that can be walked to from start.
+
+        A plain flood fill with the solid decorations treated as walls.
+        Needed while placing those decorations: a crate dropped in a
+        one-tile corridor can cut off a whole corner of the level, and
+        there is no way to see that by eye.
+        """
+        if start is None or self.blocks_movement(*start):
+            return set()
+        seen = {start}
+        stack = [start]
+        while stack:
+            x, y = stack.pop()
+            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if (nx, ny) in seen or self.blocks_movement(nx, ny):
+                    continue
+                seen.add((nx, ny))
+                stack.append((nx, ny))
+        return seen
+
+    def _all_reachable(self, start, targets):
+        reachable = self._reachable_from(start)
+        return all(t is None or t in reachable for t in targets)
+
     def _scatter_decor(self):
-        """Picks purely cosmetic tiles to overlay on the map.
+        """Picks the tiles to overlay on the map.
 
         Chosen once per level and stored, not rolled inside the map cache
         repaint - the cache is rebuilt on every field-of-view change, so
         rolling there would reshuffle the decorations as the player walks.
-        Nothing here blocks movement or spawns on anything important.
+
+        Most of it is scenery, but crates and columns are solid (see
+        constants.BLOCKING_DECOR). Each of those is placed provisionally
+        and taken straight back if it would cut the level in two - which
+        one crate in the wrong corridor is quite enough to do.
         """
         self._decor = {}
         if not self._tile_sources:
             return
         blocked = {self.stairs_pos, self.up_stairs_pos}
+        start = (self.player.x, self.player.y)
+        # A solid object may cost the level exactly the tile it stands on
+        # and nothing else. Checking only the stairs was not enough: a
+        # crate can seal off a corner that has no stairs in it, and the
+        # merchant, an item or a monster then spawns in there afterwards
+        # with no way to reach them.
+        reachable = self._reachable_from(start)
         for room in self.rooms:
             for _ in range(random.randint(0, 3)):
                 x, y = self._random_floor_in_room(room)
-                if (x, y) in blocked or (x, y) in self._decor:
+                if (x, y) in blocked or (x, y) in self._decor or (x, y) == start:
                     continue
                 # Never on the room's centre: that is where stairs, the
                 # merchant and the shrine get placed.
                 if (x, y) == room.center():
                     continue
-                self._decor[(x, y)] = random.choice(self.FLOOR_DECOR)
+                piece = random.choice(self.FLOOR_DECOR)
+                self._decor[(x, y)] = piece
+                if piece not in C.BLOCKING_DECOR:
+                    continue
+                shrunk = self._reachable_from(start)
+                if len(shrunk) == len(reachable) - 1:
+                    reachable = shrunk
+                else:
+                    del self._decor[(x, y)]
         for _ in range(C.MAP_WIDTH):
             x = random.randrange(1, C.MAP_WIDTH - 1)
             y = random.randrange(1, C.MAP_HEIGHT - 1)
@@ -1091,7 +1146,7 @@ class Game:
         for _ in range(num_monsters):
             room = random.choice(spawnable_rooms)
             x, y = self._random_floor_in_room(room)
-            if self._is_occupied(x, y):
+            if self.blocks_movement(x, y) or self._is_occupied(x, y):
                 continue
             kind = random.choices(monster_kinds, weights=weights, k=1)[0]
             self.monsters.append(self._make_monster(
@@ -1173,6 +1228,8 @@ class Game:
         under a lava tile, in particular, is two hits for one step with no
         way to see the second coming.
         """
+        if self.blocks_movement(x, y):
+            return False
         if self._is_occupied(x, y, ignore=ignore):
             return False
         if (x, y) in self.traps or (x, y) in self.hazards:
@@ -1209,7 +1266,7 @@ class Game:
         """
         room = random.choice(rooms)
         x, y = self._random_floor_in_room(room)
-        if self._is_occupied(x, y):
+        if self.blocks_movement(x, y) or self._is_occupied(x, y):
             return
         kind = random.choice(list(C.MONSTER_TYPES.keys()))
         monster = self._make_monster(x, y, kind, elite=random.choice(C.ELITE_MODIFIERS))
@@ -1229,7 +1286,7 @@ class Game:
         for sx, sy in spots:
             if count <= 0:
                 break
-            if not dungeon.is_walkable(self.grid, sx, sy) or self._is_occupied(sx, sy):
+            if self.blocks_movement(sx, sy) or self._is_occupied(sx, sy):
                 continue
             self.monsters.append(self._make_monster(sx, sy, kind))
             count -= 1
@@ -1243,14 +1300,16 @@ class Game:
         """
         room = random.choice(rooms)
         x, y = self._random_floor_in_room(room)
-        if self._is_occupied(x, y) or (x, y) in (self.stairs_pos, self.up_stairs_pos):
+        if self.blocks_movement(x, y) or self._is_occupied(x, y):
+            return
+        if (x, y) in (self.stairs_pos, self.up_stairs_pos):
             return
         if any((i.x, i.y) == (x, y) for i in self.items):
             return
 
         guard_spot = next(
             ((gx, gy) for gx, gy in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1))
-             if dungeon.is_walkable(self.grid, gx, gy) and not self._is_occupied(gx, gy)),
+             if not self.blocks_movement(gx, gy) and not self._is_occupied(gx, gy)),
             None)
         if guard_spot is None:
             return
@@ -1542,7 +1601,7 @@ class Game:
         """
         room = random.choice(rooms)
         cx, cy = room.center()
-        if not dungeon.is_walkable(self.grid, cx, cy):
+        if self.blocks_movement(cx, cy):
             return
         placed = 0
         for kind in ("gold", "gold", "weapon", "armor", "scroll", "potion"):
@@ -1578,8 +1637,6 @@ class Game:
                       for dy in range(-radius, radius + 1)]
         candidates.sort(key=lambda p: abs(p[0] - cx) + abs(p[1] - cy))
         for x, y in candidates:
-            if not dungeon.is_walkable(self.grid, x, y):
-                continue
             if not self._tile_is_free(x, y):
                 continue
             if any((i.x, i.y) == (x, y) for i in self.items):
@@ -1616,7 +1673,7 @@ class Game:
         kinds = ["gold", "potion", random.choice(("weapon", "armor")), "scroll"]
         for kind in kinds:
             spot = next((s for s in spots
-                         if dungeon.is_walkable(self.grid, *s)
+                         if not self.blocks_movement(*s)
                          and not any((i.x, i.y) == s for i in self.items)), None)
             if spot is None:
                 break
@@ -1687,7 +1744,9 @@ class Game:
 
     def _spawn_item(self, room, kind):
         x, y = self._random_floor_in_room(room)
-        if self._is_occupied(x, y) or any((i.x, i.y) == (x, y) for i in self.items):
+        if self.blocks_movement(x, y) or self._is_occupied(x, y):
+            return
+        if any((i.x, i.y) == (x, y) for i in self.items):
             return
 
         if kind == "potion":
@@ -1746,7 +1805,7 @@ class Game:
         for _ in range(200):
             x = random.randint(0, C.MAP_WIDTH - 1)
             y = random.randint(0, C.MAP_HEIGHT - 1)
-            if dungeon.is_walkable(self.grid, x, y) and not self._is_occupied(x, y):
+            if not self.blocks_movement(x, y) and not self._is_occupied(x, y):
                 return x, y
         return None
 
@@ -2751,7 +2810,7 @@ class Game:
             # a door that appears and disappears.
             self._announce("log_boss_door_locked", C.COLOR_DANGER)
             return
-        elif dungeon.is_walkable(self.grid, target_x, target_y):
+        elif not self.blocks_movement(target_x, target_y):
             self.player.move(dx, dy)
             pos = (self.player.x, self.player.y)
             if pos in self.traps:
@@ -2908,7 +2967,7 @@ class Game:
         for x, y in spots:
             if spawned >= 2:
                 break
-            if not dungeon.is_walkable(self.grid, x, y) or self._is_occupied(x, y):
+            if self.blocks_movement(x, y) or self._is_occupied(x, y):
                 continue
             monster = self._make_monster(x, y, random.choice(kinds), elite=self._maybe_elite())
             monster.awake = True
@@ -3647,7 +3706,7 @@ class Game:
         for x, y in spots:
             if spawned >= 2:
                 break
-            if not dungeon.is_walkable(self.grid, x, y) or self._is_occupied(x, y):
+            if self.blocks_movement(x, y) or self._is_occupied(x, y):
                 continue
             child = self._make_monster(x, y, parent.kind)
             child.max_hp = max(1, parent.max_hp // 2)
@@ -3982,7 +4041,7 @@ class Game:
         ]
         random.shuffle(spots)
         for x, y in spots:
-            if dungeon.is_walkable(self.grid, x, y) and not self._is_occupied(x, y):
+            if not self.blocks_movement(x, y) and not self._is_occupied(x, y):
                 minion = self._make_monster(x, y, "skeleton")
                 minion.awake = True
                 self.monsters.append(minion)
@@ -3992,16 +4051,22 @@ class Game:
         return False
 
     def _cardinal_line_clear(self, x1, y1, x2, y2):
+        """Whether a shot can travel between two tiles in a straight line.
+
+        Uses blocks_movement, so a crate or a column stops an arrow the
+        same way a wall does - which turns the solid decorations into
+        cover you can duck behind rather than just furniture.
+        """
         if x1 == x2 and y1 != y2:
             step = 1 if y2 > y1 else -1
             for y in range(y1 + step, y2, step):
-                if not dungeon.is_walkable(self.grid, x1, y):
+                if self.blocks_movement(x1, y):
                     return False
             return True
         if y1 == y2 and x1 != x2:
             step = 1 if x2 > x1 else -1
             for x in range(x1 + step, x2, step):
-                if not dungeon.is_walkable(self.grid, x, y1):
+                if self.blocks_movement(x, y1):
                     return False
             return True
         return False
@@ -4021,7 +4086,7 @@ class Game:
         ):
             if (nx, ny) == (monster.x, monster.y):
                 continue
-            if not dungeon.is_walkable(self.grid, nx, ny):
+            if self.blocks_movement(nx, ny):
                 continue
             if (nx, ny) == (self.player.x, self.player.y):
                 continue

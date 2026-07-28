@@ -626,6 +626,15 @@ HAZARD_TYPES = {
 SUPERBOSS_LEVEL = 25
 SUPERBOSS_MULT = 3.0
 
+# Decorations you cannot walk through. A crate or a stone column is a
+# solid object and reads as one; a skull lying on the floor does not, so
+# it stays walkable. Everything else in FLOOR_DECOR is scenery.
+#
+# Placing these needs care: a crate dropped in a one-tile corridor can
+# seal the stairs off entirely, so Game._scatter_decor checks that the
+# level is still fully connected after each one and takes it back if not.
+BLOCKING_DECOR = ("crate", "column")
+
 # --- event banners -------------------------------------------------------
 # The combat log lives in the bottom-right corner and is easy to miss
 # entirely - things like a trap going off, a level-up or "not enough

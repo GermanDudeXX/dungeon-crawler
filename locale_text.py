@@ -733,6 +733,7 @@ TUTORIAL_SECTIONS = {
             "A vault is a pile of loot with several elites standing on it. Fight it in a doorway.",
             "The blacksmith sharpens, reinforces, enchants and reforges what you already carry.",
             "Lava, collapsing floors and spike beds are visible: walk around them.",
+            "Crates and columns are solid - you cannot pass them, and neither can arrows.",
             "Bosses change phase as they weaken - the bar above shows which one.",
         ]),
         ("Difficulty", [
@@ -798,6 +799,7 @@ TUTORIAL_SECTIONS = {
             "Eine Schatzkammer ist ein Beutehaufen mit mehreren Elite-Gegnern darauf.",
             "Der Schmied schärft, verstärkt, verzaubert und schmiedet neu, was du schon hast.",
             "Lava, einstürzende Böden und Stachelbetten sind sichtbar: geh drum herum.",
+            "Kisten und Säulen sind fest - du kommst nicht durch, Pfeile aber auch nicht.",
             "Bosse wechseln die Phase, wenn sie schwächer werden - die Leiste oben zeigt welche.",
         ]),
         ("Schwierigkeit", [
