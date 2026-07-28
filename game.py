@@ -119,6 +119,7 @@ class Game:
         self.settings = persistence.load_settings()
         self.sounds = sound.Sounds(volume=self.settings.get("volume", sound.MASTER_VOLUME))
         self.player_sprite_right, self.player_sprite_left, self.player_sprite_large = self._load_player_sprite()
+        self._measure_player_head()
         self.monster_sprites = self._load_monster_sprites()
         self.item_sprites = self._load_item_sprites()
         # The HUD used ASCII stand-ins ("/", "[", "!", "$") for icons even
@@ -570,6 +571,24 @@ class Game:
         self.player_sprite_left = pygame.transform.flip(sprite, True, False)
         w, h = sprite.get_size()
         self.player_sprite_large = pygame.transform.scale(sprite, (w * 2, h * 2))
+        self._measure_player_head()
+
+    def _measure_player_head(self):
+        """How much empty space the hero's art has above their head.
+
+        The frames are taller than the figure in them, so anchoring the
+        YOU marker to the surface leaves a tile-wide gap. Scanning for the
+        real top is what get_bounding_rect does, and it is far too slow to
+        run per frame - so it runs once, here, whenever the sprite changes.
+        """
+        sprite = getattr(self, "player_sprite_right", None)
+        if sprite is None:
+            self._player_head_pad = 0
+            return
+        try:
+            self._player_head_pad = sprite.get_bounding_rect().top
+        except pygame.error:
+            self._player_head_pad = 0
 
     def _make_monster(self, x, y, kind, boss=False, elite=None, tier_mult=None):
         """Every monster spawn goes through here.
@@ -3496,6 +3515,7 @@ class Game:
         self._render_entities(ox, oy)
         self._render_particles(ox, oy)
         self._render_nameplates(ox, oy)
+        self._render_player_marker(ox, oy)
         self._render_damage_numbers(ox, oy)
         self._render_flash()
         self._render_minimap()
@@ -4626,6 +4646,49 @@ class Game:
                 self._record_bestiary(monster.kind)
 
         self._draw_player(ox, oy)
+
+    def _render_player_marker(self, ox=0, oy=0):
+        """A "YOU" label and an arrow pointing down at your own character.
+
+        The hero is one small sprite among up to a dozen others, all of
+        them now wearing nameplates, and on a phone it is genuinely easy
+        to lose track of which one you are steering. Follows the player's
+        interpolated position so it slides along with them rather than
+        snapping a tile ahead.
+        """
+        ts = C.TILE_SIZE
+        cx = int(self.player.render_x * ts + ts / 2 + ox)
+        # Measured off the sprite's own height, not the tile's: the hero is
+        # drawn nearly twice as tall as a cell and hangs upwards out of it,
+        # so anchoring to the tile put the arrow across their face.
+        sprite = self.player_sprite_right
+        sprite_h = sprite.get_height() if sprite else ts
+        sprite_top = int(self.player.render_y * ts + oy) + ts + 2 - sprite_h
+        bottom = sprite_top + self._player_head_pad - max(2, ts // 8)
+
+        arrow_h = max(4, ts // 4)
+        arrow_w = max(6, ts // 3)
+        tip = (cx, bottom)
+        left = (cx - arrow_w // 2, bottom - arrow_h)
+        right = (cx + arrow_w // 2, bottom - arrow_h)
+        # Outlined the same way the label is, so it stays readable over
+        # both pale stone and near-black rock.
+        pygame.draw.polygon(self.screen, (0, 0, 0),
+                            [(tip[0], tip[1] + 1), (left[0] - 1, left[1] - 1),
+                             (right[0] + 1, right[1] - 1)])
+        pygame.draw.polygon(self.screen, C.COLOR_ACCENT, [tip, left, right])
+
+        label = self._player_marker_label()
+        self.screen.blit(label, label.get_rect(
+            midbottom=(cx, bottom - arrow_h + 1)))
+
+    def _player_marker_label(self):
+        key = ("__you__", self._lang())
+        cached = self._name_cache.get(key)
+        if cached is None:
+            cached = self._f_tiny_outlined(self.t("marker_you"), C.COLOR_ACCENT)
+            self._name_cache[key] = cached
+        return cached
 
     def _render_nameplates(self, ox=0, oy=0):
         """Name, level, health bar and status icons above each monster.

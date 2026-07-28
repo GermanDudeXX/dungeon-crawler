@@ -257,7 +257,9 @@ STRINGS = {
     "hud_bleeding": {"en": "Bleeding", "de": "Blutend"},
     # Floats above a monster's head, so it has to stay short in both
     # languages - "Lv" reads as a level marker in German too.
-    "nameplate_level": {"en": "Lv{level}", "de": "St{level}"},
+    "nameplate_level": {"en": "Lv {level}", "de": "St {level}"},
+    # Floats over your own character with an arrow pointing down at it.
+    "marker_you": {"en": "YOU", "de": "DU"},
 
     # --- special rooms and hazards ---
     "superboss_prefix": {"en": "Ancient", "de": "Uralter"},
