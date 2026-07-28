@@ -511,20 +511,24 @@ class Game:
             right_edge - self.potion_button.width, scroll_y - g - scroll_size,
             self.potion_button.width, scroll_size)
 
-        # The test room's cheat panel, directly above the bag. Laid out
-        # unconditionally so the geometry never depends on game state;
-        # it is only drawn and only tappable inside the test room.
-        self.tools_button = pygame.Rect(
-            right_edge - self.potion_button.width,
-            self.bag_button.top - g - scroll_size,
-            self.potion_button.width, scroll_size)
-
         # Pinned to the top-right corner - the only touch route back to the
         # pause menu, so it stays visible even with the other controls off.
-        menu_w = min(self._btn_w(self.t("touch_menu"), self.f_sm),
+        menu_w = min(self._btn_w(self._touch_label("touch_menu", "ESC"), self.f_sm),
                      C.GUTTER_WIDTH - 2 * self.gap_m)
         self.save_button = pygame.Rect(
             C.SCREEN_WIDTH - self.gap_m - menu_w, self.gap_m, menu_w, self.btn_h)
+
+        # The test room's cheat panel, mirrored into the free top-left
+        # corner rather than stacked with the action buttons. That column
+        # is already four deep on a phone and adding a fifth put it
+        # underneath either the MENU button or the bag, and a tap in the
+        # overlap hit whichever happened to be checked first. Laid out
+        # unconditionally so the geometry never depends on game state; it
+        # is only drawn and only tappable inside the test room.
+        tools_w = min(self._btn_w(self._touch_label("btn_tools", "K"), self.f_sm),
+                      C.GUTTER_WIDTH - 2 * self.gap_m)
+        self.tools_button = pygame.Rect(
+            self.gap_m, self.gap_m, tools_w, self.btn_h)
 
     def _diff(self):
         """The chosen difficulty's multiplier set, never None."""
@@ -1006,7 +1010,10 @@ class Game:
         self.up_stairs_pos = self.rooms[0].center() if self.dungeon_level > 1 else None
 
         self.tier = self._tier_for_level(self.dungeon_level)
-        self._play_tier_music(self.tier)
+        # Rotate except when this floor starts a new theme - then the
+        # theme's own track introduces it.
+        self._play_tier_music(
+            self.tier, rotate=(self.dungeon_level - 1) % C.LEVELS_PER_TIER != 0)
 
         self.monsters = []
         self.items = []
@@ -1470,7 +1477,10 @@ class Game:
                 self.grid[y][x] = dungeon.FLOOR
         self.rooms = [dungeon.Room(1, 1, w - 2, h - 2)]
         self.tier = self._tier_for_level(self.dungeon_level)
-        self._play_tier_music(self.tier)
+        # Rotate except when this floor starts a new theme - then the
+        # theme's own track introduces it.
+        self._play_tier_music(
+            self.tier, rotate=(self.dungeon_level - 1) % C.LEVELS_PER_TIER != 0)
 
         self.monsters = []
         self.items = []
@@ -1898,11 +1908,33 @@ class Game:
         # deliberate escalation rather than a bug.
         return f"{name} +{tier['cycle']}" if tier.get("cycle") else name
 
-    def _play_tier_music(self, tier):
-        """Switch the looping background track when the theme changes."""
+    def _pick_track(self, tier, rotate):
+        """Which track to play next.
+
+        Entering a theme plays that theme's own track, so a new area still
+        announces itself. Every other floor picks a different one from the
+        pool - three tracks over five themes meant a long run heard the
+        same three and a half minutes on repeat for its whole length.
+        Deliberately driven by descending rather than by detecting the end
+        of a track: the old "music restarts itself every second" bug came
+        from trusting mixer.get_busy(), and nothing here asks it anything.
+        """
+        theme_track = tier.get("music")
+        current = getattr(self, "_music_track", None)
+        # Never the track already playing, even when a new theme would
+        # otherwise introduce itself with it - two themes share a track,
+        # so "entering the Caverns" could leave the music untouched, which
+        # is exactly the repetition this is meant to break up.
+        if not rotate and theme_track != current:
+            return theme_track
+        others = [t for t in C.MUSIC_TRACKS if t != current]
+        return random.choice(others) if others else theme_track
+
+    def _play_tier_music(self, tier, rotate=False):
+        """Start the background track, looping until the next floor."""
         if not self.settings.get("music", True):
             return
-        track = tier.get("music")
+        track = self._pick_track(tier, rotate)
         if not track or track == getattr(self, "_music_track", None):
             return
         path = os.path.join(C.MUSIC_DIR, track)
@@ -5804,18 +5836,30 @@ class Game:
         # from there, to re-enabling everything else), so it always draws
         # regardless of show_touch_controls - only the movement/action
         # buttons are optional.
-        self._draw_touch_button(self.save_button, self.t("touch_menu"))
+        self._draw_touch_button(self.save_button, self._touch_label("touch_menu", "ESC"))
         if not self.settings.get("show_touch_controls", True):
             return
         for name, (rect, vector, label) in self.dpad_buttons.items():
             self._draw_touch_button(rect, label, active=(self.touch_direction == vector))
-        self._draw_touch_button(self.potion_button, self.t("touch_heal"))
-        self._draw_touch_button(self.bag_button, self.t("btn_bag"))
+        self._draw_touch_button(self.potion_button, self._touch_label("touch_heal", "G"))
+        self._draw_touch_button(self.bag_button, self._touch_label("btn_bag", "I"))
         if self.test_room:
-            self._draw_touch_button(self.tools_button, self.t("btn_tools"))
+            self._draw_touch_button(self.tools_button, self._touch_label("btn_tools", "K"))
         scroll_labels = {"fireball": "F", "teleport": "T", "reveal": "V"}
         for name, rect in self.scroll_buttons.items():
             self._draw_touch_button(rect, scroll_labels[name])
+
+    def _touch_label(self, key, shortcut):
+        """The button's name, with its keyboard shortcut on desktop.
+
+        These buttons were designed for a phone, where a key would be
+        meaningless. On a monitor they are small and sit in the corner,
+        and nothing anywhere told you that G drinks a potion - so the
+        answer to "where is the heal button" was that it was there all
+        along and looked like decoration.
+        """
+        label = self.t(key)
+        return label if ON_ANDROID else f"{label} ({shortcut})"
 
     def _run_summary_lines(self):
         """The run in five lines: who you were, how you fought, what you had.

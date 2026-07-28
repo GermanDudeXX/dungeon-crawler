@@ -15,19 +15,74 @@ import constants as C
 ON_ANDROID = "ANDROID_ARGUMENT" in os.environ
 
 
+def ca_bundle_candidates():
+    """Everywhere the bundled CA roots might have ended up.
+
+    C.CA_BUNDLE_PATH is derived from constants.py's own __file__, which is
+    right on Windows and was assumed right on Android. It is not reliably
+    so: python-for-android ships the app as .pyc files and starts it with
+    its own loader and working directory, so a path built from __file__
+    can miss even though the file is in the APK. Rather than guess which
+    one is correct, try all of them.
+    """
+    seen = []
+    roots = [C.ASSETS_DIR]
+    for env in ("ANDROID_PRIVATE", "ANDROID_ARGUMENT", "ANDROID_APP_PATH"):
+        base = os.environ.get(env)
+        if base:
+            roots.append(os.path.join(base, "assets"))
+    roots.append(os.path.join(os.getcwd(), "assets"))
+    roots.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets"))
+    for root in roots:
+        path = os.path.join(root, "cacert.pem")
+        if path not in seen:
+            seen.append(path)
+    return seen
+
+
+def _load_ca_roots(context):
+    """Adds our bundled roots to a context. Returns the path used, or None.
+
+    Reads the file and hands OpenSSL the *data* rather than the path.
+    That removes the whole question of whether OpenSSL can open a file
+    inside Android's app-private storage, and it adds to the platform
+    store instead of replacing it - so Windows keeps its own roots and
+    Android, which has none OpenSSL can see, gets these.
+    """
+    for path in ca_bundle_candidates():
+        try:
+            with open(path, "r", encoding="ascii", errors="ignore") as f:
+                pem = f.read()
+        except OSError:
+            continue
+        try:
+            context.load_verify_locations(cadata=pem)
+        except (ssl.SSLError, ValueError):
+            continue
+        return path
+    return None
+
+
 def _ssl_context():
     """A verifying SSL context that works on Android too.
 
-    Falls back to the platform default when the bundle is missing, and
-    never disables verification: this module downloads an executable that
-    is then run, so an unverified transport would be a real hole.
+    Verification is never turned off: this module downloads an executable
+    that is then run, so an unverified transport would be a real hole.
+
+    If no roots can be loaded at all, this raises rather than returning a
+    context that is certain to fail. The empty-store failure surfaces as
+    OpenSSL's "unable to get local issuer certificate", which says nothing
+    about the actual problem - a missing bundle - and sent one debugging
+    session looking at the network instead of at the packaging.
     """
-    try:
-        if os.path.exists(C.CA_BUNDLE_PATH):
-            return ssl.create_default_context(cafile=C.CA_BUNDLE_PATH)
-    except (ssl.SSLError, OSError):
-        pass
-    return ssl.create_default_context()
+    context = ssl.create_default_context()
+    used = _load_ca_roots(context)
+    if used is None and not context.cert_store_stats()["x509_ca"]:
+        raise RuntimeError(
+            "no trusted CA roots available - cacert.pem was not found in: "
+            + ", ".join(ca_bundle_candidates())
+        )
+    return context
 
 RELEASE_TAG = "android-latest" if ON_ANDROID else "windows-latest"
 ASSET_EXT = ".apk" if ON_ANDROID else ".exe"

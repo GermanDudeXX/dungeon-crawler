@@ -290,6 +290,14 @@ DUNGEON_TIERS = [
 TIER_GROWTH = 1.33
 
 MUSIC_DIR = os.path.join(ASSETS_DIR, "music")
+# Every track that exists, for rotation. There are three of them and five
+# themes, and each theme used to loop its own one forever - so a long run
+# meant the same three and a half minutes over and over. A floor change
+# now picks a different track, which is a natural moment for the music to
+# change and needs no end-of-track detection: the old "music restarts
+# itself every second" bug came from trusting mixer.get_busy(), and
+# nothing here asks it anything.
+MUSIC_TRACKS = ("crypt.mp3", "caverns.mp3", "vault.mp3")
 
 BOSS_KIND_CYCLE = ["orc", "skeleton", "spider", "slime"]
 BOSS_TITLES = {
