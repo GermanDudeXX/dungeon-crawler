@@ -418,8 +418,8 @@ STRINGS = {
     "btn_tools": {"en": "TOOLS", "de": "TOOLS"},
     "btn_use": {"en": "USE", "de": "AUSFÜHREN"},
     "tools_status": {
-        "en": "Health {hp} / {max_hp}      Gold {gold}      Godmode: {god}",
-        "de": "Leben {hp} / {max_hp}      Gold {gold}      Godmode: {god}",
+        "en": "Health {hp} / {max_hp}      Gold {gold}      Godmode: {god}      Enemies: {enemies}",
+        "de": "Leben {hp} / {max_hp}      Gold {gold}      Godmode: {god}      Feinde: {enemies}",
     },
     "tool_gold_up": {"en": "Give {amount} gold", "de": "{amount} Gold geben"},
     "tool_gold_down": {"en": "Take {amount} gold", "de": "{amount} Gold abziehen"},
@@ -431,6 +431,16 @@ STRINGS = {
     "log_godmode_on": {
         "en": "Godmode on - nothing can hurt you.",
         "de": "Godmode an - nichts kann dir mehr schaden.",
+    },
+    "tool_enemies_off": {"en": "Turn enemies OFF", "de": "Feinde AUSschalten"},
+    "tool_enemies_on": {"en": "Turn enemies ON", "de": "Feinde EINschalten"},
+    "log_enemies_off": {
+        "en": "Enemies off - the floor is yours.",
+        "de": "Feinde aus - die Ebene gehört dir.",
+    },
+    "log_enemies_on": {
+        "en": "Enemies back on.",
+        "de": "Feinde wieder an.",
     },
     "log_godmode_off": {
         "en": "Godmode off - you are mortal again.",

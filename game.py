@@ -161,6 +161,7 @@ class Game:
         # none of this should be reachable from a real run.
         self.test_room = False
         self.godmode = False
+        self.enemies_off = False
         self.needs_redraw = True
         self._last_draw_ms = 0
         self._last_tick_ms = 0
@@ -673,6 +674,7 @@ class Game:
         self.hitstop_timer = 0
         self.test_room = False
         self.godmode = False
+        self.enemies_off = False
         self.boss_banner_timer = 0
         self.pending_perk_count = 0
         self.perk_choices = []
@@ -782,6 +784,7 @@ class Game:
         self.hitstop_timer = 0
         self.test_room = False
         self.godmode = False
+        self.enemies_off = False
         self.boss_banner_timer = 0
         self.pending_perk_count = data.get("pending_perk_count", 0)
         by_id = {p["id"]: p for p in C.PERKS}
@@ -1292,7 +1295,7 @@ class Game:
     # and the tap targets cannot drift apart, and so adding a tool is one
     # entry rather than three edits.
     TOOL_KEYS = (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4,
-                 pygame.K_5, pygame.K_6)
+                 pygame.K_5, pygame.K_6, pygame.K_7)
     TOOL_GOLD_STEP = 250
     TOOL_HP_STEP = 10
 
@@ -1306,6 +1309,8 @@ class Game:
             ("hp_full", self.t("tool_hp_full")),
             ("godmode", self.t("tool_godmode_off" if self.godmode
                                else "tool_godmode_on")),
+            ("enemies", self.t("tool_enemies_on" if self.enemies_off
+                               else "tool_enemies_off")),
         ]
 
     def _use_tool(self, index):
@@ -1334,6 +1339,14 @@ class Game:
             self.godmode = not self.godmode
             self.add_log(self.t("log_godmode_on" if self.godmode
                                 else "log_godmode_off"))
+        elif tool == "enemies":
+            # Switched off rather than deleted: the monsters stay in the
+            # list, so turning them back on restores the same room instead
+            # of an empty one you would have to rebuild.
+            self.enemies_off = not self.enemies_off
+            self.needs_redraw = True
+            self.add_log(self.t("log_enemies_off" if self.enemies_off
+                                else "log_enemies_on"))
         self.sounds.play("equip")
 
     def _render_tools(self):
@@ -1344,7 +1357,8 @@ class Game:
         p = self.player
         status = self.t("tools_status", hp=max(0, p.hp), max_hp=p.max_hp,
                         gold=p.gold,
-                        god=self.t("on" if self.godmode else "off"))
+                        god=self.t("on" if self.godmode else "off"),
+                        enemies=self.t("off" if self.enemies_off else "on"))
         line = self.f_body.render(status, True, C.COLOR_HUD_TEXT)
         self.screen.blit(line, line.get_rect(midtop=(C.SCREEN_WIDTH // 2, y)))
         y += line.get_height() + self.gap_m
@@ -1741,7 +1755,8 @@ class Game:
         """
         if (x, y) == (self.player.x, self.player.y):
             return True
-        if any((m.x, m.y) == (x, y) for m in self.monsters if m is not ignore):
+        if not self.enemies_off and any(
+                (m.x, m.y) == (x, y) for m in self.monsters if m is not ignore):
             return True
         if any((m.x, m.y) == (x, y) for m in getattr(self, "merchants", [])
                if m is not ignore):
@@ -2657,7 +2672,7 @@ class Game:
             self.state = "smith"
             return
 
-        target_monster = next(
+        target_monster = None if self.enemies_off else next(
             (m for m in self.monsters if m.x == target_x and m.y == target_y), None
         )
         if target_monster:
@@ -3664,6 +3679,8 @@ class Game:
 
     def _enemy_turn(self):
         if self.state == "dead":
+            return
+        if self.enemies_off:
             return
 
         # Haste buys a whole free turn: the monsters simply do not get
@@ -5000,6 +5017,8 @@ class Game:
         pygame.draw.rect(self.screen, (255, 255, 255), (mini_x + 2 + px * scale, mini_y + 2 + py * scale, scale, scale))
 
     def _render_boss_bar(self):
+        if self.enemies_off:
+            return
         boss = next((m for m in self.monsters if m.is_boss and m.awake and m.is_alive()), None)
         if boss is None:
             return
@@ -5188,10 +5207,11 @@ class Game:
             if (smith.x, smith.y) in self.visible:
                 self._draw_blacksmith(smith, ox, oy)
 
-        for monster in self.monsters:
-            if (monster.x, monster.y) in self.visible:
-                self._draw_monster(monster, ox, oy)
-                self._record_bestiary(monster.kind)
+        if not self.enemies_off:
+            for monster in self.monsters:
+                if (monster.x, monster.y) in self.visible:
+                    self._draw_monster(monster, ox, oy)
+                    self._record_bestiary(monster.kind)
 
         self._draw_player(ox, oy)
 
@@ -5248,6 +5268,8 @@ class Game:
         every monster on every frame - re-rendering text per frame is
         exactly what once dropped this game to 3.9 fps on a real phone.
         """
+        if self.enemies_off:
+            return
         ts = C.TILE_SIZE
         bar_h = max(2, ts // 8)
         for monster in self.monsters:
