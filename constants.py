@@ -555,6 +555,41 @@ POTION_BURST_RADIUS = 2
 # so it shows this many and counts the rest.
 HUD_MAX_BUFF_CHIPS = 5
 
+# --- special rooms and hazards ------------------------------------------
+# A mini-boss on floors divisible by this, except where a real boss is
+# already waiting (every 5th). Weaker than a boss but well above a
+# regular monster, so the gap between boss floors has a landmark in it.
+MINI_BOSS_EVERY = 3
+MINI_BOSS_MULT = 1.6
+MINI_BOSS_XP_MULT = 2.5
+
+# A locked treasure room: one chest, one guardian standing over it, and
+# the chest stays shut until the guardian is dead.
+TREASURE_ROOM_CHANCE = 0.45
+TREASURE_GUARD_MULT = 1.4
+TREASURE_MIN_LEVEL = 2
+
+# The boss's stairs are barred until it dies, so a boss floor cannot be
+# skipped by walking straight past it to the ladder.
+BOSS_DOOR_MIN_LEVEL = 5
+
+# Floor hazards, stepped on rather than triggered like traps: they are
+# visible from the start and are meant to be walked around.
+HAZARD_CHANCE_PER_ROOM = 0.30
+HAZARD_MIN_LEVEL = 3
+HAZARD_TYPES = {
+    "lava": {"tile": "wall_goo", "damage": 8, "color": (226, 88, 42),
+             "burn": 3, "min_level": 3},
+    "collapse": {"tile": "hole", "damage": 12, "color": (86, 60, 120),
+                 "min_level": 4, "one_shot": True},
+    "spikes": {"tile": "floor_spikes_anim_f2", "damage": 6, "color": (198, 86, 86),
+               "bleed": 2, "min_level": 3},
+}
+
+# The run's final challenge. Reachable, but a long way down.
+SUPERBOSS_LEVEL = 25
+SUPERBOSS_MULT = 3.0
+
 MERCHANT_CHANCE_PER_LEVEL = 0.35
 SHOP_STOCK = [
     {"kind": "potion", "name": "Healing Potion", "price": 12},

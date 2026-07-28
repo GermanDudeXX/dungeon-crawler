@@ -259,6 +259,37 @@ STRINGS = {
     # languages - "Lv" reads as a level marker in German too.
     "nameplate_level": {"en": "Lv{level}", "de": "St{level}"},
 
+    # --- special rooms and hazards ---
+    "superboss_prefix": {"en": "Ancient", "de": "Uralter"},
+    "log_mini_boss": {
+        "en": "{monster} rules this floor.",
+        "de": "{monster} herrscht über diese Ebene.",
+    },
+    "log_chest_guarded": {
+        "en": "The chest will not open while its guardian lives.",
+        "de": "Die Truhe öffnet sich nicht, solange ihr Wächter lebt.",
+    },
+    "log_chest_opened": {
+        "en": "The chest springs open, spilling its contents!",
+        "de": "Die Truhe springt auf und ihr Inhalt ergießt sich!",
+    },
+    "log_boss_door_locked": {
+        "en": "The way down is barred. The boss holds the key.",
+        "de": "Der Weg nach unten ist versperrt. Der Boss hält den Schlüssel.",
+    },
+    "log_hazard_lava": {
+        "en": "Molten rock scorches you for {dmg}!",
+        "de": "Glühendes Gestein verbrennt dich für {dmg}!",
+    },
+    "log_hazard_collapse": {
+        "en": "The floor gives way! You fall, taking {dmg} damage.",
+        "de": "Der Boden gibt nach! Du stürzt und nimmst {dmg} Schaden.",
+    },
+    "log_hazard_spikes": {
+        "en": "Spikes tear into you for {dmg}!",
+        "de": "Stacheln reißen dich für {dmg} auf!",
+    },
+
     # --- potion bag ---
     "bag_title": {"en": "POTIONS", "de": "TRÄNKE"},
     "bag_empty": {"en": "You are not carrying any potions.", "de": "Du trägst keine Tränke bei dir."},

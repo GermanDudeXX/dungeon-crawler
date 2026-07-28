@@ -236,6 +236,13 @@ class Monster(Entity):
         self.summon_cooldown = 3
         self.web_cooldown = 2
 
+        # Roles assigned after construction by the level generator (see
+        # Game._populate_level). Declared here so nothing has to reach for
+        # them with getattr and so they always serialise.
+        self.guards_chest = False
+        self.is_mini_boss = False
+        self.is_superboss = False
+
     def is_alive(self):
         return self.hp > 0
 

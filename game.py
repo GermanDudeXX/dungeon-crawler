@@ -623,6 +623,13 @@ class Game:
         self.merchants = [entities.Merchant(m["x"], m["y"]) for m in data.get("merchants", [])]
         self._decor = {tuple(int(v) for v in pos): name
                        for pos, name in data.get("decor", [])}
+        self.hazards = {tuple(int(v) for v in pos): kind
+                        for pos, kind in data.get("hazards", [])}
+        chest = data.get("chest_pos")
+        self.chest_pos = tuple(chest) if chest else None
+        self.chest_open = data.get("chest_open", False)
+        door = data.get("boss_door_pos")
+        self.boss_door_pos = tuple(door) if door else None
         self.level_history = {
             int(level): snapshot for level, snapshot in data.get("level_history", {}).items()
         }
@@ -687,6 +694,10 @@ class Game:
             "items": [self._serialize_item(i) for i in self.items],
             "merchants": [{"x": m.x, "y": m.y} for m in self.merchants],
             "decor": [[list(pos), name] for pos, name in self._decor.items()],
+            "hazards": [[list(pos), kind] for pos, kind in self.hazards.items()],
+            "chest_pos": list(self.chest_pos) if self.chest_pos else None,
+            "chest_open": self.chest_open,
+            "boss_door_pos": list(self.boss_door_pos) if self.boss_door_pos else None,
             "level_history": {str(level): snap for level, snap in self.level_history.items()},
         }
 
@@ -703,6 +714,13 @@ class Game:
             # leave hp far above max_hp.
             "level": m.level, "max_hp": m.max_hp, "power": m.power,
             "defense": m.defense, "xp_reward": m.xp_reward, "tier_mult": m.tier_mult,
+            # Roles a monster was given after construction. Without these
+            # a saved treasure guardian comes back as an ordinary elite
+            # and its chest unlocks itself.
+            "guards_chest": getattr(m, "guards_chest", False),
+            "is_mini_boss": getattr(m, "is_mini_boss", False),
+            "is_superboss": getattr(m, "is_superboss", False),
+            "name": m.name,
         }
 
     @staticmethod
@@ -728,6 +746,14 @@ class Game:
             # to be re-applied by hand; newer ones already have it baked
             # into the saved power.
             monster.power = int(monster.power * 1.5)
+        monster.guards_chest = m.get("guards_chest", False)
+        monster.is_mini_boss = m.get("is_mini_boss", False)
+        monster.is_superboss = m.get("is_superboss", False)
+        # The superboss's title is part of its name, and that name was
+        # built from a translated prefix - reuse the saved one rather than
+        # rebuilding it, or it reverts to a plain boss name on load.
+        if m.get("name"):
+            monster.name = m["name"]
         return monster
 
     @staticmethod
@@ -763,6 +789,10 @@ class Game:
             # a room rearranging itself behind the player's back reads as a
             # bug rather than as decoration.
             "decor": [[list(pos), name] for pos, name in self._decor.items()],
+            "hazards": [[list(pos), kind] for pos, kind in self.hazards.items()],
+            "chest_pos": list(self.chest_pos) if self.chest_pos else None,
+            "chest_open": self.chest_open,
+            "boss_door_pos": list(self.boss_door_pos) if self.boss_door_pos else None,
         }
 
     def _restore_level_snapshot(self, snap):
@@ -781,6 +811,13 @@ class Game:
         self.merchants = [entities.Merchant(m["x"], m["y"]) for m in snap.get("merchants", [])]
         self._decor = {tuple(int(v) for v in pos): name
                        for pos, name in snap.get("decor", [])}
+        self.hazards = {tuple(int(v) for v in pos): kind
+                        for pos, kind in snap.get("hazards", [])}
+        chest = snap.get("chest_pos")
+        self.chest_pos = tuple(chest) if chest else None
+        self.chest_open = snap.get("chest_open", False)
+        door = snap.get("boss_door_pos")
+        self.boss_door_pos = tuple(door) if door else None
 
     def _save_and_quit(self):
         persistence.save_run(self._build_save_data())
@@ -811,7 +848,11 @@ class Game:
         self.items = []
         self.merchants = []
         self.traps = {}
+        self.hazards = {}
         self.shrine_pos = None
+        self.chest_pos = None
+        self.chest_open = False
+        self.boss_door_pos = None
         self.damage_numbers = []
         self._scatter_decor()
         self._populate_level()
@@ -889,8 +930,21 @@ class Game:
             bx, by = self.stairs_pos
             tier = (self.dungeon_level // 5 - 1) % len(C.BOSS_KIND_CYCLE)
             boss_kind = C.BOSS_KIND_CYCLE[tier]
-            self.monsters.append(self._make_monster(bx, by, boss_kind, boss=True))
+            boss = self._make_monster(bx, by, boss_kind, boss=True)
+            if self.dungeon_level >= C.SUPERBOSS_LEVEL and self.dungeon_level % C.SUPERBOSS_LEVEL == 0:
+                self._promote_to_superboss(boss)
+            self.monsters.append(boss)
             self.add_log(self.t("log_boss_guards"))
+            if self.dungeon_level >= C.BOSS_DOOR_MIN_LEVEL:
+                self._lock_boss_door()
+        elif self.dungeon_level % C.MINI_BOSS_EVERY == 0:
+            self._spawn_mini_boss(spawnable_rooms)
+
+        if self.dungeon_level >= C.TREASURE_MIN_LEVEL and random.random() < C.TREASURE_ROOM_CHANCE:
+            self._make_treasure_room(spawnable_rooms)
+
+        if self.dungeon_level >= C.HAZARD_MIN_LEVEL:
+            self._scatter_hazards(spawnable_rooms)
 
         for _ in range(random.randint(1, 3)):
             self._spawn_item(random.choice(spawnable_rooms), "potion")
@@ -906,21 +960,202 @@ class Game:
         for room in spawnable_rooms:
             if random.random() < C.TRAP_CHANCE_PER_ROOM:
                 x, y = self._random_floor_in_room(room)
-                if not self._is_occupied(x, y) and (x, y) != self.stairs_pos and (x, y) not in self.traps:
+                if self._tile_is_free(x, y):
                     self.traps[(x, y)] = random.choice(list(C.TRAP_TYPES.keys()))
 
         if random.random() < C.MERCHANT_CHANCE_PER_LEVEL:
             room = random.choice(spawnable_rooms)
             x, y = self._random_floor_in_room(room)
-            if not self._is_occupied(x, y) and (x, y) not in self.traps and (x, y) != self.stairs_pos:
+            if self._tile_is_free(x, y):
                 self.merchants.append(entities.Merchant(x, y))
 
         if self.dungeon_level >= 2 and random.random() < C.SHRINE_CHANCE_PER_LEVEL:
             room = random.choice(spawnable_rooms)
             x, y = self._random_floor_in_room(room)
-            occupied_by_merchant = any((m.x, m.y) == (x, y) for m in self.merchants)
-            if not self._is_occupied(x, y) and not occupied_by_merchant and (x, y) not in self.traps and (x, y) != self.stairs_pos:
+            if self._tile_is_free(x, y):
                 self.shrine_pos = (x, y)
+
+    def _tile_is_free(self, x, y):
+        """Nothing else has claimed this tile.
+
+        One predicate for every placement, because they were each
+        open-coding a slightly different subset - traps checked the stairs
+        but not the merchant, the shrine checked the merchant but not the
+        chest - and each new feature made the gaps worse. A trap hidden
+        under a lava tile, in particular, is two hits for one step with no
+        way to see the second coming.
+        """
+        if self._is_occupied(x, y):
+            return False
+        if (x, y) in self.traps or (x, y) in self.hazards:
+            return False
+        if (x, y) in (self.stairs_pos, self.up_stairs_pos, self.chest_pos):
+            return False
+        if any((m.x, m.y) == (x, y) for m in self.merchants):
+            return False
+        if self.shrine_pos == (x, y):
+            return False
+        return True
+
+    def _promote_to_superboss(self, boss):
+        """Turns the deepest boss into something in a class of its own.
+
+        Not a separate monster type: it reuses the boss whose floor it is,
+        so its signature move (enrage, summon, web) still applies - it is
+        the same fight the player has already learned, several times
+        harder, which is a better final test than a new set of rules.
+        """
+        boss.max_hp = int(boss.max_hp * C.SUPERBOSS_MULT)
+        boss.hp = boss.max_hp
+        boss.power = int(boss.power * C.SUPERBOSS_MULT)
+        boss.defense = int(boss.defense * 1.5)
+        boss.xp_reward = int(boss.xp_reward * C.SUPERBOSS_MULT)
+        boss.is_superboss = True
+        boss.name = f"{self.t('superboss_prefix')} {boss.name}"
+
+    def _spawn_mini_boss(self, rooms):
+        """A landmark fight on the floors between the real bosses.
+
+        Marked as an elite so it gets the existing halo and tougher stats
+        for free, but scaled beyond any normal elite and placed in a room
+        of its own rather than mixed into the general spawn.
+        """
+        room = random.choice(rooms)
+        x, y = self._random_floor_in_room(room)
+        if self._is_occupied(x, y):
+            return
+        kind = random.choice(list(C.MONSTER_TYPES.keys()))
+        monster = self._make_monster(x, y, kind, elite=random.choice(C.ELITE_MODIFIERS))
+        monster.max_hp = int(monster.max_hp * C.MINI_BOSS_MULT)
+        monster.hp = monster.max_hp
+        monster.power = int(monster.power * C.MINI_BOSS_MULT)
+        monster.xp_reward = int(monster.xp_reward * C.MINI_BOSS_XP_MULT)
+        monster.is_mini_boss = True
+        self.monsters.append(monster)
+        self.add_log(self.t("log_mini_boss", monster=self._monster_named(monster, "nom")))
+
+    def _make_treasure_room(self, rooms):
+        """A chest with something good in it, and something standing on it.
+
+        The chest cannot be opened while its guardian lives, so this is a
+        fight the player chooses to pick rather than one that walks into
+        them - which is the whole appeal of a treasure room.
+        """
+        room = random.choice(rooms)
+        x, y = self._random_floor_in_room(room)
+        if self._is_occupied(x, y) or (x, y) in (self.stairs_pos, self.up_stairs_pos):
+            return
+        if any((i.x, i.y) == (x, y) for i in self.items):
+            return
+
+        guard_spot = next(
+            ((gx, gy) for gx, gy in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1))
+             if dungeon.is_walkable(self.grid, gx, gy) and not self._is_occupied(gx, gy)),
+            None)
+        if guard_spot is None:
+            return
+
+        self.chest_pos = (x, y)
+        self.chest_open = False
+        kind = random.choice(list(C.MONSTER_TYPES.keys()))
+        guard = self._make_monster(guard_spot[0], guard_spot[1], kind,
+                                   elite=random.choice(C.ELITE_MODIFIERS))
+        guard.max_hp = int(guard.max_hp * C.TREASURE_GUARD_MULT)
+        guard.hp = guard.max_hp
+        guard.guards_chest = True
+        self.monsters.append(guard)
+
+    def _chest_guard_alive(self):
+        return any(getattr(m, "guards_chest", False) and m.is_alive()
+                   for m in self.monsters)
+
+    def _open_chest(self):
+        """Empties the chest onto the floor around it.
+
+        Drops real items rather than granting them silently, so the
+        contents are picked up the same way as everything else and the
+        player can see what they got before touching it.
+        """
+        if self.chest_open or self.chest_pos is None:
+            return
+        if self._chest_guard_alive():
+            self.add_log(self.t("log_chest_guarded"))
+            return
+        self.chest_open = True
+        self.sounds.play("equip")
+        cx, cy = self.chest_pos
+        spots = [(cx, cy)] + [(cx + dx, cy + dy)
+                              for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))]
+        kinds = ["gold", "potion", random.choice(("weapon", "armor")), "scroll"]
+        for kind in kinds:
+            spot = next((s for s in spots
+                         if dungeon.is_walkable(self.grid, *s)
+                         and not any((i.x, i.y) == s for i in self.items)), None)
+            if spot is None:
+                break
+            self._spawn_item_at(spot[0], spot[1], kind)
+        self.add_log(self.t("log_chest_opened"))
+
+    def _lock_boss_door(self):
+        """Bars the way down until the boss is dead.
+
+        Stored as a position rather than a wall tile: the grid stays
+        walkable underneath, so nothing about pathfinding, the field of
+        view or the map cache has to learn about a door that comes and
+        goes. The block is enforced in _player_turn instead.
+        """
+        self.boss_door_pos = self.stairs_pos
+
+    def _boss_door_blocked(self):
+        if self.boss_door_pos is None:
+            return False
+        return any(m.is_boss and m.is_alive() for m in self.monsters)
+
+    def _scatter_hazards(self, rooms):
+        """Standing hazards, unlike traps: visible, and meant to be avoided."""
+        available = [(k, v) for k, v in C.HAZARD_TYPES.items()
+                     if v["min_level"] <= self.dungeon_level]
+        if not available:
+            return
+        for room in rooms:
+            if random.random() >= C.HAZARD_CHANCE_PER_ROOM:
+                continue
+            kind, _info = random.choice(available)
+            for _ in range(random.randint(1, 3)):
+                x, y = self._random_floor_in_room(room)
+                if self._tile_is_free(x, y):
+                    self.hazards[(x, y)] = kind
+
+    def _trigger_hazard(self, pos):
+        kind = self.hazards.get(pos)
+        if kind is None:
+            return
+        info = C.HAZARD_TYPES[kind]
+        # A collapsing floor gives way once and is then just a hole you
+        # have already fallen through; lava and spikes stay dangerous.
+        if info.get("one_shot"):
+            del self.hazards[pos]
+            self._map_cache = None
+        damage = info["damage"]
+        self.player.hp -= damage
+        self._spawn_damage_number(self.player.x, self.player.y, str(damage), info["color"])
+        self.add_log(self.t(f"log_hazard_{kind}", dmg=damage))
+        self.sounds.play("player_hurt")
+        self.shake_timer, self.shake_intensity = 6, 4
+        if info.get("burn"):
+            self.player.bleed_turns = max(self.player.bleed_turns, info["burn"])
+        if info.get("bleed"):
+            self.player.bleed_turns = max(self.player.bleed_turns, info["bleed"])
+        if self.player.hp <= 0:
+            self.add_log(self.t("log_you_died"))
+            self.sounds.play("death")
+            self.state = "dead"
+            self._finalize_run()
+
+    def _spawn_item_at(self, x, y, kind):
+        """Places one item at an exact tile, bypassing the room roll."""
+        room = dungeon.Room(x, y, 1, 1)
+        self._spawn_item(room, kind)
 
     def _spawn_item(self, room, kind):
         x, y = self._random_floor_in_room(room)
@@ -1808,6 +2043,12 @@ class Game:
         )
         if target_monster:
             self._attack(self.player, target_monster)
+        elif (target_x, target_y) == self.boss_door_pos and self._boss_door_blocked():
+            # Barred, not walled: the tile stays walkable so pathfinding,
+            # the field of view and the map cache never have to know about
+            # a door that appears and disappears.
+            self.add_log(self.t("log_boss_door_locked"))
+            return
         elif dungeon.is_walkable(self.grid, target_x, target_y):
             self.player.move(dx, dy)
             pos = (self.player.x, self.player.y)
@@ -1815,10 +2056,16 @@ class Game:
                 self._trigger_trap(pos)
                 if self.state == "dead":
                     return
+            if pos in self.hazards:
+                self._trigger_hazard(pos)
+                if self.state == "dead":
+                    return
             if pos == self.shrine_pos:
                 self._trigger_shrine()
                 if self.state == "dead":
                     return
+            if pos == self.chest_pos and not self.chest_open:
+                self._open_chest()
             item = next((i for i in self.items if i.x == self.player.x and i.y == self.player.y), None)
             if item:
                 self._collect_item(item)
@@ -3874,6 +4121,60 @@ class Game:
 
         if self.shrine_pos and self.shrine_pos in self.explored:
             self._draw_char("A", self.shrine_pos[0], self.shrine_pos[1], C.COLOR_SHRINE, ox, oy)
+
+        # Hazards, chest and door draw here rather than in the map cache:
+        # all three change during play (a collapsing floor gives way, a
+        # chest opens, a door unbars) and repainting the whole cache for
+        # each would be far more work than blitting a handful of tiles.
+        ts = C.TILE_SIZE
+        for (hx, hy), kind in self.hazards.items():
+            if (hx, hy) not in self.explored:
+                continue
+            info = C.HAZARD_TYPES[kind]
+            dim = (hx, hy) not in self.visible
+            # Art first, then a translucent colour wash over the top. The
+            # tileset has no lava frame and the substitutes read as dark
+            # smudges on dark stone - a hazard the player cannot pick out
+            # at a glance is just an unfair hit. Over, not under: these
+            # frames are fully opaque and painted straight over a wash.
+            self._draw_tile_at(info["tile"], hx, hy, ox, oy, dim=dim)
+            wash = pygame.Surface((ts, ts), pygame.SRCALPHA)
+            wash.fill((*info["color"], 60 if dim else 120))
+            pygame.draw.rect(wash, (*info["color"], 110 if dim else 235),
+                             (0, 0, ts, ts), width=max(1, ts // 12))
+            self.screen.blit(wash, (hx * ts + ox, hy * ts + oy))
+
+        if self.chest_pos and self.chest_pos in self.explored:
+            dim = self.chest_pos not in self.visible
+            if not self.chest_open and not dim:
+                # Same halo trick as elite monsters: a closed chest is
+                # otherwise a small dark box that the guardian standing
+                # over it hides completely.
+                glow = pygame.Surface((ts * 2, ts * 2), pygame.SRCALPHA)
+                pygame.draw.ellipse(glow, (*C.COLOR_ACCENT, 70), glow.get_rect())
+                self.screen.blit(glow, glow.get_rect(center=(
+                    self.chest_pos[0] * ts + ts // 2 + ox,
+                    self.chest_pos[1] * ts + ts // 2 + oy)))
+            frame = ("chest_empty_open_anim_f2" if self.chest_open
+                     else "chest_full_open_anim_f0")
+            self._draw_tile_at(frame, *self.chest_pos, ox, oy, dim=dim)
+
+        if self.boss_door_pos and self.boss_door_pos in self.explored and self._boss_door_blocked():
+            self._draw_tile_at("doors_leaf_closed", *self.boss_door_pos, ox, oy,
+                               dim=self.boss_door_pos not in self.visible)
+
+    def _draw_tile_at(self, name, x, y, ox=0, oy=0, dim=False):
+        """Blits one tileset frame over a map cell, bottom-aligned.
+
+        Bottom-aligned because several frames are taller than a cell and
+        are drawn hanging upwards out of it, the same way the map cache
+        places wall fronts.
+        """
+        tile = self._tile(name, dim)
+        if tile is None:
+            return
+        ts = C.TILE_SIZE
+        self.screen.blit(tile, (x * ts + ox, y * ts + oy + ts - tile.get_height()))
 
     def _render_entities(self, ox=0, oy=0):
         for item in self.items:
