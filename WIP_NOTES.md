@@ -76,15 +76,33 @@ Von der Ideen-Liste waren **12 Punkte drin, 7 halb, 25+ offen**, Tränke 1 von 3
 | 7 | Tod-Statistik | **FERTIG** `a10a8de` — Rest offen (s.u.) |
 | 8 | Partikel, Hitstop | **FERTIG** `a10a8de` — Rest offen (s.u.) |
 
+### Nach Welle 8 noch dazugekommen (auf Wunsch des Nutzers)
+- **DU-Pfeil** über der Spielfigur (`_render_player_marker`, misst den echten
+  Kopf per `get_bounding_rect`, einmalig in `_measure_player_head`)
+- **Schmied** (`_smith_offers/_smith_buy/_render_smith`) — Gold-Senke
+- **Schatzkammer** (`_make_vault`) — 3–5 wache Elite-Wächter auf einem Beutehaufen
+- **Testraum** (`start_test_room`/`_build_test_room`, Taste D / Titel-Knopf)
+- **Test-Werkzeuge** (`_tools`/`_use_tool`/`_render_tools`, Taste K im Testraum):
+  Gold ±, Leben ±, voll heilen, Godmode, Feinde ein/aus.
+  Godmode läuft über **`_hurt_player()`** — die eine Stelle, durch die jeder
+  Spielerschaden geht. Neue Schadensquellen müssen sie benutzen.
+- **Titelfigur** = zuletzt gespielte Klasse (`char_class` wird in `__init__`
+  aus den Settings vorbelegt, sonst liest `_class()` den Default)
+- **Ereignis-Banner** oben (`_notify`/`_announce`/`_render_banners`) — wichtige
+  Meldungen laufen über `_announce(key, farbe, **kw)` statt `add_log`
+- **Feste Objekte**: Kisten und Säulen blockieren Bewegung UND Sichtlinie
+  (`blocks_movement()` ist die eine Prüfung). Platzierung nur, wenn die
+  erreichbare Fläche danach **genau um das eine Feld** schrumpft — sonst
+  schneidet eine Kiste eine Ecke ab und alles, was dort später erscheint,
+  ist unerreichbar.
+
 ### NOCH OFFEN aus der Ideen-Liste
 Bewusst nicht gebaut, in dieser Reihenfolge sinnvoll:
-1. **Schmied** — Waffe/Rüstung gegen Gold aufwerten (Gold-Senke fürs Spätspiel).
-   Einfachster nächster Schritt: `_render_shop` als Vorlage, eigener State.
-2. **Skilltree** — die Perk-Auswahl gibt es schon (`C.PERKS`,
+1. **Skilltree** — die Perk-Auswahl gibt es schon (`C.PERKS`,
    `_render_levelup_choice`); ein Baum wäre ein Screen darüber.
-3. **Set-Items, Begleiter, Arena-Wellen, Glücksspiel, Item-Lore, Quests,
+2. **Set-Items, Begleiter, Arena-Wellen, Glücksspiel, Item-Lore, Quests,
    Speicherslots, Ambient-Sounds, NPC-Dialoge.**
-4. **Endlos-Modus** — faktisch schon da: Themen zyklen ab Ebene 51 mit „+1"
+3. **Endlos-Modus** — faktisch schon da: Themen zyklen ab Ebene 51 mit „+1"
    weiter und die Werte steigen dauerhaft. Fehlt nur ein Menüeintrag.
 
 ### PRIORITÄT 1 — Update-Bug: **BEHOBEN** (`07f2660`)
@@ -122,10 +140,12 @@ for t in test_music test_ssl test_installer test_tiers test_levelup          tes
   python "$SCRATCH/$t.py" | tail -1
 done
 ```
-Alle 19 grün (Stand: `a10a8de`). Danach: `assets/build_version.txt`
-hochzählen, PC-exe bauen, **erst der Nutzer testet am PC**, dann Push zu
-GitHub + APK-Build.
-Vorher veröffentlicht: **PC Build 63 · Android Build 58**.
+Alle 20 grün (Stand: `b212862`). Zusätzlich seit Welle 8:
+`test_smith` (Schmied, Schatzkammer, Testraum, Werkzeuge, Feinde-Schalter).
+Alle Suiten laufen **stumm** (`SDL_AUDIODRIVER=dummy`), auch `test_music` —
+der Dummy-Treiber lässt Laden/Abspielen/`get_busy` weiterlaufen.
+
+Veröffentlicht: **PC Build 80 · Android Build 60** (28.07.2026).
 
 ### Umgangsregeln mit dem Nutzer
 - Deutsch, kein Quellcode, keine technischen Erklärungen — nur kurzes Wiki/Changelog.
