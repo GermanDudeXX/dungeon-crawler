@@ -141,6 +141,8 @@ class Game:
         self.shop_stock = None
         self._class_sprite_cache = {}
         self.pending_difficulty = None
+        self.particles = []
+        self.hitstop_timer = 0
         self.needs_redraw = True
         self._last_draw_ms = 0
         self._last_tick_ms = 0
@@ -621,6 +623,8 @@ class Game:
         self.move_held = False
         self.new_best = False
         self.damage_numbers = []
+        self.particles = []
+        self.hitstop_timer = 0
         self.boss_banner_timer = 0
         self.pending_perk_count = 0
         self.perk_choices = []
@@ -722,6 +726,8 @@ class Game:
         self.move_held = False
         self.new_best = False
         self.damage_numbers = []
+        self.particles = []
+        self.hitstop_timer = 0
         self.boss_banner_timer = 0
         self.pending_perk_count = data.get("pending_perk_count", 0)
         by_id = {p["id"]: p for p in C.PERKS}
@@ -944,6 +950,8 @@ class Game:
         self.chest_is_mimic = False
         self.boss_door_pos = None
         self.damage_numbers = []
+        self.particles = []
+        self.hitstop_timer = 0
         self._scatter_decor()
         self._populate_level()
 
@@ -1900,6 +1908,8 @@ class Game:
     def _animations_active(self):
         if self.shake_timer > 0 or self.flash_timer > 0 or self.boss_banner_timer > 0:
             return True
+        if self.particles or self.hitstop_timer > 0:
+            return True
         if self.damage_numbers:
             return True
         if self.player.render_x != self.player.x or self.player.render_y != self.player.y:
@@ -1943,6 +1953,13 @@ class Game:
         self.move_held = True
 
     def _update_animations(self):
+        # Hitstop: hold everything still for a few ticks after a big hit.
+        # Timers and movement both pause, so the freeze reads as impact
+        # rather than as a dropped frame.
+        if self.hitstop_timer > 0:
+            self.hitstop_timer -= 1
+            return
+
         self.player.update_animation()
         for monster in self.monsters:
             monster.update_animation()
@@ -1955,6 +1972,46 @@ class Game:
         for dn in self.damage_numbers:
             dn["timer"] -= 1
         self.damage_numbers = [dn for dn in self.damage_numbers if dn["timer"] > 0]
+        self._update_particles()
+
+    def _update_particles(self):
+        alive = []
+        for p in self.particles:
+            p["timer"] -= 1
+            if p["timer"] <= 0:
+                continue
+            p["x"] += p["vx"]
+            p["y"] += p["vy"]
+            p["vy"] += C.PARTICLE_GRAVITY
+            alive.append(p)
+        self.particles = alive
+
+    def _spawn_particles(self, x, y, color, count, spread=0.34):
+        """A burst of sparks at a tile, in pixel space.
+
+        Positions are kept in pixels rather than tiles because they drift
+        sub-tile distances and fall under gravity; converting per frame
+        would be needless arithmetic. Capped globally - a fight with a
+        dozen monsters in it must not turn into a particle simulation.
+        """
+        ts = C.TILE_SIZE
+        room = C.PARTICLE_MAX - len(self.particles)
+        for _ in range(min(count, max(0, room))):
+            self.particles.append({
+                "x": x * ts + ts / 2 + random.uniform(-ts / 5, ts / 5),
+                "y": y * ts + ts / 2 + random.uniform(-ts / 5, ts / 5),
+                "vx": random.uniform(-spread, spread) * ts / 6,
+                "vy": random.uniform(-spread * 1.6, -spread * 0.2) * ts / 6,
+                "color": color,
+                "timer": random.randint(C.PARTICLE_LIFETIME // 2, C.PARTICLE_LIFETIME),
+                "size": max(2, ts // 9),
+            })
+
+    def _render_particles(self, ox=0, oy=0):
+        for p in self.particles:
+            size = p["size"]
+            self.screen.fill(p["color"],
+                             (int(p["x"]) + ox, int(p["y"]) + oy, size, size))
 
     def _spawn_damage_number(self, x, y, text, color):
         self.damage_numbers.append({"x": x, "y": y, "text": text, "color": color, "timer": 30, "max_timer": 30})
@@ -2840,6 +2897,19 @@ class Game:
         number_color = C.COLOR_CRIT if crit else ((255, 255, 255) if attacker is self.player else (255, 120, 120))
         self._spawn_damage_number(defender.x, defender.y, f"{damage}{'!' if crit else ''}", number_color)
 
+        # Sparks in the colour of whatever just happened, and on a crit a
+        # brief freeze. Between them these are most of what makes a hit
+        # read as a hit rather than as a number changing.
+        spark = C.COLOR_CRIT if crit else (
+            getattr(defender, "color", C.COLOR_DANGER) if defender is not self.player
+            else C.COLOR_HP_BAR_FG)
+        self._spawn_particles(defender.x, defender.y, spark,
+                              C.PARTICLES_PER_CRIT if crit else C.PARTICLES_PER_HIT)
+        if crit:
+            self.hitstop_timer = C.HITSTOP_TICKS
+            self.shake_timer = max(self.shake_timer, 5)
+            self.shake_intensity = max(self.shake_intensity, 3)
+
         if attacker is self.player:
             self.sounds.play("hit")
         else:
@@ -2913,6 +2983,13 @@ class Game:
     def _on_monster_death(self, monster):
         self.add_log(self.t("log_monster_dies", monster=self._monster_named(monster, "nom"), xp=monster.xp_reward))
         self.sounds.play("monster_death")
+        # A bigger burst in the monster's own colour, so a kill is visibly
+        # different from a hit that merely hurt.
+        self._spawn_particles(monster.x, monster.y, monster.color,
+                              C.PARTICLES_PER_DEATH, spread=0.5)
+        if monster.is_boss:
+            self.hitstop_timer = C.HITSTOP_TICKS * 3
+            self.shake_timer, self.shake_intensity = 18, 7
         if monster in self.monsters:
             self.monsters.remove(monster)
         self.player.kills += 1
@@ -3417,6 +3494,7 @@ class Game:
             self.screen.fill(C.COLOR_BG, (0, 0, C.SCREEN_WIDTH, slack))
         self._render_map(ox, oy)
         self._render_entities(ox, oy)
+        self._render_particles(ox, oy)
         self._render_nameplates(ox, oy)
         self._render_damage_numbers(ox, oy)
         self._render_flash()
@@ -4953,6 +5031,32 @@ class Game:
         for name, rect in self.scroll_buttons.items():
             self._draw_touch_button(rect, scroll_labels[name])
 
+    def _run_summary_lines(self):
+        """The run in five lines: who you were, how you fought, what you had.
+
+        Read off the live player rather than from a separate tally kept
+        during the run - there is nothing here that is not already state,
+        and a parallel counter would only be one more thing to forget to
+        update.
+        """
+        p = self.player
+        klass = self._class()
+        diff = self._diff()
+        weapon = f"{self.tn(p.weapon_name)} +{p.weapon_bonus}"
+        if p.weapon_element_id:
+            weapon += f" ({self.te(p.weapon_element_id)})"
+        return [
+            self.t("gameover_hero", hero=self._class_name(klass),
+                   difficulty=self._difficulty_name(diff)),
+            self.t("gameover_gear", weapon=weapon,
+                   armor=f"{self.tn(p.armor_name)} +{p.armor_bonus}"),
+            self.t("gameover_combat", power=p.power, defense=p.defense,
+                   crit=int(round(p.crit_chance * 100))),
+            self.t("gameover_carried", gold=p.gold, potions=p.potions,
+                   scrolls=sum(p.scrolls.values())),
+            self.t("gameover_drunk", potions=p.potions_drunk_this_run),
+        ]
+
     def _render_game_over(self):
         self._tap_targets = []
         overlay = pygame.Surface((C.SCREEN_WIDTH, C.SCREEN_HEIGHT))
@@ -4966,8 +5070,14 @@ class Game:
         if self.new_best:
             lines.append(best_line)
 
+        # What the run was actually made of, not just how far it got. A
+        # death screen that only says "floor 7" throws away everything the
+        # player just spent twenty minutes accumulating.
+        detail = self._run_summary_lines()
+
         title = self.f_title.render(self.t("gameover_title"), True, C.COLOR_DANGER)
         total = (title.get_height() + self.gap_l + len(lines) * self.pitch_body
+                 + self.gap_m + len(detail) * self.pitch_sm
                  + self.gap_xl + self.btn_h_hero)
         y = max(self.pad, (C.SCREEN_HEIGHT - total) // 2)
 
@@ -4978,6 +5088,9 @@ class Game:
             surf = self.f_body.render(line, True, color)
             self.screen.blit(surf, surf.get_rect(midtop=(C.SCREEN_WIDTH // 2, y)))
             y += self.pitch_body
+        y += self.gap_m
+        y = self._lines_block(detail, y, font=self.f_sm, pitch=self.pitch_sm,
+                              color=C.COLOR_TEXT_DIM)
         y += self.gap_xl
 
         self._button_row([

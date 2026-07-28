@@ -334,6 +334,28 @@ STRINGS = {
     "log_shield_absorbed": {"en": "Your ward absorbs {amount} damage.", "de": "Dein Schutzschild absorbiert {amount} Schaden."},
     "hud_shield": {"en": "Ward", "de": "Schild"},
 
+    # --- death summary ---
+    "gameover_hero": {
+        "en": "{hero}  ·  {difficulty}",
+        "de": "{hero}  ·  {difficulty}",
+    },
+    "gameover_gear": {
+        "en": "Wielding {weapon}, wearing {armor}",
+        "de": "Bewaffnet mit {weapon}, gerüstet mit {armor}",
+    },
+    "gameover_combat": {
+        "en": "Power {power}   Defence {defense}   Crit {crit}%",
+        "de": "Angriff {power}   Verteidigung {defense}   Krit {crit}%",
+    },
+    "gameover_carried": {
+        "en": "Carrying {gold} gold, {potions} potions, {scrolls} scrolls",
+        "de": "Dabei: {gold} Gold, {potions} Tränke, {scrolls} Schriftrollen",
+    },
+    "gameover_drunk": {
+        "en": "Potions drunk this run: {potions}",
+        "de": "In diesem Lauf getrunkene Tränke: {potions}",
+    },
+
     # --- character class ---
     "class_title": {"en": "CHOOSE YOUR HERO", "de": "WÄHLE DEINEN HELDEN"},
     "class_hint": {

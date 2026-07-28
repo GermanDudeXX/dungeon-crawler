@@ -623,6 +623,24 @@ HAZARD_TYPES = {
 SUPERBOSS_LEVEL = 25
 SUPERBOSS_MULT = 3.0
 
+# --- juice ---------------------------------------------------------------
+# Particles are plain coloured squares with a velocity and a lifetime -
+# no sprites, no alpha surfaces per particle. At this resolution a 3px
+# square reads perfectly well as a spark, and anything fancier would
+# cost per-frame work on a device that already needed a map cache to hit
+# 30fps.
+PARTICLE_LIFETIME = 14
+PARTICLE_GRAVITY = 0.06
+PARTICLE_MAX = 90          # hard cap, so a big fight cannot flood the loop
+PARTICLES_PER_HIT = 5
+PARTICLES_PER_CRIT = 11
+PARTICLES_PER_DEATH = 16
+
+# A critical hit freezes the frame for a moment. The single cheapest way
+# to make a big hit *feel* big; measured in animation ticks, not
+# milliseconds, so it scales with the existing 30Hz tick.
+HITSTOP_TICKS = 4
+
 # --- character classes ---------------------------------------------------
 # Picked once per run, after the difficulty. Each is a different opening
 # hand rather than a different set of rules: same controls, same systems,
