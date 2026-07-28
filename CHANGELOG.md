@@ -7,6 +7,90 @@ zählen auf PC und Android getrennt hoch.
 
 ---
 
+## Aktuell — PC Build 73
+
+### Karte & Grafik
+- **Echte Dungeon-Grafik!** Steinböden, Ziegelwände und massiver Fels statt
+  farbiger Vierecke. Wände wählen automatisch die passende Ansicht, je
+  nachdem, wo der Raum liegt
+- Alle fünf Themen (Krypta, Höhlen, Eisenverlies, Flammenreich, Frostgruft)
+  sehen jetzt deutlich unterschiedlich aus — dieselbe Steinmetzarbeit in
+  anderem Licht
+- Deko in den Räumen: Banner, Fässer, Schädel, Säulen. Sie bleibt liegen,
+  wo sie ist, auch wenn du die Ebene später noch einmal betrittst
+
+### Helden
+- **Drei Klassen** zur Auswahl, jede mit eigener Spielfigur:
+  - **Krieger** — zäh und gepanzert, verzeiht Fehler
+  - **Schurke** — zerbrechlich und schnell, trifft ständig kritisch
+  - **Magier** — schwach im Nahkampf, startet mit Rollen und verzaubert
+    seine Treffer
+- Jede Klasse startet mit eigener Ausrüstung und eigenen Tränken
+
+### Schwierigkeitsgrade
+- **Einfach / Normal / Schwer / Hardcore**, zu Beginn jedes Laufs wählbar
+- Sie verändern dein Leben und deinen Schaden, das der Gegner und die
+  Ladenpreise. Erfahrung wird nie skaliert — ein schwerer Lauf ist wirklich
+  schwerer, nicht nur länger
+
+### Tränke — von 1 auf 30
+- Heilung, dauerhafte Verbesserungen, Kampf-Effekte, Heilmittel,
+  Wurfphiolen und drei verfluchte, die man nur findet und nie kaufen kann
+- **Neuer Trankbeutel** (Taste I oder BEUTEL): zeigt alle Tränke mit Bild,
+  Wirkung und Anzahl. Jede Zeile ist direkt trinkbar
+- Effekte halten mehrere Runden, stapeln sich frei und werden im HUD mit
+  Restdauer angezeigt
+- Händler haben jetzt jeder ein eigenes Sortiment
+
+### Gegner
+- **Namensschilder** über jedem Monster: Lebensleiste, Name, Stufe und
+  Symbole für alle Effekte, die gerade auf ihm liegen
+- **Skelette weichen zurück**, wenn du zu nah kommst, und schießen aus der
+  Distanz — jetzt muss man sie jagen
+- **Ratten und Fledermäuse kommen im Schwarm**
+- **Goblins legen Fallen**, während sie sich zurückziehen
+- **Bosse haben sichtbare Phasen** — die Leiste wechselt die Farbe, nennt
+  die Phase und zeigt, wo die nächste beginnt
+- **Mimiks**: manche Schatztruhen sind Monster. Von außen nicht zu erkennen
+
+### Räume & Gefahren
+- **Mini-Boss auf jeder 3. Ebene**
+- **Schatzräume** mit bewachter Truhe — erst den Wächter töten
+- **Boss-Türen**: auf Boss-Ebenen ist die Treppe versperrt, bis der Boss fällt
+- **Bodengefahren**: Lava, einstürzende Böden und Stachelbetten. Anders als
+  Fallen sind sie sichtbar und sollen umgangen werden
+- **Superboss** alle 25 Ebenen
+
+### Statuseffekte
+- **Bluten** bei jedem kritischen Treffer
+- **Frost verlangsamt** jetzt zusätzlich — betroffene Gegner handeln nur
+  noch jede zweite Runde
+
+### Spielgefühl
+- Funken bei jedem Treffer, ein größerer Ausbruch bei einem Kill
+- Kurzer Standbild-Moment bei kritischen Treffern und beim Boss-Tod
+- **Der Todesbildschirm** zeigt jetzt den ganzen Lauf: Held, Schwierigkeit,
+  Waffe und Rüstung, Endwerte, was du noch dabei hattest und wie viele
+  Tränke es gekostet hat
+
+### Behoben
+- **Update-Fehler „Failed to load Python DLL":** Ein Update konnte sich
+  stillschweigend nicht installieren und startete danach die alte, inzwischen
+  beschädigte Version. Der Austausch wird jetzt bei jedem Schritt geprüft,
+  bis zu 15-mal wiederholt und im Fehlerfall zurückgerollt — und wenn er
+  wirklich scheitert, sagt das Spiel es dir beim nächsten Start, statt so zu
+  tun, als hätte es geklappt. Zusätzlich blieb pro Update ein 40-MB-Ordner
+  im Temp-Verzeichnis liegen (350 MB waren angesammelt); der wird jetzt
+  aufgeräumt
+- Monster verloren beim Speichern oder beim Zurückkehren auf eine Ebene ihre
+  Tiefen-Skalierung und wurden wieder so schwach wie auf Ebene 1
+- Von Bossen beschworene Diener und Hinterhalte ignorierten die Tiefe
+  ebenfalls und waren auf tiefen Ebenen harmlos
+- Eine versteckte Falle konnte unter einer Bodengefahr liegen — zwei Treffer
+  für einen Schritt, ohne den zweiten kommen zu sehen
+
+---
+
 ## Aktuell — PC Build 56 · Android Build 53
 
 ### Musik

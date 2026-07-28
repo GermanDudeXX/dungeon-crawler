@@ -68,55 +68,64 @@ Von der Ideen-Liste waren **12 Punkte drin, 7 halb, 25+ offen**, Tränke 1 von 3
 | # | Welle | Status |
 |---|---|---|
 | 1 | Nameplates+Status-Icons, Bluten, Frost-Slow, Schwierigkeitsgrade | **FERTIG** `bbccad5` |
-| 2 | **Map-Tiles + Autotiling + Themen** | **FERTIG** `4af1097` |
-| 3 | Tränke (1 → ~30), Trank-Inventar-UI | in Arbeit |
-| 4 | Räume: Mini-Boss/3, Boss-Tür-Lock, Schatzraum+Wächter, Arena, Superboss, Lava/Loch | offen |
-| 5 | Gegner: Schwarm, Fallen-Steller, Fernkampf-Kiting, Boss-Phasen sichtbar, Mimic | offen |
-| 6 | Klassen, Skilltree, Begleiter, Set-Items | offen |
-| 7 | Schmied, Glücksspiel, Item-Lore, Quests, Speicherslots, Endlos, Tod-Statistik | offen |
-| 8 | Juice: Partikel, Hitstop, Zoom, Fanfare, Ambient, NPC-Dialoge | offen |
+| 2 | Map-Tiles + Autotiling + Themen | **FERTIG** `4af1097` |
+| 3 | Tränke 1→30 + Buffs + Trankbeutel + Händler-Sortiment | **FERTIG** `a6c9c3a` |
+| 4 | Mini-Boss, Schatzraum, Boss-Tür, Bodengefahren, Superboss | **FERTIG** `65764c1` |
+| 5 | Kiting, Schwarm, Fallensteller, Boss-Phasen, Mimik | **FERTIG** `84942fb` |
+| 6 | Klassen (Krieger/Schurke/Magier) + eigene Spielfigur | **FERTIG** `facd9ad` |
+| 7 | Tod-Statistik | **FERTIG** `a10a8de` — Rest offen (s.u.) |
+| 8 | Partikel, Hitstop | **FERTIG** `a10a8de` — Rest offen (s.u.) |
+
+### NOCH OFFEN aus der Ideen-Liste
+Bewusst nicht gebaut, in dieser Reihenfolge sinnvoll:
+1. **Schmied** — Waffe/Rüstung gegen Gold aufwerten (Gold-Senke fürs Spätspiel).
+   Einfachster nächster Schritt: `_render_shop` als Vorlage, eigener State.
+2. **Skilltree** — die Perk-Auswahl gibt es schon (`C.PERKS`,
+   `_render_levelup_choice`); ein Baum wäre ein Screen darüber.
+3. **Set-Items, Begleiter, Arena-Wellen, Glücksspiel, Item-Lore, Quests,
+   Speicherslots, Ambient-Sounds, NPC-Dialoge.**
+4. **Endlos-Modus** — faktisch schon da: Themen zyklen ab Ebene 51 mit „+1"
+   weiter und die Werte steigen dauerhaft. Fehlt nur ein Menüeintrag.
 
 ### PRIORITÄT 1 — Update-Bug: **BEHOBEN** (`07f2660`)
 Diagnose: Der Download war fehlerfrei (40.412.041 Bytes = exakt die GitHub-
 Asset-Größe). Das Batch-Skript scheiterte am `move /y` (die laufende exe war
 noch gesperrt), prüfte den Fehler nie und startete die **alte** exe neu, deren
 `_MEI`-Entpackung dann fehlschlug. Zusätzlich ließ `os._exit(0)` pro Update
-einen ~40-MB-`_MEI`-Ordner in %TEMP% zurück (38 Stück gefunden, 350 MB).
+einen ~40-MB-`_MEI`-Ordner in %TEMP% zurück (38 Stück, 350 MB).
 Fix: Umbenennen statt Überschreiben (geht auch bei offenem Handle), jeder
 Schritt geprüft + 15 Wiederholungen + Rollback, Fehlermarker → Meldung im
 Update-Screen, sauberer Exit statt `os._exit`, `_MEI`-Aufräumen beim Start.
 Getestet mit `test_updater_swap.py` (echtes cmd.exe, echte Sperren).
-Die kaputte Installation des Nutzers wurde sofort repariert (gute exe kopiert,
-alte als `DungeonCrawler.exe.alt-build63.bak` gesichert).
 
-### Welle 2 — Map (fertig)
-- `assets/tiles/` (63 Frames, 95 KB) aus 0x72 DungeonTileset II
-- `_load_tile_sources` / `_tile(name, dim)` (Cache je Name+Tier+dim) /
-  `_tint_tile` (Graustufen × Themenfarbe) / `_floor_tile_name` (Hash, stabil) /
-  `_wall_tile_name` (Nachbarmaske; **None = massiver Fels → Flächenfüllung**,
-  sonst gäbe es Streifenmuster) / `_scatter_decor` (wird im Save gespeichert)
-- Rebuild voll erkundet: 5,2 ms — nur bei FOV-Wechsel. Frame unverändert 2,8 ms.
-
-### Welle 1 (fertig)
-Nameplates (`_render_nameplates`, `_name_cache`, `_badge_cache`, `f_tiny`),
-Status-Pips (`_status_pip`), Schwierigkeits-Screen (`difficulty_select`,
-Tasten 1–4), Blutungs-Chip im HUD, Tutorial-Abschnitte Statuseffekte +
-Schwierigkeit. Test: `test_wave1.py`.
+### Wichtige Design-Entscheidungen (nicht versehentlich rückgängig machen)
+- **Map-Cache**: Tiles NUR in `_rebuild_map_cache` blitten, nie pro Frame.
+  Voll erkundet 5,2 ms, nur bei FOV-Wechsel. Frame bleibt bei 2,9 ms.
+- `_wall_tile_name` gibt **None für massiven Fels** zurück → Flächenfüllung.
+  Ohne das entsteht ein Streifenmuster über die ganze Karte.
+- Gefahren-Kacheln: Kunst **zuerst**, Farbschleier **darüber** (die Frames
+  sind deckend und übermalen einen Schleier darunter).
+- **Buffs**: ein Dict `player.buffs = {id: runden}`, kein Feld pro Effekt.
+- **Multiplikatoren** (Schwierigkeit, Klasse) werden beim Erzeugen in den
+  HP-Pool eingerechnet, nie beim Lesen — sonst skaliert jedes spätere
+  `+max_hp` mit.
+- `_tile_is_free()` ist die **eine** Platzierungs-Prüfung. Neue Features
+  müssen sie benutzen, nicht eine eigene Teilmenge prüfen.
+- `_move_monster_toward` gibt **True/False** zurück; zwei Verhalten hängen
+  daran.
+- **TLS-Prüfung im Updater niemals abschalten** (lädt eine ausführbare Datei).
 
 ### Test/Release-Ritual (bei JEDEM Abschluss)
+`$SCRATCH` = `C:/Users/budzm/AppData/Local/Temp/claude/C--Users-budzm/7dc4ccb0-bb29-44b6-8bcd-aa48375c8eb2/scratchpad`
 ```
-cd C:/Users/budzm/dungeon-crawler
-for t in test_music test_ssl test_installer test_tiers test_levelup \
-         test_menu_layout test_run_loop test_map_cache test_depth_systems \
-         test_up_stairs test_loop_timing; do
-  python "$SCRATCH/$t.py" || echo "FAIL $t"
+for t in test_music test_ssl test_installer test_tiers test_levelup          test_menu_layout test_run_loop test_map_cache test_depth_systems          test_up_stairs test_loop_timing test_updater test_updater_swap          test_wave1 test_potions test_rooms test_enemies test_classes          test_juice; do
+  python "$SCRATCH/$t.py" | tail -1
 done
 ```
-`$SCRATCH` = `C:/Users/budzm/AppData/Local/Temp/claude/C--Users-budzm/7dc4ccb0-bb29-44b6-8bcd-aa48375c8eb2/scratchpad`
-
-Danach: `assets/build_version.txt` hochzählen, commit, push, Android-CI abwarten,
-PC-exe bauen + hochladen, `CHANGELOG.md` ergänzen (deutsch, spielerlesbar).
-Aktuell: **PC Build 63 · Android Build 58**.
+Alle 19 grün (Stand: `a10a8de`). Danach: `assets/build_version.txt`
+hochzählen, PC-exe bauen, **erst der Nutzer testet am PC**, dann Push zu
+GitHub + APK-Build.
+Vorher veröffentlicht: **PC Build 63 · Android Build 58**.
 
 ### Umgangsregeln mit dem Nutzer
 - Deutsch, kein Quellcode, keine technischen Erklärungen — nur kurzes Wiki/Changelog.
