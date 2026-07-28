@@ -628,6 +628,7 @@ class Game:
         chest = data.get("chest_pos")
         self.chest_pos = tuple(chest) if chest else None
         self.chest_open = data.get("chest_open", False)
+        self.chest_is_mimic = data.get("chest_is_mimic", False)
         door = data.get("boss_door_pos")
         self.boss_door_pos = tuple(door) if door else None
         self.level_history = {
@@ -697,6 +698,7 @@ class Game:
             "hazards": [[list(pos), kind] for pos, kind in self.hazards.items()],
             "chest_pos": list(self.chest_pos) if self.chest_pos else None,
             "chest_open": self.chest_open,
+            "chest_is_mimic": self.chest_is_mimic,
             "boss_door_pos": list(self.boss_door_pos) if self.boss_door_pos else None,
             "level_history": {str(level): snap for level, snap in self.level_history.items()},
         }
@@ -720,6 +722,8 @@ class Game:
             "guards_chest": getattr(m, "guards_chest", False),
             "is_mini_boss": getattr(m, "is_mini_boss", False),
             "is_superboss": getattr(m, "is_superboss", False),
+            "is_mimic": getattr(m, "is_mimic", False),
+            "trap_cooldown": getattr(m, "trap_cooldown", 0),
             "name": m.name,
         }
 
@@ -749,6 +753,8 @@ class Game:
         monster.guards_chest = m.get("guards_chest", False)
         monster.is_mini_boss = m.get("is_mini_boss", False)
         monster.is_superboss = m.get("is_superboss", False)
+        monster.is_mimic = m.get("is_mimic", False)
+        monster.trap_cooldown = m.get("trap_cooldown", 0)
         # The superboss's title is part of its name, and that name was
         # built from a translated prefix - reuse the saved one rather than
         # rebuilding it, or it reverts to a plain boss name on load.
@@ -792,6 +798,7 @@ class Game:
             "hazards": [[list(pos), kind] for pos, kind in self.hazards.items()],
             "chest_pos": list(self.chest_pos) if self.chest_pos else None,
             "chest_open": self.chest_open,
+            "chest_is_mimic": self.chest_is_mimic,
             "boss_door_pos": list(self.boss_door_pos) if self.boss_door_pos else None,
         }
 
@@ -816,6 +823,7 @@ class Game:
         chest = snap.get("chest_pos")
         self.chest_pos = tuple(chest) if chest else None
         self.chest_open = snap.get("chest_open", False)
+        self.chest_is_mimic = snap.get("chest_is_mimic", False)
         door = snap.get("boss_door_pos")
         self.boss_door_pos = tuple(door) if door else None
 
@@ -852,6 +860,7 @@ class Game:
         self.shrine_pos = None
         self.chest_pos = None
         self.chest_open = False
+        self.chest_is_mimic = False
         self.boss_door_pos = None
         self.damage_numbers = []
         self._scatter_decor()
@@ -921,10 +930,18 @@ class Game:
         for _ in range(num_monsters):
             room = random.choice(spawnable_rooms)
             x, y = self._random_floor_in_room(room)
-            if not self._is_occupied(x, y):
-                kind = random.choices(monster_kinds, weights=weights, k=1)[0]
-                self.monsters.append(self._make_monster(
-                    x, y, kind, elite=self._maybe_elite()))
+            if self._is_occupied(x, y):
+                continue
+            kind = random.choices(monster_kinds, weights=weights, k=1)[0]
+            self.monsters.append(self._make_monster(
+                x, y, kind, elite=self._maybe_elite()))
+            # Pack animals arrive as a pack. Rolled here rather than by
+            # raising their spawn weight, so a swarm is several of them
+            # together in one place - which is what makes it a swarm
+            # rather than just more rats scattered around the floor.
+            swarm = C.MONSTER_TYPES[kind].get("swarms")
+            if swarm and random.random() < 0.5:
+                self._spawn_swarm(x, y, kind, random.randint(*swarm) - 1)
 
         if self.dungeon_level % 5 == 0:
             bx, by = self.stairs_pos
@@ -975,7 +992,7 @@ class Game:
             if self._tile_is_free(x, y):
                 self.shrine_pos = (x, y)
 
-    def _tile_is_free(self, x, y):
+    def _tile_is_free(self, x, y, ignore=None):
         """Nothing else has claimed this tile.
 
         One predicate for every placement, because they were each
@@ -985,7 +1002,7 @@ class Game:
         under a lava tile, in particular, is two hits for one step with no
         way to see the second coming.
         """
-        if self._is_occupied(x, y):
+        if self._is_occupied(x, y, ignore=ignore):
             return False
         if (x, y) in self.traps or (x, y) in self.hazards:
             return False
@@ -1034,6 +1051,19 @@ class Game:
         self.monsters.append(monster)
         self.add_log(self.t("log_mini_boss", monster=self._monster_named(monster, "nom")))
 
+    def _spawn_swarm(self, x, y, kind, count):
+        """Fills the tiles around (x, y) with more of the same kind."""
+        spots = [(x + dx, y + dy)
+                 for dx in (-1, 0, 1) for dy in (-1, 0, 1) if (dx, dy) != (0, 0)]
+        random.shuffle(spots)
+        for sx, sy in spots:
+            if count <= 0:
+                break
+            if not dungeon.is_walkable(self.grid, sx, sy) or self._is_occupied(sx, sy):
+                continue
+            self.monsters.append(self._make_monster(sx, sy, kind))
+            count -= 1
+
     def _make_treasure_room(self, rooms):
         """A chest with something good in it, and something standing on it.
 
@@ -1057,6 +1087,16 @@ class Game:
 
         self.chest_pos = (x, y)
         self.chest_open = False
+
+        # Sometimes the chest is the monster. It uses the same art and
+        # sits in the same place as a real one, so there is no tell from
+        # across the room - the point is that opening a chest stops being
+        # a free action once the player knows this can happen.
+        if (self.dungeon_level >= C.MIMIC_MIN_LEVEL
+                and random.random() < C.MIMIC_CHANCE):
+            self.chest_is_mimic = True
+            return
+
         kind = random.choice(list(C.MONSTER_TYPES.keys()))
         guard = self._make_monster(guard_spot[0], guard_spot[1], kind,
                                    elite=random.choice(C.ELITE_MODIFIERS))
@@ -1065,18 +1105,42 @@ class Game:
         guard.guards_chest = True
         self.monsters.append(guard)
 
+    def _spring_mimic(self):
+        """Turns the fake chest into the monster it always was."""
+        x, y = self.chest_pos
+        kind = random.choice(list(C.MONSTER_TYPES.keys()))
+        mimic = self._make_monster(x, y, kind, elite=random.choice(C.ELITE_MODIFIERS))
+        mimic.max_hp = int(mimic.max_hp * C.MIMIC_MULT)
+        mimic.hp = mimic.max_hp
+        mimic.power = int(mimic.power * C.MIMIC_MULT)
+        mimic.awake = True
+        mimic.is_mimic = True
+        mimic.name = f"{self.t('mimic_prefix')} {mimic.name}"
+        # It gets the first hit - that is the cost of opening it blind.
+        self.monsters.append(mimic)
+        self.chest_is_mimic = False
+        self.chest_pos = None
+        self.chest_open = False
+        self.sounds.play("boss")
+        self.shake_timer, self.shake_intensity = 10, 5
+        self.add_log(self.t("log_mimic", monster=self._monster_named(mimic, "nom")))
+        self._attack(mimic, self.player)
+
     def _chest_guard_alive(self):
         return any(getattr(m, "guards_chest", False) and m.is_alive()
                    for m in self.monsters)
 
     def _open_chest(self):
-        """Empties the chest onto the floor around it.
+        """Empties the chest onto the floor around it - or springs it.
 
         Drops real items rather than granting them silently, so the
         contents are picked up the same way as everything else and the
         player can see what they got before touching it.
         """
         if self.chest_open or self.chest_pos is None:
+            return
+        if self.chest_is_mimic:
+            self._spring_mimic()
             return
         if self._chest_guard_alive():
             self.add_log(self.t("log_chest_guarded"))
@@ -1222,12 +1286,19 @@ class Game:
                 return x, y
         return None
 
-    def _is_occupied(self, x, y):
+    def _is_occupied(self, x, y, ignore=None):
+        """Whether something is standing here.
+
+        `ignore` excludes one entity - needed by anything that asks about
+        the tile it is itself standing on, such as a trap-setter deciding
+        whether it can leave a trap behind.
+        """
         if (x, y) == (self.player.x, self.player.y):
             return True
-        if any((m.x, m.y) == (x, y) for m in self.monsters):
+        if any((m.x, m.y) == (x, y) for m in self.monsters if m is not ignore):
             return True
-        if any((m.x, m.y) == (x, y) for m in getattr(self, "merchants", [])):
+        if any((m.x, m.y) == (x, y) for m in getattr(self, "merchants", [])
+               if m is not ignore):
             return True
         return False
 
@@ -2614,6 +2685,10 @@ class Game:
         damage = max(1, attacker.power - defense)
         if crit:
             damage *= 2
+        if getattr(attacker, "is_boss", False):
+            phase = self._boss_phase(attacker)
+            if phase:
+                damage = max(1, int(round(damage * phase["power_mult"])))
         if attacker is self.player:
             damage = max(1, int(round(damage * self._diff()["player_damage"])))
 
@@ -2985,6 +3060,24 @@ class Game:
         if monster.is_boss and self._boss_special_action(monster, dx, dy):
             return
 
+        traits = C.MONSTER_TYPES.get(monster.kind, {})
+
+        # An archer that lets you walk up and hit it is just a melee
+        # monster with extra steps. Back off first, shoot from there.
+        if traits.get("kites") and not monster.is_boss:
+            dist = max(abs(dx), abs(dy))
+            if dist < C.KITE_DISTANCE:
+                step_x = -((dx > 0) - (dx < 0))
+                step_y = -((dy > 0) - (dy < 0))
+                if self._move_monster_toward(monster, step_x, step_y):
+                    return
+                # Cornered: no room to retreat, so it fights.
+
+        if traits.get("sets_traps") and not monster.is_boss:
+            monster.trap_cooldown = max(0, monster.trap_cooldown - 1)
+            if monster.trap_cooldown == 0 and self._drop_monster_trap(monster):
+                return
+
         if abs(dx) <= 1 and abs(dy) <= 1 and (dx, dy) != (0, 0):
             self._attack(monster, self.player)
             return
@@ -2998,6 +3091,40 @@ class Game:
         step_x = (dx > 0) - (dx < 0)
         step_y = (dy > 0) - (dy < 0)
         self._move_monster_toward(monster, step_x, step_y)
+
+    def _drop_monster_trap(self, monster):
+        """A trap-setter leaves one behind and steps away from it.
+
+        Only ever on its own tile, and only where nothing else is: it
+        cannot bury a trap under the stairs or another trap, and the
+        player always has a turn to notice the monster moving off it.
+        """
+        pos = (monster.x, monster.y)
+        if not self._tile_is_free(*pos, ignore=monster):
+            return False
+        step_x = -((self.player.x - monster.x > 0) - (self.player.x - monster.x < 0))
+        step_y = -((self.player.y - monster.y > 0) - (self.player.y - monster.y < 0))
+        if not self._move_monster_toward(monster, step_x, step_y):
+            return False
+        self.traps[pos] = random.choice(list(C.TRAP_TYPES.keys()))
+        monster.trap_cooldown = C.TRAP_SETTER_COOLDOWN
+        self.add_log(self.t("log_trap_set", monster=self._monster_named(monster, "nom")))
+        return True
+
+    def _boss_phase(self, boss):
+        """Which phase a boss is in, or None while it is still fresh.
+
+        Read from current health rather than latched on the way past a
+        threshold, so healing a boss (an elite's regeneration, say) puts
+        it back into the calmer phase instead of leaving it permanently
+        enraged at full health.
+        """
+        ratio = boss.hp / max(1, boss.max_hp)
+        current = None
+        for phase in C.BOSS_PHASES:
+            if ratio <= phase["at"]:
+                current = phase
+        return current
 
     def _boss_special_action(self, monster, dx, dy):
         if monster.kind == "orc":
@@ -3069,6 +3196,13 @@ class Game:
         return False
 
     def _move_monster_toward(self, monster, step_x, step_y):
+        """Steps a monster one tile, preferring the diagonal.
+
+        Returns whether it actually moved. Callers need to know: a kiting
+        archer that cannot retreat has to stand and fight instead, and a
+        trap-setter must not drop a trap on the tile it is still standing
+        on. Both read this as a boolean, so it must be one.
+        """
         for nx, ny in (
             (monster.x + step_x, monster.y + step_y),
             (monster.x + step_x, monster.y),
@@ -3083,7 +3217,8 @@ class Game:
             if any((m.x, m.y) == (nx, ny) for m in self.monsters if m is not monster):
                 continue
             monster.x, monster.y = nx, ny
-            return
+            return True
+        return False
 
     def _shake_offset(self):
         # C.MAP_OFFSET_X is the base offset that keeps the map centered
@@ -4026,13 +4161,26 @@ class Game:
         rad = bar_h // 2
         pygame.draw.rect(self.screen, (38, 14, 40), (x, y, bar_w, bar_h), border_radius=rad)
         ratio = max(0, boss.hp / boss.max_hp)
+        # The bar changes colour with the phase, so the fight visibly
+        # escalates instead of the player only noticing they are suddenly
+        # taking more damage.
+        phase = self._boss_phase(boss)
+        fill = phase["color"] if phase else C.COLOR_BOSS
         if ratio > 0:
-            pygame.draw.rect(self.screen, C.COLOR_BOSS,
+            pygame.draw.rect(self.screen, fill,
                              (x, y, max(bar_h, int(bar_w * ratio)), bar_h), border_radius=rad)
+        # Where the next phase begins, so it can be seen coming.
+        for threshold in C.BOSS_PHASES:
+            tick_x = x + int(bar_w * threshold["at"])
+            pygame.draw.line(self.screen, (18, 8, 20), (tick_x, y + 2),
+                             (tick_x, y + bar_h - 2), 2)
         pygame.draw.rect(self.screen, C.COLOR_BORDER_HI, (x, y, bar_w, bar_h),
                          width=2, border_radius=rad)
         boss_name = self._monster_display_name(boss).upper()
-        name_text = self.font.render(f"{boss_name}  {max(0, boss.hp)}/{boss.max_hp}", True, (255, 255, 255))
+        label = f"{boss_name}  {max(0, boss.hp)}/{boss.max_hp}"
+        if phase:
+            label += f"  ·  {self.tn(phase['name']).upper()}"
+        name_text = self.font.render(label, True, (255, 255, 255))
         self.screen.blit(name_text, name_text.get_rect(center=(C.SCREEN_WIDTH // 2, y + bar_h // 2)))
 
     def _render_boss_banner(self):
@@ -4155,6 +4303,9 @@ class Game:
                 self.screen.blit(glow, glow.get_rect(center=(
                     self.chest_pos[0] * ts + ts // 2 + ox,
                     self.chest_pos[1] * ts + ts // 2 + oy)))
+            # A mimic uses the *same* closed-chest frame as a real one.
+            # Giving it its own art would give the game away, and the
+            # whole point is that a chest is no longer a free action.
             frame = ("chest_empty_open_anim_f2" if self.chest_open
                      else "chest_full_open_anim_f0")
             self._draw_tile_at(frame, *self.chest_pos, ox, oy, dim=dim)

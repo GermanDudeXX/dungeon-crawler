@@ -261,6 +261,15 @@ STRINGS = {
 
     # --- special rooms and hazards ---
     "superboss_prefix": {"en": "Ancient", "de": "Uralter"},
+    "mimic_prefix": {"en": "Mimic", "de": "Mimik"},
+    "log_mimic": {
+        "en": "The chest lunges - it was a {monster} all along!",
+        "de": "Die Truhe schnappt zu - es war die ganze Zeit {monster}!",
+    },
+    "log_trap_set": {
+        "en": "{monster} scurries back, leaving a trap behind.",
+        "de": "{monster} weicht zurück und lässt eine Falle zurück.",
+    },
     "log_mini_boss": {
         "en": "{monster} rules this floor.",
         "de": "{monster} herrscht über diese Ebene.",
@@ -436,6 +445,10 @@ NAME_DE = {
     "Fire Aura": "Feueraura",
     "Clumsiness": "Ungeschick",
     "Frailty": "Gebrechlichkeit",
+
+    # boss phases (constants.BOSS_PHASES)
+    "Wounded": "Verwundet",
+    "Desperate": "Verzweifelt",
 }
 
 MONSTER_NAME_DE = {

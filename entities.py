@@ -242,6 +242,8 @@ class Monster(Entity):
         self.guards_chest = False
         self.is_mini_boss = False
         self.is_superboss = False
+        self.is_mimic = False
+        self.trap_cooldown = 0
 
     def is_alive(self):
         return self.hp > 0

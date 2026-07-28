@@ -202,6 +202,39 @@ MONSTER_TYPES = {
     },
 }
 
+# Behaviours layered on top of the table above rather than baked into it,
+# so an existing kind can gain one without its base stats moving.
+#
+# "kites": backs away when the player closes to melee, then shoots from
+# the new distance. Makes a ranged monster something to chase rather than
+# something to walk up to and hit.
+# "swarms": spawns as a pack of several rather than one at a time.
+# "sets_traps": leaves a trap behind it while it retreats.
+MONSTER_TYPES["skeleton"]["kites"] = True
+MONSTER_TYPES["bat"]["swarms"] = (2, 4)
+MONSTER_TYPES["rat"]["swarms"] = (2, 5)
+MONSTER_TYPES["goblin"]["sets_traps"] = True
+
+# How close the player has to get before a kiting monster backs off.
+KITE_DISTANCE = 2
+# A trap-setter drops one at most this often, so a room does not turn
+# into a minefield.
+TRAP_SETTER_COOLDOWN = 5
+
+# A mimic pretends to be a treasure chest until the player touches it.
+# Shares the chest art, so there is no way to tell from a distance -
+# which is the entire joke.
+MIMIC_CHANCE = 0.25
+MIMIC_MIN_LEVEL = 4
+MIMIC_MULT = 1.8
+
+# Bosses change behaviour as they lose health. Thresholds are fractions
+# of max HP, highest first; the boss bar names the phase it is in.
+BOSS_PHASES = [
+    {"at": 0.66, "name": "Wounded", "power_mult": 1.15, "color": (232, 181, 75)},
+    {"at": 0.33, "name": "Desperate", "power_mult": 1.35, "color": (224, 91, 91)},
+]
+
 # Every LEVELS_PER_TIER floors the dungeon changes theme AND gets
 # meaningfully harder - previously difficulty only came from spawning a
 # few more monsters per floor, so deep runs stopped escalating. Each tier
