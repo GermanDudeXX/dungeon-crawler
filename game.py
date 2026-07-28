@@ -132,6 +132,8 @@ class Game:
             self.hud_icons[kind] = pygame.transform.smoothscale(sprite, (w, icon_h))
         self.ladder_sprite = self._load_scaled_sprite(C.LADDER_SPRITE_PATH, C.LADDER_SPRITE_HEIGHT)
         self.merchant_sprite = self._load_scaled_sprite(C.MERCHANT_SPRITE_PATH, C.MERCHANT_SPRITE_HEIGHT)
+        self.blacksmith_sprite = self._load_scaled_sprite(
+            C.BLACKSMITH_SPRITE_PATH, C.BLACKSMITH_SPRITE_HEIGHT)
         self._tile_sources = self._load_tile_sources()
         self._tile_cache = {}
         self._decor = {}
@@ -142,6 +144,17 @@ class Game:
         self.shop_stock = None
         self._class_sprite_cache = {}
         self.pending_difficulty = None
+        # The title screen shows the hero you last played as, rather than
+        # a generic figure that turns into someone else the moment a run
+        # starts. Done here, at the end of setup, because it needs both
+        # the loaded settings and the sprite cache above.
+        #
+        # char_class has to be seeded from settings first: _class() reads
+        # the attribute, not the setting, so before a run has started it
+        # would otherwise fall back to the default and the title would
+        # always show a Warrior whatever you last played.
+        self.char_class = self.settings.get("char_class", C.DEFAULT_CLASS)
+        self._use_class_sprite(self._class())
         self.particles = []
         self.hitstop_timer = 0
         self.needs_redraw = True
@@ -570,7 +583,9 @@ class Game:
         self.player_sprite_right = sprite
         self.player_sprite_left = pygame.transform.flip(sprite, True, False)
         w, h = sprite.get_size()
-        self.player_sprite_large = pygame.transform.scale(sprite, (w * 2, h * 2))
+        # Bigger than the old 2x: this is the title screen's centrepiece
+        # and the class art is only 16x28 to begin with.
+        self.player_sprite_large = pygame.transform.scale(sprite, (w * 3, h * 3))
         self._measure_player_head()
 
     def _measure_player_head(self):
@@ -724,6 +739,8 @@ class Game:
         self.monsters = [self._deserialize_monster(m) for m in data["monsters"]]
         self.items = [self._deserialize_item(i) for i in data["items"]]
         self.merchants = [entities.Merchant(m["x"], m["y"]) for m in data.get("merchants", [])]
+        self.blacksmiths = [entities.Blacksmith(b["x"], b["y"])
+                            for b in data.get("blacksmiths", [])]
         self._decor = {tuple(int(v) for v in pos): name
                        for pos, name in data.get("decor", [])}
         self.hazards = {tuple(int(v) for v in pos): kind
@@ -734,6 +751,8 @@ class Game:
         self.chest_is_mimic = data.get("chest_is_mimic", False)
         door = data.get("boss_door_pos")
         self.boss_door_pos = tuple(door) if door else None
+        vault = data.get("vault_pos")
+        self.vault_pos = tuple(vault) if vault else None
         self.level_history = {
             int(level): snapshot for level, snapshot in data.get("level_history", {}).items()
         }
@@ -800,12 +819,14 @@ class Game:
             "monsters": [self._serialize_monster(m) for m in self.monsters],
             "items": [self._serialize_item(i) for i in self.items],
             "merchants": [{"x": m.x, "y": m.y} for m in self.merchants],
+            "blacksmiths": [{"x": b.x, "y": b.y} for b in self.blacksmiths],
             "decor": [[list(pos), name] for pos, name in self._decor.items()],
             "hazards": [[list(pos), kind] for pos, kind in self.hazards.items()],
             "chest_pos": list(self.chest_pos) if self.chest_pos else None,
             "chest_open": self.chest_open,
             "chest_is_mimic": self.chest_is_mimic,
             "boss_door_pos": list(self.boss_door_pos) if self.boss_door_pos else None,
+            "vault_pos": list(self.vault_pos) if self.vault_pos else None,
             "level_history": {str(level): snap for level, snap in self.level_history.items()},
         }
 
@@ -829,8 +850,8 @@ class Game:
             "is_mini_boss": getattr(m, "is_mini_boss", False),
             "is_superboss": getattr(m, "is_superboss", False),
             "is_mimic": getattr(m, "is_mimic", False),
+            "guards_vault": getattr(m, "guards_vault", False),
             "trap_cooldown": getattr(m, "trap_cooldown", 0),
-            "name": m.name,
         }
 
     @staticmethod
@@ -860,6 +881,7 @@ class Game:
         monster.is_mini_boss = m.get("is_mini_boss", False)
         monster.is_superboss = m.get("is_superboss", False)
         monster.is_mimic = m.get("is_mimic", False)
+        monster.guards_vault = m.get("guards_vault", False)
         monster.trap_cooldown = m.get("trap_cooldown", 0)
         # The superboss's title is part of its name, and that name was
         # built from a translated prefix - reuse the saved one rather than
@@ -896,6 +918,7 @@ class Game:
             "monsters": [self._serialize_monster(m) for m in self.monsters],
             "items": [self._serialize_item(i) for i in self.items],
             "merchants": [{"x": m.x, "y": m.y} for m in self.merchants],
+            "blacksmiths": [{"x": b.x, "y": b.y} for b in self.blacksmiths],
             # Purely cosmetic, but it has to be remembered: regenerating it
             # on return would move every skull and banner in the level, and
             # a room rearranging itself behind the player's back reads as a
@@ -906,6 +929,7 @@ class Game:
             "chest_open": self.chest_open,
             "chest_is_mimic": self.chest_is_mimic,
             "boss_door_pos": list(self.boss_door_pos) if self.boss_door_pos else None,
+            "vault_pos": list(self.vault_pos) if self.vault_pos else None,
         }
 
     def _restore_level_snapshot(self, snap):
@@ -922,6 +946,8 @@ class Game:
         self.monsters = [self._deserialize_monster(m) for m in snap["monsters"]]
         self.items = [self._deserialize_item(i) for i in snap["items"]]
         self.merchants = [entities.Merchant(m["x"], m["y"]) for m in snap.get("merchants", [])]
+        self.blacksmiths = [entities.Blacksmith(b["x"], b["y"])
+                            for b in snap.get("blacksmiths", [])]
         self._decor = {tuple(int(v) for v in pos): name
                        for pos, name in snap.get("decor", [])}
         self.hazards = {tuple(int(v) for v in pos): kind
@@ -932,6 +958,8 @@ class Game:
         self.chest_is_mimic = snap.get("chest_is_mimic", False)
         door = snap.get("boss_door_pos")
         self.boss_door_pos = tuple(door) if door else None
+        vault = snap.get("vault_pos")
+        self.vault_pos = tuple(vault) if vault else None
 
     def _save_and_quit(self):
         persistence.save_run(self._build_save_data())
@@ -961,6 +989,7 @@ class Game:
         self.monsters = []
         self.items = []
         self.merchants = []
+        self.blacksmiths = []
         self.traps = {}
         self.hazards = {}
         self.shrine_pos = None
@@ -968,6 +997,7 @@ class Game:
         self.chest_open = False
         self.chest_is_mimic = False
         self.boss_door_pos = None
+        self.vault_pos = None
         self.damage_numbers = []
         self.particles = []
         self.hitstop_timer = 0
@@ -1068,6 +1098,9 @@ class Game:
         if self.dungeon_level >= C.TREASURE_MIN_LEVEL and random.random() < C.TREASURE_ROOM_CHANCE:
             self._make_treasure_room(spawnable_rooms)
 
+        if self.dungeon_level >= C.VAULT_MIN_LEVEL and random.random() < C.VAULT_CHANCE_PER_LEVEL:
+            self._make_vault(spawnable_rooms)
+
         if self.dungeon_level >= C.HAZARD_MIN_LEVEL:
             self._scatter_hazards(spawnable_rooms)
 
@@ -1093,6 +1126,13 @@ class Game:
             x, y = self._random_floor_in_room(room)
             if self._tile_is_free(x, y):
                 self.merchants.append(entities.Merchant(x, y))
+
+        if (self.dungeon_level >= C.BLACKSMITH_MIN_LEVEL
+                and random.random() < C.BLACKSMITH_CHANCE_PER_LEVEL):
+            room = random.choice(spawnable_rooms)
+            x, y = self._random_floor_in_room(room)
+            if self._tile_is_free(x, y):
+                self.blacksmiths.append(entities.Blacksmith(x, y))
 
         if self.dungeon_level >= 2 and random.random() < C.SHRINE_CHANCE_PER_LEVEL:
             room = random.choice(spawnable_rooms)
@@ -1136,7 +1176,6 @@ class Game:
         boss.defense = int(boss.defense * 1.5)
         boss.xp_reward = int(boss.xp_reward * C.SUPERBOSS_MULT)
         boss.is_superboss = True
-        boss.name = f"{self.t('superboss_prefix')} {boss.name}"
 
     def _spawn_mini_boss(self, rooms):
         """A landmark fight on the floors between the real bosses.
@@ -1223,7 +1262,6 @@ class Game:
         mimic.power = int(mimic.power * C.MIMIC_MULT)
         mimic.awake = True
         mimic.is_mimic = True
-        mimic.name = f"{self.t('mimic_prefix')} {mimic.name}"
         # It gets the first hit - that is the cost of opening it blind.
         self.monsters.append(mimic)
         self.chest_is_mimic = False
@@ -1233,6 +1271,208 @@ class Game:
         self.shake_timer, self.shake_intensity = 10, 5
         self.add_log(self.t("log_mimic", monster=self._monster_named(mimic, "nom")))
         self._attack(mimic, self.player)
+
+    def start_test_room(self):
+        """One open floor holding one of everything the game can produce.
+
+        Not a debug dump: it is laid out in rows so each group is
+        recognisable, and it is a real playable level - the monsters
+        fight, the traps trigger, the smith trades. It exists so a change
+        to any of this can be looked at without playing twenty floors
+        hoping the right thing spawns.
+        """
+        self.start_new_run(self.settings.get("difficulty", C.DEFAULT_DIFFICULTY),
+                           self.settings.get("char_class", C.DEFAULT_CLASS))
+        self.dungeon_level = 12
+        self._build_test_room()
+        self.add_log(self.t("log_testroom"))
+        self.state = "playing"
+
+    def _build_test_room(self):
+        w, h = C.MAP_WIDTH, C.MAP_HEIGHT
+        self.grid = [[dungeon.WALL for _ in range(w)] for _ in range(h)]
+        for y in range(1, h - 1):
+            for x in range(1, w - 1):
+                self.grid[y][x] = dungeon.FLOOR
+        self.rooms = [dungeon.Room(1, 1, w - 2, h - 2)]
+        self.tier = self._tier_for_level(self.dungeon_level)
+        self._play_tier_music(self.tier)
+
+        self.monsters = []
+        self.items = []
+        self.merchants = []
+        self.blacksmiths = []
+        self.traps = {}
+        self.hazards = {}
+        self.damage_numbers = []
+        self.particles = []
+        self.hitstop_timer = 0
+        self.shrine_pos = None
+        self.chest_pos = None
+        self.chest_open = False
+        self.chest_is_mimic = False
+        self.boss_door_pos = None
+        self.vault_pos = None
+        self._decor = {}
+        self.level_history = {}
+
+        self.player.x, self.player.y = 2, h // 2
+        self.player.snap()
+        self.stairs_pos = (w - 3, h // 2)
+        self.up_stairs_pos = (2, h - 3)
+
+        kinds = list(C.MONSTER_TYPES.keys())
+        # Four tiles apart, not two: every monster now wears a nameplate
+        # and at two tiles the names sit on top of each other, which is
+        # exactly what this room exists to let you check.
+        step = 4
+
+        # Row 1: one plain monster of every kind.
+        for i, kind in enumerate(kinds):
+            self.monsters.append(self._make_monster(4 + i * step, 2, kind))
+        # Row 2: the same kinds as elites, one per elite modifier.
+        for i, elite in enumerate(C.ELITE_MODIFIERS):
+            self.monsters.append(self._make_monster(
+                4 + i * step, 5, kinds[i % len(kinds)], elite=elite))
+        # Row 3: the special ones - mini-boss, boss, superboss, mimic.
+        mini = self._make_monster(4, 8, "orc", elite=C.ELITE_MODIFIERS[0])
+        mini.is_mini_boss = True
+        mini.max_hp = int(mini.max_hp * C.MINI_BOSS_MULT)
+        mini.hp = mini.max_hp
+        self.monsters.append(mini)
+        self.monsters.append(self._make_monster(4 + step, 8, "skeleton", boss=True))
+        superboss = self._make_monster(4 + 2 * step, 8, "spider", boss=True)
+        self._promote_to_superboss(superboss)
+        self.monsters.append(superboss)
+        # A mimic already sprung. An unsprung one is by design identical
+        # to the real chest further down, so showing it as a chest would
+        # show nothing; what is worth seeing is what comes out of it.
+        mimic = self._make_monster(4 + 3 * step, 8, "slime",
+                                   elite=C.ELITE_MODIFIERS[1])
+        mimic.is_mimic = True
+        mimic.awake = True
+        self.monsters.append(mimic)
+
+        # Row 4: every trap and every hazard, side by side. Traps are
+        # invisible until stepped on - that is the point of them - so the
+        # left half of this row looks empty and is meant to.
+        for i, trap in enumerate(C.TRAP_TYPES):
+            self.traps[(4 + i * 2, 11)] = trap
+        for i, hazard in enumerate(C.HAZARD_TYPES):
+            self.hazards[(16 + i * 2, 11)] = hazard
+
+        # Row 5: one of each item kind, plus a spread of potions.
+        for i, kind in enumerate(("weapon", "armor", "scroll", "gold")):
+            self._spawn_item_at(5 + i * 2, 14, kind)
+        for i, info in enumerate(C.POTION_TYPES[:12]):
+            x, y = 14 + (i % 6) * 2, 14 + (i // 6) * 2
+            self.items.append(entities.Item(
+                x, y, "potion", info["name"], "!", info["color"],
+                bonus=info["effect"].get("heal", 0), potion_id=info["id"]))
+
+        # Row 6: the people and the fixtures.
+        self.merchants.append(entities.Merchant(4, 19))
+        self.blacksmiths.append(entities.Blacksmith(8, 19))
+        self.shrine_pos = (12, 19)
+        self.chest_pos = (16, 19)
+        guard = self._make_monster(17, 19, "orc", elite=C.ELITE_MODIFIERS[2])
+        guard.guards_chest = True
+        self.monsters.append(guard)
+        # The vault crowd, off to the right, so a guarded pile can be seen
+        # next to the single guarded chest.
+        self.vault_pos = (26, 19)
+        for i in range(3):
+            keeper = self._make_monster(24 + i * 2, 19, kinds[i % len(kinds)],
+                                        elite=C.ELITE_MODIFIERS[i % len(C.ELITE_MODIFIERS)])
+            keeper.guards_vault = True
+            keeper.awake = True
+            self.monsters.append(keeper)
+        self._spawn_item_at(26, 17, "gold")
+
+        # Every decoration the generator can place, in a row along the top.
+        for i, name in enumerate(self.FLOOR_DECOR):
+            self._decor[(4 + i * 2, 21)] = name
+        for i, name in enumerate(self.WALL_DECOR):
+            self._decor[(12 + i * 2, 21)] = name
+
+        # The barred door, on the stairs, with the boss above still alive.
+        self.boss_door_pos = self.stairs_pos
+
+        # Enough gold and flasks to actually try the smith and the bag.
+        self.player.gold = 2000
+        for info in C.POTION_TYPES:
+            self.player.add_potion(info["id"], 2)
+        for scroll in self.player.scrolls:
+            self.player.scrolls[scroll] = 5
+        if self.player.weapon_name == "Fists":
+            weapon = C.WEAPON_TYPES[1]
+            self.player.weapon_name = weapon["name"]
+            self.player.weapon_bonus = weapon["bonus"]
+        if self.player.armor_name == "None":
+            armor = C.ARMOR_TYPES[0]
+            self.player.armor_name = armor["name"]
+            self.player.armor_bonus = armor["bonus"]
+
+        self._map_cache = None
+        self._recompute_fov()
+
+    def _make_vault(self, rooms):
+        """A pile of loot with a crowd standing on it.
+
+        Several elites at once rather than one big monster: a crowd is a
+        different problem from a boss - you cannot trade blows with it,
+        you have to fight it in a doorway or thin it out - and nothing
+        else in this game posed that. Everything is visible from the room
+        entrance, so walking in is a decision rather than an ambush.
+        """
+        room = random.choice(rooms)
+        cx, cy = room.center()
+        if not dungeon.is_walkable(self.grid, cx, cy):
+            return
+        placed = 0
+        for kind in ("gold", "gold", "weapon", "armor", "scroll", "potion"):
+            spot = self._free_spot_near(cx, cy, radius=2)
+            if spot is None:
+                break
+            self._spawn_item_at(spot[0], spot[1], kind)
+            placed += 1
+        if not placed:
+            return
+
+        for _ in range(random.randint(*C.VAULT_GUARDS)):
+            spot = self._free_spot_near(cx, cy, radius=3)
+            if spot is None:
+                break
+            kind = random.choice(list(C.MONSTER_TYPES.keys()))
+            guard = self._make_monster(spot[0], spot[1], kind,
+                                       elite=random.choice(C.ELITE_MODIFIERS))
+            guard.max_hp = int(guard.max_hp * C.VAULT_GUARD_MULT)
+            guard.hp = guard.max_hp
+            guard.power = int(guard.power * C.VAULT_GUARD_MULT)
+            # Awake from the start: a guard that has to be woken up can be
+            # picked off one at a time, which defeats the point.
+            guard.awake = True
+            guard.guards_vault = True
+            self.monsters.append(guard)
+        self.vault_pos = (cx, cy)
+
+    def _free_spot_near(self, cx, cy, radius):
+        """A walkable, unclaimed tile within `radius`, nearest first."""
+        candidates = [(cx + dx, cy + dy)
+                      for dx in range(-radius, radius + 1)
+                      for dy in range(-radius, radius + 1)]
+        candidates.sort(key=lambda p: abs(p[0] - cx) + abs(p[1] - cy))
+        for x, y in candidates:
+            if not dungeon.is_walkable(self.grid, x, y):
+                continue
+            if not self._tile_is_free(x, y):
+                continue
+            if any((i.x, i.y) == (x, y) for i in self.items):
+                continue
+            if (x, y) == (self.player.x, self.player.y):
+                continue
+            return x, y
+        return None
 
     def _chest_guard_alive(self):
         return any(getattr(m, "guards_chest", False) and m.is_alive()
@@ -1407,6 +1647,9 @@ class Game:
             return True
         if any((m.x, m.y) == (x, y) for m in getattr(self, "merchants", [])
                if m is not ignore):
+            return True
+        if any((b.x, b.y) == (x, y) for b in getattr(self, "blacksmiths", [])
+               if b is not ignore):
             return True
         return False
 
@@ -1807,16 +2050,27 @@ class Game:
 
     def _monster_display_name(self, monster):
         if self._lang() != "de":
-            return monster.name
-        base = loc.MONSTER_NAME_DE.get(monster.kind, monster.kind)
-        gender = self._monster_gender(monster)
-        if monster.is_boss:
-            title = loc.BOSS_TITLE_DE.get(monster.kind, "Häuptling")
-            base = f"{base}-{title}"
-        if monster.elite_name:
-            elite_stem = loc.ELITE_NAME_DE.get(monster.elite_name, monster.elite_name)
-            ending = loc.ADJ_ENDING_DE.get(gender, "er")
-            base = f"{elite_stem}{ending} {base}"
+            base = monster.name
+        else:
+            base = loc.MONSTER_NAME_DE.get(monster.kind, monster.kind)
+            gender = self._monster_gender(monster)
+            if monster.is_boss:
+                title = loc.BOSS_TITLE_DE.get(monster.kind, "Häuptling")
+                base = f"{base}-{title}"
+            if monster.elite_name:
+                elite_stem = loc.ELITE_NAME_DE.get(monster.elite_name, monster.elite_name)
+                ending = loc.ADJ_ENDING_DE.get(gender, "er")
+                base = f"{elite_stem}{ending} {base}"
+        # Applied here rather than baked into monster.name when the
+        # monster is created. The German name is rebuilt from its parts
+        # above, so a prefix stored on .name was silently dropped in
+        # German and a superboss read as an ordinary boss - and storing
+        # translated text on the entity would freeze it in whatever
+        # language was active when the save was written.
+        if monster.is_superboss:
+            base = f"{self.t('superboss_prefix')} {base}"
+        elif monster.is_mimic:
+            base = f"{self.t('mimic_prefix')} {base}"
         return base
 
     def _monster_named(self, monster, case="nom"):
@@ -2175,6 +2429,8 @@ class Game:
             elif key == pygame.K_o:
                 self.settings_return_state = "title"
                 self.state = "settings"
+            elif key == pygame.K_d:
+                self.start_test_room()
             elif key == pygame.K_n:
                 self.state = "difficulty_select"
             elif key in (pygame.K_RETURN, pygame.K_SPACE):
@@ -2238,6 +2494,13 @@ class Game:
                 self._buy_item(key - pygame.K_1)
             return
 
+        if self.state == "smith":
+            if key == pygame.K_ESCAPE:
+                self.state = "playing"
+            elif pygame.K_1 <= key <= pygame.K_4:
+                self._smith_buy(key - pygame.K_1)
+            return
+
         if self.state == "bag":
             self._bag_key(key)
             return
@@ -2278,6 +2541,10 @@ class Game:
         if target_merchant:
             self.shop_stock = self._merchant_stock(target_merchant)
             self.state = "shop"
+            return
+
+        if any((b.x, b.y) == (target_x, target_y) for b in self.blacksmiths):
+            self.state = "smith"
             return
 
         target_monster = next(
@@ -2740,6 +3007,143 @@ class Game:
         """
         markup = self._diff()["shop_markup_per_level"] * max(0, self.dungeon_level - 1)
         return int(round(stock["price"] * (1 + markup)))
+
+    # --- the blacksmith ------------------------------------------------
+    # Each entry: (id, label key, whether it is available, price, action).
+    # Built fresh each time the screen is drawn, because every one of
+    # those depends on what the player is currently carrying.
+
+    def _smith_offers(self):
+        p = self.player
+        offers = []
+        if p.weapon_bonus > 0 or p.weapon_name != "Fists":
+            offers.append({
+                "id": "weapon",
+                "label": self.t("smith_weapon",
+                                item=self.tn(p.weapon_name),
+                                bonus=p.weapon_bonus,
+                                step=C.BLACKSMITH_WEAPON_STEP),
+                "price": self._smith_price(p.weapon_bonus),
+            })
+        if p.armor_bonus > 0 or p.armor_name != "None":
+            offers.append({
+                "id": "armor",
+                "label": self.t("smith_armor",
+                                item=self.tn(p.armor_name),
+                                bonus=p.armor_bonus,
+                                step=C.BLACKSMITH_ARMOR_STEP),
+                "price": self._smith_price(p.armor_bonus),
+            })
+        if p.weapon_name != "Fists":
+            offers.append({
+                "id": "enchant",
+                "label": (self.t("smith_reenchant", element=self.te(p.weapon_element_id))
+                          if p.weapon_element_id else self.t("smith_enchant")),
+                "price": C.BLACKSMITH_ENCHANT_PRICE,
+            })
+            # A weapon that never rolled a rarity (the class starter kit,
+            # for instance) reads as Common here rather than as a blank -
+            # tr() returns "" for None, which made the label say
+            # "reforge your weapon (now )".
+            rarity = self.tr(p.weapon_rarity_id) or self.tr(C.RARITY_TIERS[0]["id"])
+            offers.append({
+                "id": "reforge",
+                "label": self.t("smith_reforge", rarity=rarity),
+                "price": C.BLACKSMITH_REFORGE_PRICE,
+            })
+        return offers
+
+    @staticmethod
+    def _smith_price(current_bonus):
+        return C.BLACKSMITH_BASE_PRICE + C.BLACKSMITH_PRICE_PER_POINT * max(0, current_bonus)
+
+    def _smith_buy(self, index):
+        offers = self._smith_offers()
+        if index < 0 or index >= len(offers):
+            return
+        offer = offers[index]
+        if self.player.gold < offer["price"]:
+            self.add_log(self.t("log_not_enough_gold"))
+            return
+        self.player.gold -= offer["price"]
+        p = self.player
+
+        if offer["id"] == "weapon":
+            p.weapon_bonus += C.BLACKSMITH_WEAPON_STEP
+            self.add_log(self.t("log_smith_weapon", item=self.tn(p.weapon_name),
+                                bonus=p.weapon_bonus))
+        elif offer["id"] == "armor":
+            p.armor_bonus += C.BLACKSMITH_ARMOR_STEP
+            self.add_log(self.t("log_smith_armor", item=self.tn(p.armor_name),
+                                bonus=p.armor_bonus))
+        elif offer["id"] == "enchant":
+            # Never the element it already has, or paying to "reroll"
+            # could visibly change nothing.
+            choices = [e for e in C.ELEMENTS if e != p.weapon_element_id]
+            p.weapon_element_id = random.choice(choices)
+            self.add_log(self.t("log_smith_enchant",
+                                element=self.te(p.weapon_element_id)))
+        elif offer["id"] == "reforge":
+            order = [t["id"] for t in C.RARITY_TIERS]
+            current = order.index(p.weapon_rarity_id) if p.weapon_rarity_id in order else 0
+            if current + 1 < len(order):
+                tier = C.RARITY_TIERS[current + 1]
+                p.weapon_rarity_id = tier["id"]
+                # The rarity is what the bonus was scaled by when the
+                # weapon dropped, so raising one has to raise the other -
+                # otherwise reforging is a colour change you paid for.
+                p.weapon_bonus = max(p.weapon_bonus + 1,
+                                     int(round(p.weapon_bonus * 1.25)))
+                self.add_log(self.t("log_smith_reforge", rarity=self.tr(tier["id"]),
+                                    bonus=p.weapon_bonus))
+            else:
+                self.add_log(self.t("log_smith_best_already"))
+                self.player.gold += offer["price"]
+                return
+        self.sounds.play("equip")
+
+    def _render_smith(self):
+        self.screen.fill(C.COLOR_BG)
+        self._tap_targets = []
+        y = self._screen_header(self.t("smith_title"), color=C.COLOR_BLACKSMITH)
+
+        gold = self.f_body.render(self.t("shop_gold_label", gold=self.player.gold),
+                                  True, C.COLOR_GOLD)
+        self.screen.blit(gold, gold.get_rect(midtop=(C.SCREEN_WIDTH // 2, y)))
+        y += gold.get_height() + self.gap_m
+
+        offers = self._smith_offers()
+        if not offers:
+            self._lines_block([self.t("smith_nothing")], y + self.gap_l,
+                              color=C.COLOR_TEXT_DIM)
+            self._button_row([(self.t("btn_leave"), pygame.K_ESCAPE)],
+                             C.SCREEN_HEIGHT - self.pad - self.btn_h)
+            return
+
+        keys = [pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4]
+        bottom = C.SCREEN_HEIGHT - self.pad - self.btn_h - self.gap_l
+        row_h = max(self.btn_h // 2,
+                    min(self.btn_h,
+                        (bottom - y - self.btn_gap * (len(offers) - 1)) // len(offers)))
+        buy_w = self._btn_w(self.t("btn_forge"), self.f_sm)
+        for i, offer in enumerate(offers):
+            affordable = self.player.gold >= offer["price"]
+            color = C.COLOR_HUD_TEXT if affordable else C.COLOR_TEXT_DIM
+            label = f"{i + 1}. {offer['label']}"
+            text = self.f_sm.render(label, True, color)
+            self.screen.blit(text, text.get_rect(midleft=(self.pad, y + row_h // 2)))
+            price = self.f_sm.render(f"{offer['price']} {self.t('gold_word')}", True,
+                                     C.COLOR_GOLD if affordable else C.COLOR_TEXT_DIM)
+            self.screen.blit(price, price.get_rect(
+                midright=(C.SCREEN_WIDTH - self.pad - buy_w - self.gap_m,
+                          y + row_h // 2)))
+            self._draw_tap_button(
+                (C.SCREEN_WIDTH - self.pad - buy_w, y, buy_w, row_h),
+                self.t("btn_forge"), keys[i], font=self.f_sm)
+            y += row_h + self.btn_gap
+
+        self._button_row([(self.t("btn_leave"), pygame.K_ESCAPE)],
+                         C.SCREEN_HEIGHT - self.pad - self.btn_h)
 
     def _merchant_stock(self, merchant):
         """What this particular merchant is selling.
@@ -3492,6 +3896,11 @@ class Game:
             self._present()
             return
 
+        if self.state == "smith":
+            self._render_smith()
+            self._present()
+            return
+
         if self.state == "paused":
             self._render_pause()
             self._present()
@@ -3656,6 +4065,7 @@ class Game:
             (self.t("btn_achievements"), pygame.K_a),
             (self.t("btn_settings"), pygame.K_o),
             (self.t("btn_bestiary"), pygame.K_b),
+            (self.t("btn_testroom"), pygame.K_d),
         ]
         # A five-button row can outgrow the screen once translated, so
         # step the label font down until it fits rather than clipping.
@@ -4640,6 +5050,10 @@ class Game:
             if (merchant.x, merchant.y) in self.visible:
                 self._draw_merchant(merchant, ox, oy)
 
+        for smith in self.blacksmiths:
+            if (smith.x, smith.y) in self.visible:
+                self._draw_blacksmith(smith, ox, oy)
+
         for monster in self.monsters:
             if (monster.x, monster.y) in self.visible:
                 self._draw_monster(monster, ox, oy)
@@ -4892,6 +5306,21 @@ class Game:
         tile_bottom_y = merchant.y * C.TILE_SIZE + C.TILE_SIZE + oy
         rect = self.merchant_sprite.get_rect(midbottom=(int(tile_center_x), int(tile_bottom_y) + 2))
         self.screen.blit(self.merchant_sprite, rect)
+
+    def _draw_blacksmith(self, smith, ox=0, oy=0):
+        sprite = self.blacksmith_sprite
+        if sprite is None:
+            self._draw_char(smith.char, smith.x, smith.y, smith.color, ox, oy)
+            return
+        ts = C.TILE_SIZE
+        center = (int(smith.x * ts + ts // 2 + ox), int(smith.y * ts + ts // 2 + oy))
+        # A warm halo, the same trick elites and the chest use: he is one
+        # small figure in a room and worth walking over to.
+        glow = pygame.Surface((ts * 2, ts * 2), pygame.SRCALPHA)
+        pygame.draw.ellipse(glow, (*C.COLOR_BLACKSMITH, 70), glow.get_rect())
+        self.screen.blit(glow, glow.get_rect(center=center))
+        rect = sprite.get_rect(midbottom=(center[0], int(smith.y * ts + ts + oy) + 2))
+        self.screen.blit(sprite, rect)
 
     def _draw_char(self, char, x, y, color, ox=0, oy=0):
         surf = self.font.render(char, True, color)

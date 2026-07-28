@@ -243,6 +243,7 @@ class Monster(Entity):
         self.is_mini_boss = False
         self.is_superboss = False
         self.is_mimic = False
+        self.guards_vault = False
         self.trap_cooldown = 0
 
     def is_alive(self):
@@ -252,6 +253,19 @@ class Monster(Entity):
 class Merchant(Entity):
     def __init__(self, x, y):
         super().__init__(x, y, "M", C.COLOR_MERCHANT, "merchant")
+
+
+class Blacksmith(Entity):
+    """Upgrades what you already carry, rather than selling you something.
+
+    Deliberately a separate class from Merchant even though both are just
+    a position and a sprite: they block movement the same way but do
+    completely different things when walked into, and one list of "NPCs
+    with a type tag" would have meant a type check at every use site.
+    """
+
+    def __init__(self, x, y):
+        super().__init__(x, y, "B", C.COLOR_BLACKSMITH, "blacksmith")
 
 
 class Item(Entity):

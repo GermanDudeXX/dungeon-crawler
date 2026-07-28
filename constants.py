@@ -95,6 +95,8 @@ LADDER_SPRITE_PATH = os.path.join(ITEM_SPRITE_DIR, "ladder.png")
 LADDER_SPRITE_HEIGHT = int(TILE_SIZE * 1.3)
 MERCHANT_SPRITE_PATH = os.path.join(ASSETS_DIR, "merchant.png")
 MERCHANT_SPRITE_HEIGHT = int(TILE_SIZE * 1.6)
+BLACKSMITH_SPRITE_PATH = os.path.join(ASSETS_DIR, "blacksmith.png")
+BLACKSMITH_SPRITE_HEIGHT = int(TILE_SIZE * 1.6)
 
 # Dungeon tiles (0x72 DungeonTileset II, CC0). 16x16 source art scaled up
 # to TILE_SIZE with transform.scale - never smoothscale, which turns
@@ -169,6 +171,7 @@ COLOR_LOG_TEXT = COLOR_TEXT_DIM
 COLOR_HELP_TEXT = COLOR_TEXT_DIM
 COLOR_GOLD = (255, 210, 60)
 COLOR_MERCHANT = (80, 200, 220)
+COLOR_BLACKSMITH = (226, 148, 74)
 COLOR_POISON = (110, 200, 90)
 COLOR_TRAP = (200, 80, 60)
 COLOR_CRIT = (255, 230, 60)
@@ -681,6 +684,35 @@ CLASSES = [
 ]
 CLASS_BY_ID = {c["id"]: c for c in CLASSES}
 DEFAULT_CLASS = "warrior"
+
+# --- the blacksmith ------------------------------------------------------
+# Gold has nothing to buy past the first few floors: the shop's stock is
+# fixed and cheap, so a long run ends holding hundreds of unspendable
+# coins. The smith is the sink - he upgrades what you already carry
+# rather than selling you something new, so the gear you found stays the
+# gear you use.
+#
+# Price climbs with the bonus already on the item, so the first upgrade
+# is cheap and the tenth is a real decision.
+BLACKSMITH_CHANCE_PER_LEVEL = 0.30
+BLACKSMITH_MIN_LEVEL = 3
+BLACKSMITH_BASE_PRICE = 25
+BLACKSMITH_PRICE_PER_POINT = 18
+BLACKSMITH_WEAPON_STEP = 2      # +bonus per weapon upgrade
+BLACKSMITH_ARMOR_STEP = 1
+# Enchanting an unenchanted weapon, or rerolling an existing element.
+BLACKSMITH_ENCHANT_PRICE = 90
+BLACKSMITH_REFORGE_PRICE = 140  # reroll rarity, one tier up if possible
+
+# --- heavily guarded vault ----------------------------------------------
+# A room the player can see is worth robbing and has to decide whether
+# they can survive. Several elites at once rather than one big monster:
+# a crowd is a different problem from a boss, and this game had no
+# encounter that posed it.
+VAULT_CHANCE_PER_LEVEL = 0.22
+VAULT_MIN_LEVEL = 5
+VAULT_GUARDS = (3, 5)
+VAULT_GUARD_MULT = 1.3
 
 MERCHANT_CHANCE_PER_LEVEL = 0.35
 SHOP_STOCK = [

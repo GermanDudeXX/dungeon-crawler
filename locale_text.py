@@ -358,6 +358,61 @@ STRINGS = {
         "de": "In diesem Lauf getrunkene Tränke: {potions}",
     },
 
+    # --- blacksmith ---
+    "smith_title": {"en": "BLACKSMITH", "de": "SCHMIED"},
+    "smith_nothing": {
+        "en": "Come back when you carry something worth working on.",
+        "de": "Komm wieder, wenn du etwas dabei hast, das sich zu bearbeiten lohnt.",
+    },
+    "smith_weapon": {
+        "en": "Sharpen {item} +{bonus}  ->  +{step} more",
+        "de": "{item} +{bonus} schärfen  ->  +{step} mehr",
+    },
+    "smith_armor": {
+        "en": "Reinforce {item} +{bonus}  ->  +{step} more",
+        "de": "{item} +{bonus} verstärken  ->  +{step} mehr",
+    },
+    "smith_enchant": {
+        "en": "Enchant your weapon with an element",
+        "de": "Deine Waffe mit einem Element verzaubern",
+    },
+    "smith_reenchant": {
+        "en": "Re-enchant your weapon (now {element})",
+        "de": "Waffe neu verzaubern (jetzt {element})",
+    },
+    "smith_reforge": {
+        "en": "Reforge your weapon (now {rarity})",
+        "de": "Waffe neu schmieden (jetzt {rarity})",
+    },
+    "btn_forge": {"en": "FORGE", "de": "SCHMIEDEN"},
+    "log_smith_weapon": {
+        "en": "The smith sharpens your {item}. Now +{bonus}.",
+        "de": "Der Schmied schärft dein/e {item}. Jetzt +{bonus}.",
+    },
+    "log_smith_armor": {
+        "en": "The smith reinforces your {item}. Now +{bonus}.",
+        "de": "Der Schmied verstärkt dein/e {item}. Jetzt +{bonus}.",
+    },
+    "log_smith_enchant": {
+        "en": "Your weapon glows - it is now {element}.",
+        "de": "Deine Waffe glüht auf - sie ist jetzt {element}.",
+    },
+    "log_smith_reforge": {
+        "en": "Reforged to {rarity}. Your weapon is now +{bonus}.",
+        "de": "Neu geschmiedet zu {rarity}. Deine Waffe ist jetzt +{bonus}.",
+    },
+    "log_smith_best_already": {
+        "en": "The smith shakes his head - it cannot be bettered.",
+        "de": "Der Schmied schüttelt den Kopf - besser geht es nicht.",
+    },
+
+    # --- test room ---
+    "btn_testroom": {"en": "TEST ROOM", "de": "TESTRAUM"},
+    "log_testroom": {
+        "en": "Test room: one of everything the dungeon can hold.",
+        "de": "Testraum: alles einmal, was der Dungeon hergibt.",
+    },
+
     # --- character class ---
     "class_title": {"en": "CHOOSE YOUR HERO", "de": "WÄHLE DEINEN HELDEN"},
     "class_hint": {
@@ -641,6 +696,8 @@ TUTORIAL_SECTIONS = {
         ("Rooms & Dangers", [
             "Every 3rd floor has a mini-boss; every 5th, a real boss whose stairs stay barred.",
             "Treasure chests are guarded - kill the guardian first. Some chests are mimics.",
+            "A vault is a pile of loot with several elites standing on it. Fight it in a doorway.",
+            "The blacksmith sharpens, reinforces, enchants and reforges what you already carry.",
             "Lava, collapsing floors and spike beds are visible: walk around them.",
             "Bosses change phase as they weaken - the bar above shows which one.",
         ]),
@@ -704,6 +761,8 @@ TUTORIAL_SECTIONS = {
         ("Räume & Gefahren", [
             "Jede 3. Ebene hat einen Mini-Boss; jede 5. einen Boss, dessen Treppe versperrt ist.",
             "Schatztruhen sind bewacht - töte erst den Wächter. Manche Truhen sind Mimiks.",
+            "Eine Schatzkammer ist ein Beutehaufen mit mehreren Elite-Gegnern darauf.",
+            "Der Schmied schärft, verstärkt, verzaubert und schmiedet neu, was du schon hast.",
             "Lava, einstürzende Böden und Stachelbetten sind sichtbar: geh drum herum.",
             "Bosse wechseln die Phase, wenn sie schwächer werden - die Leiste oben zeigt welche.",
         ]),
