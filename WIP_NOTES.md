@@ -67,69 +67,41 @@ Von der Ideen-Liste waren **12 Punkte drin, 7 halb, 25+ offen**, Tränke 1 von 3
 ### Wellen-Plan
 | # | Welle | Status |
 |---|---|---|
-| 1 | Gegner-Nameplates+Status-Icons, Bluten, Frost-Slow, Schwierigkeitsgrade | **IN ARBEIT** |
-| 2 | **Map-Tiles + Autotiling + Themen** (vorgezogen, s. Assets) | offen |
-| 3 | Tränke (1 → ~30), Trank-Inventar-UI | offen |
+| 1 | Nameplates+Status-Icons, Bluten, Frost-Slow, Schwierigkeitsgrade | **FERTIG** `bbccad5` |
+| 2 | **Map-Tiles + Autotiling + Themen** | **FERTIG** `4af1097` |
+| 3 | Tränke (1 → ~30), Trank-Inventar-UI | in Arbeit |
 | 4 | Räume: Mini-Boss/3, Boss-Tür-Lock, Schatzraum+Wächter, Arena, Superboss, Lava/Loch | offen |
 | 5 | Gegner: Schwarm, Fallen-Steller, Fernkampf-Kiting, Boss-Phasen sichtbar, Mimic | offen |
 | 6 | Klassen, Skilltree, Begleiter, Set-Items | offen |
 | 7 | Schmied, Glücksspiel, Item-Lore, Quests, Speicherslots, Endlos, Tod-Statistik | offen |
 | 8 | Juice: Partikel, Hitstop, Zoom, Fanfare, Ambient, NPC-Dialoge | offen |
 
-### Welle 1 — was schon im Code steht (NICHT committet!)
-**`constants.py`** — fertig:
-- `BLEED_DAMAGE_PER_TURN=5`, `BLEED_TURNS=2`, `SLOW_TURNS=3`
-- `STATUS_BADGES` (6 Einträge: burn/poison/bleed/stun/slow/weaken, je char+color)
-- `DIFFICULTIES` (easy/normal/hard/hardcore) + `DIFFICULTY_BY_ID` + `DEFAULT_DIFFICULTY`
+### PRIORITÄT 1 — Update-Bug: **BEHOBEN** (`07f2660`)
+Diagnose: Der Download war fehlerfrei (40.412.041 Bytes = exakt die GitHub-
+Asset-Größe). Das Batch-Skript scheiterte am `move /y` (die laufende exe war
+noch gesperrt), prüfte den Fehler nie und startete die **alte** exe neu, deren
+`_MEI`-Entpackung dann fehlschlug. Zusätzlich ließ `os._exit(0)` pro Update
+einen ~40-MB-`_MEI`-Ordner in %TEMP% zurück (38 Stück gefunden, 350 MB).
+Fix: Umbenennen statt Überschreiben (geht auch bei offenem Handle), jeder
+Schritt geprüft + 15 Wiederholungen + Rollback, Fehlermarker → Meldung im
+Update-Screen, sauberer Exit statt `os._exit`, `_MEI`-Aufräumen beim Start.
+Getestet mit `test_updater_swap.py` (echtes cmd.exe, echte Sperren).
+Die kaputte Installation des Nutzers wurde sofort repariert (gute exe kopiert,
+alte als `DungeonCrawler.exe.alt-build63.bak` gesichert).
 
-**`entities.py`** — fertig:
-- `Player(x, y, hp_mult=1.0)` — max_hp = 20*hp_mult
-- `Player.bleed_turns`
-- `Monster(..., level=1, diff_hp=1.0, diff_damage=1.0)`, `Monster.level`
-- `Monster.bleed_turns`, `.slow_turns`, `.slow_skip`
+### Welle 2 — Map (fertig)
+- `assets/tiles/` (63 Frames, 95 KB) aus 0x72 DungeonTileset II
+- `_load_tile_sources` / `_tile(name, dim)` (Cache je Name+Tier+dim) /
+  `_tint_tile` (Graustufen × Themenfarbe) / `_floor_tile_name` (Hash, stabil) /
+  `_wall_tile_name` (Nachbarmaske; **None = massiver Fels → Flächenfüllung**,
+  sonst gäbe es Streifenmuster) / `_scatter_decor` (wird im Save gespeichert)
+- Rebuild voll erkundet: 5,2 ms — nur bei FOV-Wechsel. Frame unverändert 2,8 ms.
 
-**`game.py`** — teilweise:
-- `_diff()`, `_difficulty_name()`, `_make_monster()` (zentrale Fabrik) ✔
-- `start_new_run(difficulty=None)` ✔, `continue_run` lädt difficulty ✔
-- `_build_save_data` speichert difficulty + bleed_turns ✔
-- `_serialize/_deserialize_monster`: speichert jetzt max_hp/power/defense/
-  xp_reward/tier_mult/level ✔ **(behebt echten Bug: beim Laden/Zurückkehren
-  verloren Monster ihre Tier-Skalierung und hp konnte > max_hp sein)**
-
-### Welle 1 — Stand nach Commit 2 (Session-Limit erreicht)
-**FERTIG und getestet** (alle 9 Regressionssuiten grün, Werte geprüft:
-easy/normal/hard/hardcore → Ork-HP 10/14/18/28, Trankpreis Ebene 5 12/12/22/36):
-- Alle Spawns laufen über `self._make_monster(` — Tier- und Schwierigkeits-
-  Skalierung greift jetzt auch bei beschworenen Minions und Hinterhalten
-- `_attack`: Spieler-Schadensmultiplikator, **Bluten bei jedem Krit**,
-  **Frost setzt zusätzlich `slow_turns`**
-- `_tick_monster_status`: bleed-Tick + slow (alternierend, erste Runde fällt aus —
-  geprüft: Muster `[True, False, True, False]`)
-- `_tick_poison` deckt jetzt Gift **und** Bluten ab
-- Shop-Aufschlag `_shop_price()` in `_buy_item` + `_render_shop`
-- `persistence.py`: `"difficulty": "normal"` in DEFAULT_SETTINGS
-- `locale_text.py`: `DIFFICULTY_DE`, `difficulty_title/hint`, `hud_bleeding`,
-  `log_bleed_damage`, `log_succumb_bleed`, `log_status_bleed`, `log_status_slow`
-
-**REST VON WELLE 1 — als Nächstes dran:**
-1. `_enemy_turn`: prüfen, ob `slow_skip` dort noch zusätzlich ausgewertet werden
-   muss — aktuell wird der Skip über den `stunned`-Rückgabewert von
-   `_tick_monster_status` transportiert, das *sollte* reichen (dieselbe
-   `continue`-Stelle wie bei Betäubung), ist aber noch nicht end-to-end getestet.
-2. **`_render_nameplates()`** — neu, in `render()` direkt nach
-   `_render_entities(ox, oy)` aufrufen: pro sichtbarem Monster HP-Balken +
-   `Name Lv{n}` + Status-Badges aus `C.STATUS_BADGES`.
-   **Perf-Pflicht:** Namens-Surfaces in `self._name_cache` (dict) cachen,
-   kleine Font `self.f_tiny` in `_build_ui_metrics` anlegen. Niemals pro Frame
-   neu rendern — das war die Ursache der alten 3,9-fps-Katastrophe.
-3. Schwierigkeitsauswahl-Screen: neuer State `difficulty_select`, vom Titel aus
-   bei NEUER LAUF (`pygame.K_n`) statt direkt `start_new_run()`;
-   `_render_difficulty_select()` mit 4 Karten (Farben stehen in
-   `C.DIFFICULTIES[*]["color"]`), Tasten 1–4 → `start_new_run(id)`.
-   **Funktioniert schon ohne Screen** — es greift dann `settings["difficulty"]`.
-4. HUD: Blutungs-Chip analog zum Gift-Chip in `_render_hud` (`hud_bleeding`).
-5. Tutorial: Abschnitt über Status-Effekte ergänzen.
-6. `CHANGELOG.md` + `assets/build_version.txt` hochzählen, ausliefern.
+### Welle 1 (fertig)
+Nameplates (`_render_nameplates`, `_name_cache`, `_badge_cache`, `f_tiny`),
+Status-Pips (`_status_pip`), Schwierigkeits-Screen (`difficulty_select`,
+Tasten 1–4), Blutungs-Chip im HUD, Tutorial-Abschnitte Statuseffekte +
+Schwierigkeit. Test: `test_wave1.py`.
 
 ### Test/Release-Ritual (bei JEDEM Abschluss)
 ```

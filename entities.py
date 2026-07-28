@@ -51,7 +51,16 @@ class Player(Entity):
         self.level = 1
         self.xp = 0
         self.xp_to_next = 15
-        self.potions = 0
+        # Potions are counted per type. The old single "potions" int is
+        # kept as a read-only view of the healing ones so the HUD, the
+        # achievements and old saves all still mean the same thing.
+        self.potion_counts = {C.DEFAULT_POTION: 0}
+        self.selected_potion = C.DEFAULT_POTION
+        # buff id -> turns remaining. One dict rather than a field per
+        # effect: there are a dozen of them, they stack freely, and a
+        # field each would be a dozen places to decrement and serialise.
+        self.buffs = {}
+        self.shield = 0
         self.kills = 0
         self.gold = 0
         self.scrolls = {"fireball": 0, "teleport": 0, "reveal": 0}
@@ -66,16 +75,62 @@ class Player(Entity):
         self.regen_counter = 0
 
     @property
+    def potions(self):
+        """Total flasks carried, of every kind.
+
+        Still an int so the HUD, the save format and the "Untouchable"
+        achievement did not all have to change at once when potions
+        stopped being a single undifferentiated stack.
+        """
+        return sum(self.potion_counts.values())
+
+    def potion_count(self, potion_id):
+        return self.potion_counts.get(potion_id, 0)
+
+    def add_potion(self, potion_id, amount=1):
+        self.potion_counts[potion_id] = self.potion_counts.get(potion_id, 0) + amount
+        # Point the quick-use slot at something you actually have, so the
+        # HEAL button is never a no-op right after picking a flask up.
+        if self.potion_counts.get(self.selected_potion, 0) <= 0:
+            self.selected_potion = potion_id
+
+    def take_potion(self, potion_id):
+        if self.potion_counts.get(potion_id, 0) <= 0:
+            return False
+        self.potion_counts[potion_id] -= 1
+        if self.potion_counts[potion_id] <= 0:
+            del self.potion_counts[potion_id]
+            if self.selected_potion == potion_id:
+                self.selected_potion = next(iter(self.potion_counts), C.DEFAULT_POTION)
+        return True
+
+    def buff_total(self, key):
+        """Sum of one stat across every active buff.
+
+        Buffs stack rather than overriding each other, so drinking
+        Strength while Berserk is up gives both - which is the point of
+        having a dozen of them.
+        """
+        return sum(C.BUFFS[b].get(key, 0) for b in self.buffs if b in C.BUFFS)
+
+    def has_buff_flag(self, key):
+        return any(C.BUFFS[b].get(key) for b in self.buffs if b in C.BUFFS)
+
+    @property
     def power(self):
-        return self.base_power + self.weapon_bonus
+        return max(1, self.base_power + self.weapon_bonus + self.buff_total("power"))
 
     @property
     def defense(self):
-        return self.base_defense + self.armor_bonus
+        return max(0, self.base_defense + self.armor_bonus + self.buff_total("defense"))
 
     @property
     def crit_chance(self):
-        return min(0.5, 0.05 + self.level * 0.02 + self.bonus_crit_chance)
+        # The natural cap stays where it was; a Precision potion adds on
+        # top of it rather than being swallowed by it, which is the whole
+        # reason to drink one at high level.
+        natural = min(0.5, 0.05 + self.level * 0.02 + self.bonus_crit_chance)
+        return min(0.95, natural + self.buff_total("crit"))
 
     def is_alive(self):
         return self.hp > 0
@@ -191,10 +246,12 @@ class Merchant(Entity):
 
 
 class Item(Entity):
-    def __init__(self, x, y, kind, name, char, color, bonus=0, scroll_type=None, rarity_id=None, element_id=None):
+    def __init__(self, x, y, kind, name, char, color, bonus=0, scroll_type=None,
+                 rarity_id=None, element_id=None, potion_id=None):
         super().__init__(x, y, char, color, name, blocks_movement=False)
         self.kind = kind
         self.bonus = bonus
         self.scroll_type = scroll_type
         self.rarity_id = rarity_id
         self.element_id = element_id
+        self.potion_id = potion_id

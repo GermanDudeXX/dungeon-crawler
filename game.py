@@ -136,6 +136,9 @@ class Game:
         self._decor = {}
         self._name_cache = {}
         self._badge_cache = {}
+        self._potion_sprite_cache = {}
+        self.bag_page = 0
+        self.shop_stock = None
         self.needs_redraw = True
         self._last_draw_ms = 0
         self._last_tick_ms = 0
@@ -477,6 +480,13 @@ class Game:
             "reveal": pygame.Rect(scroll_x + 2 * (scroll_size + g), scroll_y, scroll_size, scroll_size),
         }
 
+        # The bag opens the potion list. It shares the HEAL button's
+        # column and sits directly above the scroll row, so the whole
+        # action cluster stays one reachable block under the thumb.
+        self.bag_button = pygame.Rect(
+            right_edge - self.potion_button.width, scroll_y - g - scroll_size,
+            self.potion_button.width, scroll_size)
+
         # Pinned to the top-right corner - the only touch route back to the
         # pause menu, so it stays visible even with the other controls off.
         menu_w = min(self._btn_w(self.t("touch_menu"), self.f_sm),
@@ -568,7 +578,20 @@ class Game:
         player.level = p["level"]
         player.xp = p["xp"]
         player.xp_to_next = p["xp_to_next"]
-        player.potions = p["potions"]
+        # "potions" is now a read-only total. A save from before typed
+        # potions existed only has that number, so treat the whole stack
+        # as healing potions - which is exactly what it was.
+        counts = p.get("potion_counts")
+        if counts:
+            player.potion_counts = {k: int(v) for k, v in counts.items() if int(v) > 0}
+        else:
+            player.potion_counts = {C.DEFAULT_POTION: p.get("potions", 0)}
+        player.selected_potion = p.get("selected_potion", C.DEFAULT_POTION)
+        if player.potion_counts.get(player.selected_potion, 0) <= 0:
+            player.selected_potion = next(iter(player.potion_counts), C.DEFAULT_POTION)
+        player.buffs = {k: int(v) for k, v in p.get("buffs", {}).items()
+                        if k in C.BUFFS and int(v) > 0}
+        player.shield = p.get("shield", 0)
         player.kills = p["kills"]
         player.facing = p["facing"]
         player.gold = p.get("gold", 0)
@@ -637,6 +660,9 @@ class Game:
                 "armor_rarity_id": p.armor_rarity_id,
                 "level": p.level, "xp": p.xp, "xp_to_next": p.xp_to_next,
                 "potions": p.potions, "kills": p.kills, "facing": p.facing,
+                "potion_counts": dict(p.potion_counts),
+                "selected_potion": p.selected_potion,
+                "buffs": dict(p.buffs), "shield": p.shield,
                 "gold": p.gold, "scrolls": dict(p.scrolls), "poison_turns": p.poison_turns,
                 "bleed_turns": p.bleed_turns,
                 "potions_drunk_this_run": p.potions_drunk_this_run,
@@ -710,6 +736,7 @@ class Game:
             "x": i.x, "y": i.y, "kind": i.kind, "name": i.name, "char": i.char,
             "color": list(i.color), "bonus": i.bonus, "scroll_type": i.scroll_type,
             "rarity_id": i.rarity_id, "element_id": i.element_id,
+            "potion_id": i.potion_id,
         }
 
     @staticmethod
@@ -717,7 +744,7 @@ class Game:
         return entities.Item(
             i["x"], i["y"], i["kind"], i["name"], i["char"], tuple(i["color"]),
             bonus=i["bonus"], scroll_type=i.get("scroll_type"), rarity_id=i.get("rarity_id"),
-            element_id=i.get("element_id"),
+            element_id=i.get("element_id"), potion_id=i.get("potion_id"),
         )
 
     def _snapshot_current_level(self):
@@ -901,9 +928,12 @@ class Game:
             return
 
         if kind == "potion":
-            self.items.append(
-                entities.Item(x, y, "potion", "Healing Potion", "!", C.COLOR_POTION, bonus=15)
-            )
+            potion_id = self._roll_potion()
+            info = C.POTION_BY_ID[potion_id]
+            self.items.append(entities.Item(
+                x, y, "potion", info["name"], "!", info["color"],
+                bonus=info["effect"].get("heal", 0), potion_id=potion_id,
+            ))
         elif kind == "weapon":
             tier_max = min(len(C.WEAPON_TYPES) - 1, self.dungeon_level // 2)
             w = C.WEAPON_TYPES[random.randint(0, tier_max)]
@@ -936,6 +966,12 @@ class Game:
 
     def _roll_rarity(self):
         available = [t for t in C.RARITY_TIERS if t["min_level"] <= self.dungeon_level]
+        if getattr(self, "player", None) is not None and self.player.has_buff_flag("luck"):
+            # Luck rolls twice and keeps the better tier, rather than
+            # reweighting the table: it cannot conjure a rarity that is
+            # not unlocked yet, and it stays meaningful at every depth.
+            picks = random.choices(available, weights=[t["weight"] for t in available], k=2)
+            return max(picks, key=lambda t: available.index(t))
         return random.choices(available, weights=[t["weight"] for t in available], k=1)[0]
 
     def _random_floor_in_room(self, room):
@@ -1581,6 +1617,9 @@ class Game:
         if self.potion_button.collidepoint(pos):
             self._drink_potion()
             return
+        if self.bag_button.collidepoint(pos):
+            self._open_bag()
+            return
         for name, rect in self.scroll_buttons.items():
             if rect.collidepoint(pos):
                 self._use_scroll(name)
@@ -1718,8 +1757,12 @@ class Game:
         if self.state == "shop":
             if key == pygame.K_ESCAPE:
                 self.state = "playing"
-            elif pygame.K_1 <= key <= pygame.K_4:
+            elif pygame.K_1 <= key <= pygame.K_6:
                 self._buy_item(key - pygame.K_1)
+            return
+
+        if self.state == "bag":
+            self._bag_key(key)
             return
 
         if self.state == "levelup_choice":
@@ -1733,6 +1776,8 @@ class Game:
             self.state = "paused"
         elif key == pygame.K_g:
             self._drink_potion()
+        elif key == pygame.K_i:
+            self._open_bag()
         elif key == pygame.K_f:
             self._use_scroll("fireball")
         elif key == pygame.K_t:
@@ -1745,6 +1790,7 @@ class Game:
         if self.state == "dead":
             return
         self._tick_regen()
+        self._tick_buffs()
 
         if dx != 0:
             self.player.facing = 1 if dx > 0 else -1
@@ -1753,6 +1799,7 @@ class Game:
 
         target_merchant = next((m for m in self.merchants if m.x == target_x and m.y == target_y), None)
         if target_merchant:
+            self.shop_stock = self._merchant_stock(target_merchant)
             self.state = "shop"
             return
 
@@ -1945,8 +1992,9 @@ class Game:
 
     def _collect_item(self, item):
         if item.kind == "potion":
-            self.player.potions += 1
-            self.add_log(self.t("log_pickup_item", item=self.tn(item.name)))
+            potion_id = item.potion_id or C.DEFAULT_POTION
+            self.player.add_potion(potion_id)
+            self.add_log(self.t("log_pickup_item", item=self._potion_name(potion_id)))
             self.sounds.play("pickup")
         elif item.kind == "weapon":
             if item.bonus > self.player.weapon_bonus:
@@ -1983,25 +2031,217 @@ class Game:
             self.sounds.play("pickup")
         self.items.remove(item)
 
-    def _drink_potion(self):
-        if self.player.potions <= 0:
+    def _potion_name(self, potion_id):
+        info = C.POTION_BY_ID.get(potion_id)
+        return self.tn(info["name"]) if info else potion_id
+
+    def _potion_sprite(self, potion_id, height=None):
+        """The flask art for a potion, at the requested height.
+
+        Each potion names a frame in the shared tileset, so the flask you
+        see on the floor is the one you see in the inventory. Cached by
+        (id, height) - the inventory draws up to a couple of dozen of
+        these and rescaling them per frame would be daft.
+        """
+        info = C.POTION_BY_ID.get(potion_id)
+        if not info:
+            return None
+        h = height or C.ITEM_SPRITE_HEIGHT
+        key = (potion_id, h)
+        cached = self._potion_sprite_cache.get(key)
+        if cached is not None:
+            return cached
+        source = self._tile_sources.get(info["flask"])
+        if source is None:
+            return None
+        w, sh = source.get_size()
+        sprite = pygame.transform.scale(source, (max(1, round(w * h / sh)), h))
+        # The flasks come in four colours but there are thirty potions, so
+        # each is tinted to its own colour - otherwise half the inventory
+        # would be indistinguishable red flasks.
+        sprite = self._tint_tile(sprite, info["color"])
+        self._potion_sprite_cache[key] = sprite
+        return sprite
+
+    def _available_potions(self, include_cursed=True):
+        """Potion types that can turn up at the current depth."""
+        return [p for p in C.POTION_TYPES
+                if p["min_level"] <= self.dungeon_level
+                and (include_cursed or not p.get("cursed"))]
+
+    def _roll_potion(self):
+        pool = self._available_potions()
+        if not pool:
+            return C.DEFAULT_POTION
+        weights = [p["weight"] for p in pool]
+        return random.choices(pool, weights=weights, k=1)[0]["id"]
+
+    def _drink_potion(self, potion_id=None):
+        potion_id = potion_id or self.player.selected_potion
+        info = C.POTION_BY_ID.get(potion_id)
+        if info is None or self.player.potion_count(potion_id) <= 0:
             self.add_log(self.t("log_no_potions"))
             return
-        if self.player.hp >= self.player.max_hp:
+        # Only healing is refused at full health. Every other potion does
+        # something useful regardless, and refusing them would make the
+        # quick-use button unpredictable.
+        effect = info["effect"]
+        heals_only = set(effect) <= {"heal", "heal_pct"}
+        if heals_only and self.player.hp >= self.player.max_hp:
             self.add_log(self.t("log_full_health"))
             return
 
-        healed = min(15, self.player.max_hp - self.player.hp)
-        self.player.potions -= 1
-        self.player.hp += healed
+        self.player.take_potion(potion_id)
         self.player.potions_drunk_this_run += 1
         self.stats["total_potions_drunk"] += 1
-        self.add_log(self.t("log_drink_potion", healed=healed))
         self.sounds.play("pickup")
+        self._apply_potion_effect(info)
+
         self._enemy_turn()
         self._recompute_fov()
         self._check_achievements()
         self._maybe_show_levelup_choice()
+
+    def _apply_potion_effect(self, info):
+        """Runs one potion's effect and logs what it did.
+
+        Effects are data (see constants.POTION_TYPES) rather than a
+        function per potion, so adding a potion is one dict entry and the
+        combinations - Panacea both cures and heals - come for free.
+        """
+        p = self.player
+        effect = info["effect"]
+        name = self.tn(info["name"])
+
+        heal = effect.get("heal", 0)
+        if effect.get("heal_pct"):
+            heal = max(heal, int(p.max_hp * effect["heal_pct"]))
+        if heal:
+            healed = min(heal, p.max_hp - p.hp)
+            p.hp += healed
+            self.add_log(self.t("log_drink_potion", healed=healed))
+            self._spawn_damage_number(p.x, p.y, f"+{healed}", C.COLOR_SUCCESS)
+
+        if effect.get("max_hp"):
+            p.max_hp += effect["max_hp"]
+            p.hp += effect["max_hp"]
+            self.add_log(self.t("log_potion_max_hp", amount=effect["max_hp"]))
+        if effect.get("base_power"):
+            p.base_power += effect["base_power"]
+            self.add_log(self.t("log_potion_power", amount=effect["base_power"]))
+        if effect.get("base_defense"):
+            p.base_defense += effect["base_defense"]
+            self.add_log(self.t("log_potion_defense", amount=effect["base_defense"]))
+        if effect.get("xp_levels"):
+            amount = max(1, int(p.xp_to_next * effect["xp_levels"]))
+            self.add_log(self.t("log_potion_xp", amount=amount))
+            levels = p.gain_xp(amount)
+            if levels:
+                self.add_log(self.t("log_level_up", level=p.level))
+                self.sounds.play("levelup")
+                self.pending_perk_count += levels
+
+        if effect.get("buff"):
+            buff = effect["buff"]
+            turns = effect.get("turns", 10)
+            # Re-drinking refreshes rather than stacking the duration, so
+            # a stockpile cannot be turned into one permanent buff.
+            p.buffs[buff] = max(p.buffs.get(buff, 0), turns)
+            key = "log_potion_curse" if info.get("cursed") else "log_potion_buff"
+            self.add_log(self.t(key, buff=self._buff_name(buff), turns=turns))
+
+        if effect.get("shield"):
+            p.shield = max(p.shield, effect["shield"])
+            self.add_log(self.t("log_potion_shield", amount=effect["shield"]))
+
+        for field in effect.get("cure", ()):
+            if getattr(p, field, 0) > 0:
+                setattr(p, field, 0)
+        if effect.get("cure_debuffs"):
+            for buff in [b for b in p.buffs if C.BUFFS.get(b, {}).get("power", 0) < 0
+                         or C.BUFFS.get(b, {}).get("defense", 0) < 0]:
+                del p.buffs[buff]
+        if effect.get("cure") or effect.get("cure_debuffs"):
+            self.add_log(self.t("log_potion_cured", item=name))
+
+        if effect.get("self_poison"):
+            p.poison_turns = max(p.poison_turns, effect["self_poison"])
+            self.add_log(self.t("log_potion_self_poison"))
+
+        if effect.get("reveal"):
+            self.explored = {(x, y) for y in range(C.MAP_HEIGHT)
+                             for x in range(C.MAP_WIDTH)}
+            self._map_cache = None
+            self.add_log(self.t("log_potion_reveal"))
+        if effect.get("blink"):
+            self._blink_player()
+        if effect.get("gold"):
+            low, high = effect["gold"]
+            amount = random.randint(low, high) * max(1, self.dungeon_level // 2)
+            p.gold += amount
+            self.stats["total_gold_collected"] = self.stats.get("total_gold_collected", 0) + amount
+            self.add_log(self.t("log_pickup_gold", amount=amount))
+
+        if effect.get("burst_damage"):
+            self._potion_burst(effect)
+
+    def _buff_name(self, buff_id):
+        info = C.BUFFS.get(buff_id)
+        return self.tn(info["name"]) if info else buff_id
+
+    def _blink_player(self):
+        x, y = self._random_floor_tile()
+        self.player.x, self.player.y = x, y
+        self.player.snap()
+        self.add_log(self.t("log_blink"))
+
+    def _potion_burst(self, effect):
+        """A thrown flask: hits everything around the player at once.
+
+        Deliberately centred on the player rather than aimed - this game
+        has no targeting cursor, and asking for one on a phone with a
+        D-pad would be worse than the effect is worth.
+        """
+        radius = C.POTION_BURST_RADIUS
+        damage = effect["burst_damage"]
+        hit = 0
+        for monster in list(self.monsters):
+            if not monster.is_alive():
+                continue
+            if max(abs(monster.x - self.player.x), abs(monster.y - self.player.y)) > radius:
+                continue
+            hit += 1
+            monster.hp -= damage
+            self._spawn_damage_number(monster.x, monster.y, str(damage), C.COLOR_DANGER)
+            if effect.get("burst_burn"):
+                monster.burn_turns = max(monster.burn_turns, effect["burst_burn"])
+            if effect.get("burst_slow"):
+                monster.slow_turns = max(monster.slow_turns, effect["burst_slow"])
+            if effect.get("burst_stun"):
+                monster.stun_turns = max(monster.stun_turns, effect["burst_stun"])
+            if monster.hp <= 0:
+                self._on_monster_death(monster)
+        self.shake_timer, self.shake_intensity = 8, 4
+        self.add_log(self.t("log_potion_burst", count=hit))
+
+    def _tick_buffs(self):
+        """Counts every active buff down by one turn.
+
+        Called once per player turn from the same place poison is ticked,
+        so buff duration is measured in turns taken rather than in real
+        time - standing still must not burn a Haste potion.
+        """
+        p = self.player
+        for buff in list(p.buffs):
+            p.buffs[buff] -= 1
+            if p.buffs[buff] <= 0:
+                del p.buffs[buff]
+                self.add_log(self.t("log_buff_ended", buff=self._buff_name(buff)))
+        regen = p.buff_total("regen")
+        if regen and p.hp < p.max_hp:
+            healed = min(regen, p.max_hp - p.hp)
+            p.hp += healed
+            self._spawn_damage_number(p.x, p.y, f"+{healed}", C.COLOR_SUCCESS)
 
     def _shop_price(self, stock):
         """Listed price after the difficulty's per-floor markup.
@@ -2012,17 +2252,40 @@ class Game:
         markup = self._diff()["shop_markup_per_level"] * max(0, self.dungeon_level - 1)
         return int(round(stock["price"] * (1 + markup)))
 
+    def _merchant_stock(self, merchant):
+        """What this particular merchant is selling.
+
+        Rolled once and kept on the merchant, so his shelf does not change
+        while the player is standing in front of it deciding, and so
+        leaving and coming back is not a way to reroll for the potion you
+        wanted. Healing and the three scrolls are always there; the rest
+        is whatever this depth has unlocked. Cursed flasks are found, not
+        sold - a merchant who poisons you is a bad merchant.
+        """
+        if getattr(merchant, "stock", None):
+            return merchant.stock
+        stock = [dict(entry) for entry in C.SHOP_STOCK]
+        pool = [p for p in self._available_potions(include_cursed=False)
+                if p["id"] != C.DEFAULT_POTION and p["price"] > 0]
+        random.shuffle(pool)
+        for info in pool[:2]:
+            stock.append({"kind": "potion", "potion_id": info["id"],
+                          "name": info["name"], "price": info["price"]})
+        merchant.stock = stock
+        return stock
+
     def _buy_item(self, index):
-        if index < 0 or index >= len(C.SHOP_STOCK):
+        stock_list = getattr(self, "shop_stock", None) or C.SHOP_STOCK
+        if index < 0 or index >= len(stock_list):
             return
-        stock = C.SHOP_STOCK[index]
+        stock = stock_list[index]
         price = self._shop_price(stock)
         if self.player.gold < price:
             self.add_log(self.t("log_not_enough_gold"))
             return
         self.player.gold -= price
         if stock["kind"] == "potion":
-            self.player.potions += 1
+            self.player.add_potion(stock.get("potion_id", C.DEFAULT_POTION))
         elif stock["kind"] == "scroll":
             self.player.scrolls[stock["scroll_type"]] += 1
         self.add_log(self.t("log_bought_item", item=self.tn(stock['name'])))
@@ -2130,6 +2393,15 @@ class Game:
         if defender is self.player and self.player.bonus_damage_reduction:
             damage = max(1, round(damage * (1 - self.player.bonus_damage_reduction)))
 
+        absorbed = 0
+        if defender is self.player and self.player.shield > 0:
+            # A ward soaks damage before health does, and unlike defence
+            # it can absorb a hit whole - that is what makes it worth
+            # drinking before a boss rather than just more armour.
+            absorbed = min(self.player.shield, damage)
+            self.player.shield -= absorbed
+            damage -= absorbed
+
         defender.hp -= damage
 
         if self._lang() == "de":
@@ -2176,6 +2448,13 @@ class Game:
             log_key = self._ELEMENT_STATUS_LOG_KEY[element_status_applied]
             self.add_log(self.t(log_key, monster=self._monster_named(defender, "nom")))
 
+        if absorbed:
+            self.add_log(self.t("log_shield_absorbed", amount=absorbed))
+            self._spawn_damage_number(self.player.x, self.player.y, f"-{absorbed}",
+                                      (150, 200, 255))
+
+        self._apply_potion_combat_effects(attacker, defender, damage)
+
         if defender.hp <= 0:
             if defender is self.player:
                 self.add_log(self.t("log_you_died"))
@@ -2184,6 +2463,35 @@ class Game:
                 self._finalize_run()
             else:
                 self._on_monster_death(defender)
+
+    def _apply_potion_combat_effects(self, attacker, defender, damage):
+        """The buffs that only do something at the moment a blow lands.
+
+        Kept out of _attack itself, which is already long, and out of the
+        buff table, which is pure data - these three need to know who hit
+        whom and for how much.
+        """
+        p = self.player
+        if attacker is p and defender is not p and damage > 0:
+            steal = p.buff_total("lifesteal")
+            if steal and p.hp < p.max_hp:
+                healed = min(int(damage * steal) or 1, p.max_hp - p.hp)
+                p.hp += healed
+                self._spawn_damage_number(p.x, p.y, f"+{healed}", C.COLOR_SUCCESS)
+            return
+
+        if defender is not p or attacker is p or not attacker.is_alive():
+            return
+        thorns = p.buff_total("thorns")
+        if thorns:
+            attacker.hp -= thorns
+            self._spawn_damage_number(attacker.x, attacker.y, str(thorns),
+                                      (198, 132, 96))
+        burn = p.buff_total("burn_attackers")
+        if burn:
+            attacker.burn_turns = max(getattr(attacker, "burn_turns", 0), burn)
+        if attacker.hp <= 0:
+            self._on_monster_death(attacker)
 
     def _on_monster_death(self, monster):
         self.add_log(self.t("log_monster_dies", monster=self._monster_named(monster, "nom"), xp=monster.xp_reward))
@@ -2312,6 +2620,19 @@ class Game:
         if self.state == "dead":
             return
 
+        # Haste buys a whole free turn: the monsters simply do not get
+        # this one. Implemented by skipping their turn rather than by
+        # giving the player two, so nothing about movement, traps or
+        # status ticks has to become re-entrant.
+        if self.player.has_buff_flag("haste"):
+            self._haste_skip = not getattr(self, "_haste_skip", False)
+            if self._haste_skip:
+                return
+        else:
+            self._haste_skip = False
+
+        invisible = self.player.has_buff_flag("invisible")
+
         for monster in list(self.monsters):
             if not monster.is_alive():
                 continue
@@ -2320,7 +2641,7 @@ class Game:
             if not monster.is_alive():
                 continue
 
-            if (monster.x, monster.y) in self.visible:
+            if (monster.x, monster.y) in self.visible and not invisible:
                 was_asleep = not monster.awake
                 monster.awake = True
                 if was_asleep and monster.is_boss:
@@ -2329,6 +2650,12 @@ class Game:
             if not monster.awake:
                 continue
             if stunned:
+                continue
+            # Already-awake monsters lose track of an invisible player and
+            # mill about instead of hunting. They still block and still
+            # fight back if walked into - invisibility is an escape, not
+            # a licence to ignore the room.
+            if invisible:
                 continue
 
             for _ in range(monster.speed):
@@ -2534,6 +2861,11 @@ class Game:
 
         if self.state == "difficulty_select":
             self._render_difficulty_select()
+            self._present()
+            return
+
+        if self.state == "bag":
+            self._render_bag()
             self._present()
             return
 
@@ -2847,6 +3179,151 @@ class Game:
     @staticmethod
     def _mult_text(value):
         return ("%.2f" % value).rstrip("0").rstrip(".") + "x"
+
+    # Keys 1..9 pick a row in the potion bag.
+    BAG_KEYS = (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4, pygame.K_5,
+                pygame.K_6, pygame.K_7, pygame.K_8, pygame.K_9)
+
+    def _bag_rows(self):
+        """The player's flasks, in a stable order.
+
+        Sorted by the order they appear in POTION_TYPES rather than by
+        when they were picked up, so a given potion is always in the same
+        place in the list and the number key for it does not move around
+        between visits.
+        """
+        order = {p["id"]: i for i, p in enumerate(C.POTION_TYPES)}
+        held = [(pid, n) for pid, n in self.player.potion_counts.items()
+                if n > 0 and pid in C.POTION_BY_ID]
+        held.sort(key=lambda item: order.get(item[0], 999))
+        return held
+
+    def _open_bag(self):
+        self.bag_page = 0
+        self.state = "bag"
+
+    def _bag_key(self, key):
+        if key == pygame.K_ESCAPE or key == pygame.K_i:
+            self.state = "playing"
+            return
+        rows = self._bag_rows()
+        per_page = len(self.BAG_KEYS)
+        page = getattr(self, "bag_page", 0)
+        if key == pygame.K_RIGHT and (page + 1) * per_page < len(rows):
+            self.bag_page = page + 1
+            return
+        if key == pygame.K_LEFT and page > 0:
+            self.bag_page = page - 1
+            return
+        if key in self.BAG_KEYS:
+            index = page * per_page + self.BAG_KEYS.index(key)
+            if index < len(rows):
+                self.state = "playing"
+                self._drink_potion(rows[index][0])
+
+    def _render_bag(self):
+        self.screen.fill(C.COLOR_BG)
+        self._tap_targets = []
+        y = self._screen_header(self.t("bag_title"))
+
+        rows = self._bag_rows()
+        if not rows:
+            self._lines_block([self.t("bag_empty")], y + self.gap_l,
+                              color=C.COLOR_TEXT_DIM)
+            self._button_row([(self.t("btn_back"), pygame.K_ESCAPE)],
+                             C.SCREEN_HEIGHT - self.pad - self.btn_h)
+            return
+
+        per_page = len(self.BAG_KEYS)
+        page = min(getattr(self, "bag_page", 0), (len(rows) - 1) // per_page)
+        self.bag_page = page
+        visible = rows[page * per_page:(page + 1) * per_page]
+
+        bottom = C.SCREEN_HEIGHT - self.pad - self.btn_h - self.gap_l
+        row_h = max(self.f_sm.get_height() + self.gap_s,
+                    min(self.btn_h,
+                        (bottom - y - self.gap_s * (len(visible) - 1)) // len(visible)))
+        icon_h = max(12, row_h - self.gap_s)
+        drink_w = self._btn_w(self.t("btn_drink"), self.f_sm)
+
+        for i, (potion_id, count) in enumerate(visible):
+            info = C.POTION_BY_ID[potion_id]
+            rect = pygame.Rect(self.pad, y, self.content_w, row_h)
+            selected = potion_id == self.player.selected_potion
+            self._panel(rect, border=info["color"] if selected else None, shadow=False)
+
+            x = rect.x + self.gap_s
+            sprite = self._potion_sprite(potion_id, icon_h)
+            if sprite is not None:
+                self.screen.blit(sprite, sprite.get_rect(
+                    midleft=(x, rect.centery)))
+                x += sprite.get_width() + self.gap_s
+
+            key_label = self.f_sm.render(f"{i + 1}.", True, C.COLOR_TEXT_DIM)
+            self.screen.blit(key_label, key_label.get_rect(midleft=(x, rect.centery)))
+            x += key_label.get_width() + self.gap_s
+
+            title = self.f_sm.render(f"{self.tn(info['name'])}  x{count}", True,
+                                     info["color"])
+            self.screen.blit(title, (x, rect.centery - title.get_height()))
+            desc = self.f_xs.render(self._potion_description(info), True,
+                                    C.COLOR_TEXT_DIM)
+            self.screen.blit(desc, (x, rect.centery + 2))
+
+            self._draw_tap_button(
+                (rect.right - self.gap_s - drink_w,
+                 rect.centery - min(row_h, self.btn_h) // 2,
+                 drink_w, min(row_h, self.btn_h)),
+                self.t("btn_drink"), self.BAG_KEYS[i], font=self.f_sm,
+                primary=selected)
+            y += row_h + self.gap_s
+
+        buttons = [(self.t("btn_back"), pygame.K_ESCAPE)]
+        if len(rows) > per_page:
+            buttons = ([(self.t("btn_prev"), pygame.K_LEFT)] + buttons
+                       + [(self.t("btn_next"), pygame.K_RIGHT)])
+        self._button_row(buttons, C.SCREEN_HEIGHT - self.pad - self.btn_h)
+
+    def _potion_description(self, info):
+        """A one-line summary built from the effect data itself.
+
+        Written this way rather than as thirty hand-translated sentences:
+        the numbers then cannot drift out of step with the table, and a
+        new potion needs no new strings at all.
+        """
+        effect = info["effect"]
+        parts = []
+        if effect.get("heal_pct"):
+            parts.append(self.t("potion_desc_heal_full"))
+        elif effect.get("heal"):
+            parts.append(self.t("potion_desc_heal", amount=effect["heal"]))
+        if effect.get("max_hp"):
+            parts.append(self.t("potion_desc_max_hp", amount=effect["max_hp"]))
+        if effect.get("base_power"):
+            parts.append(self.t("potion_desc_power", amount=effect["base_power"]))
+        if effect.get("base_defense"):
+            parts.append(self.t("potion_desc_defense", amount=effect["base_defense"]))
+        if effect.get("xp_levels"):
+            parts.append(self.t("potion_desc_xp"))
+        if effect.get("buff"):
+            parts.append(self.t("potion_desc_buff",
+                                buff=self._buff_name(effect["buff"]),
+                                turns=effect.get("turns", 10)))
+        if effect.get("shield"):
+            parts.append(self.t("potion_desc_shield", amount=effect["shield"]))
+        if effect.get("cure") or effect.get("cure_debuffs"):
+            parts.append(self.t("potion_desc_cure"))
+        if effect.get("reveal"):
+            parts.append(self.t("potion_desc_reveal"))
+        if effect.get("blink"):
+            parts.append(self.t("potion_desc_blink"))
+        if effect.get("gold"):
+            parts.append(self.t("potion_desc_gold"))
+        if effect.get("burst_damage"):
+            parts.append(self.t("potion_desc_burst", amount=effect["burst_damage"]))
+        if effect.get("self_poison"):
+            parts.append(self.t("potion_desc_self_poison"))
+        return "  ·  ".join(parts) or self.t("potion_desc_unknown")
 
     def _render_stats(self):
         self.screen.fill(C.COLOR_BG)
@@ -3254,14 +3731,18 @@ class Game:
         self.screen.blit(gold, gold.get_rect(midtop=(C.SCREEN_WIDTH // 2, y)))
         y += gold.get_height() + self.gap_l
 
-        keys = [pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4]
+        stock_list = getattr(self, "shop_stock", None) or C.SHOP_STOCK
+        keys = [pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4,
+                pygame.K_5, pygame.K_6]
         # Shrink the rows only if a future stock list would not otherwise
         # fit, and never below a usable touch height.
         avail = C.SCREEN_HEIGHT - self.pad - self.btn_h - self.gap_l - y
-        n = len(C.SHOP_STOCK)
-        row_h = max(self.btn_h, min(self.btn_h, (avail - self.gap_s * (n - 1)) // max(1, n)))
+        stock_list = stock_list[:len(keys)]
+        n = len(stock_list)
+        row_h = max(self.btn_h // 2,
+                    min(self.btn_h, (avail - self.btn_gap * (n - 1)) // max(1, n)))
         buy_w = self._btn_w(self.t("btn_buy"))
-        for i, stock in enumerate(C.SHOP_STOCK):
+        for i, stock in enumerate(stock_list):
             label = f"{i + 1}. {self.tn(stock['name'])} - {self._shop_price(stock)} {self.t('gold_word')}"
             text = self.f_body.render(label, True, C.COLOR_HUD_TEXT)
             self.screen.blit(text, text.get_rect(midleft=(self.pad, y + row_h // 2)))
@@ -3711,20 +4192,48 @@ class Game:
             ("armor", f"{self.tn(self.player.armor_name)} +{self.player.armor_bonus}",
              armor_color, None),
         ]
+        # The potion chip names what the quick-use button would actually
+        # drink, not just how many flasks are in the bag - with thirty
+        # kinds, a bare count no longer tells you anything useful.
+        selected = self.player.selected_potion
+        held = self.player.potion_count(selected)
+        if held > 0:
+            potion_info = C.POTION_BY_ID.get(selected)
+            potion_text = f"{self.tn(potion_info['name'])} x{held}" if potion_info else str(held)
+            potion_color = potion_info["color"] if potion_info else C.COLOR_POTION
+        else:
+            potion_text = str(self.player.potions)
+            potion_color = C.COLOR_POTION
         row3 = [
-            ("potion", str(self.player.potions), None, C.COLOR_POTION),
+            ("potion", potion_text, potion_color, potion_color),
             ("gold", str(self.player.gold), C.COLOR_GOLD, C.COLOR_GOLD),
             ("scroll", f"F {scrolls['fireball']}   T {scrolls['teleport']}   V {scrolls['reveal']}",
              None, None),
         ]
+        if self.player.shield > 0:
+            row3.append(("!", f"{self.t('hud_shield')} {self.player.shield}",
+                         (150, 200, 255), (150, 200, 255)))
         if self.player.poison_turns > 0:
             row3.append(("!", self.t("hud_poisoned"), C.COLOR_POISON, C.COLOR_POISON))
         if self.player.bleed_turns > 0:
             row3.append(("!", self.t("hud_bleeding"), C.COLOR_DANGER, C.COLOR_DANGER))
+        # Active potion effects get their own row, each with the turns it
+        # has left - a buff you cannot see the remaining duration of is a
+        # buff you cannot plan a fight around.
+        # Soonest to expire first: those are the ones worth reacting to.
+        # Capped at what fits on one line, with a count for the rest -
+        # a dozen buffs are possible at once and the row does not wrap.
+        active = sorted(((t, b) for b, t in self.player.buffs.items() if b in C.BUFFS))
+        row4 = [("!", f"{self._buff_name(b)} {t}",
+                 C.BUFFS[b]["color"], C.BUFFS[b]["color"])
+                for t, b in active[:C.HUD_MAX_BUFF_CHIPS]]
+        if len(active) > C.HUD_MAX_BUFF_CHIPS:
+            row4.append(("!", f"+{len(active) - C.HUD_MAX_BUFF_CHIPS}",
+                         C.COLOR_TEXT_DIM, C.COLOR_TEXT_DIM))
 
         chips_right = left
         row_y = y
-        for row in (row2, row3):
+        for row in ([row2, row3, row4] if row4 else [row2, row3]):
             x = left
             for icon, text, tcol, icol in row:
                 x += self._hud_chip(x, row_y, chip_h, icon, text,
@@ -3781,6 +4290,7 @@ class Game:
         for name, (rect, vector, label) in self.dpad_buttons.items():
             self._draw_touch_button(rect, label, active=(self.touch_direction == vector))
         self._draw_touch_button(self.potion_button, self.t("touch_heal"))
+        self._draw_touch_button(self.bag_button, self.t("btn_bag"))
         scroll_labels = {"fireball": "F", "teleport": "T", "reveal": "V"}
         for name, rect in self.scroll_buttons.items():
             self._draw_touch_button(rect, scroll_labels[name])

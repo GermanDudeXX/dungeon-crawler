@@ -411,6 +411,150 @@ SHRINE_EVENTS = [
     {"id": "ambush", "name": "Vengeful Spirits", "weight": 1.5},
 ]
 
+# --- potions -----------------------------------------------------------
+# Temporary effects are all expressed as one buff on the player with a
+# turn count, instead of a field per effect. There are a dozen of them
+# and they stack in any combination, so a field each would have meant a
+# dozen places to remember to decrement, serialise and clear.
+#
+# "power"/"defense"/"crit" are added to the player's own stats while
+# active. The flag-style entries (haste, invisible, thorns, lifesteal,
+# shield, luck, regen, berserk) are read by the specific piece of code
+# that implements them.
+BUFFS = {
+    "strength":   {"name": "Strength", "power": 4, "color": (236, 122, 74)},
+    "stone_skin": {"name": "Stone Skin", "defense": 5, "color": (166, 172, 186)},
+    "precision":  {"name": "Precision", "crit": 0.30, "color": (255, 225, 120)},
+    "haste":      {"name": "Haste", "haste": True, "color": (120, 214, 255)},
+    "invisible":  {"name": "Invisibility", "invisible": True, "color": (168, 158, 214)},
+    "thorns":     {"name": "Thorns", "thorns": 4, "color": (198, 132, 96)},
+    "lifesteal":  {"name": "Life Leech", "lifesteal": 0.4, "color": (214, 74, 122)},
+    "regen":      {"name": "Regeneration", "regen": 3, "color": (120, 214, 140)},
+    "luck":       {"name": "Luck", "luck": True, "color": (255, 200, 80)},
+    "berserk":    {"name": "Berserk", "power": 7, "defense": -4, "color": (226, 70, 62)},
+    "fire_aura":  {"name": "Fire Aura", "burn_attackers": 3, "color": (255, 132, 48)},
+    "clumsy":     {"name": "Clumsiness", "power": -3, "color": (140, 128, 120)},
+    "frailty":    {"name": "Frailty", "defense": -3, "color": (150, 120, 150)},
+}
+
+# Every potion in the game. "flask" names a frame in assets/tiles so the
+# colour on the ground matches the one in the inventory. "min_level" gates
+# the stronger ones behind depth; "weight" is the relative spawn chance
+# among everything already unlocked. Anything with "cursed" can turn up
+# in an unidentified flask and is never sold by a merchant.
+POTION_TYPES = [
+    # -- healing ---------------------------------------------------------
+    {"id": "healing", "name": "Healing Potion", "flask": "flask_red",
+     "color": (224, 74, 92), "price": 12, "weight": 10, "min_level": 1,
+     "effect": {"heal": 15}},
+    {"id": "greater_healing", "name": "Greater Healing Potion", "flask": "flask_big_red",
+     "color": (240, 96, 96), "price": 30, "weight": 5, "min_level": 4,
+     "effect": {"heal": 45}},
+    {"id": "full_healing", "name": "Elixir of Life", "flask": "flask_big_red",
+     "color": (255, 130, 140), "price": 65, "weight": 2, "min_level": 8,
+     "effect": {"heal_pct": 1.0}},
+    {"id": "regeneration", "name": "Potion of Regeneration", "flask": "flask_green",
+     "color": (120, 214, 140), "price": 28, "weight": 4, "min_level": 3,
+     "effect": {"buff": "regen", "turns": 15}},
+    # -- permanent -------------------------------------------------------
+    {"id": "vitality", "name": "Potion of Vitality", "flask": "flask_big_green",
+     "color": (140, 230, 150), "price": 55, "weight": 2, "min_level": 5,
+     "effect": {"max_hp": 6}},
+    {"id": "might", "name": "Potion of Might", "flask": "flask_big_yellow",
+     "color": (236, 160, 70), "price": 60, "weight": 2, "min_level": 6,
+     "effect": {"base_power": 1}},
+    {"id": "iron_hide", "name": "Potion of Iron Hide", "flask": "flask_big_blue",
+     "color": (150, 170, 220), "price": 60, "weight": 2, "min_level": 6,
+     "effect": {"base_defense": 1}},
+    {"id": "insight", "name": "Potion of Insight", "flask": "flask_big_blue",
+     "color": (140, 190, 255), "price": 45, "weight": 3, "min_level": 4,
+     "effect": {"xp_levels": 0.5}},
+    # -- combat buffs ----------------------------------------------------
+    {"id": "strength", "name": "Potion of Strength", "flask": "flask_yellow",
+     "color": (236, 122, 74), "price": 24, "weight": 6, "min_level": 2,
+     "effect": {"buff": "strength", "turns": 14}},
+    {"id": "stone_skin", "name": "Potion of Stone Skin", "flask": "flask_blue",
+     "color": (166, 172, 186), "price": 24, "weight": 6, "min_level": 2,
+     "effect": {"buff": "stone_skin", "turns": 14}},
+    {"id": "precision", "name": "Potion of Precision", "flask": "flask_yellow",
+     "color": (255, 225, 120), "price": 26, "weight": 4, "min_level": 3,
+     "effect": {"buff": "precision", "turns": 16}},
+    {"id": "haste", "name": "Potion of Haste", "flask": "flask_blue",
+     "color": (120, 214, 255), "price": 32, "weight": 4, "min_level": 4,
+     "effect": {"buff": "haste", "turns": 10}},
+    {"id": "berserk", "name": "Berserker's Brew", "flask": "flask_big_red",
+     "color": (226, 70, 62), "price": 30, "weight": 3, "min_level": 5,
+     "effect": {"buff": "berserk", "turns": 12}},
+    {"id": "thorns", "name": "Potion of Thorns", "flask": "flask_green",
+     "color": (198, 132, 96), "price": 26, "weight": 3, "min_level": 4,
+     "effect": {"buff": "thorns", "turns": 16}},
+    {"id": "lifesteal", "name": "Vampiric Draught", "flask": "flask_big_red",
+     "color": (214, 74, 122), "price": 38, "weight": 3, "min_level": 6,
+     "effect": {"buff": "lifesteal", "turns": 14}},
+    {"id": "fire_aura", "name": "Potion of Embers", "flask": "flask_yellow",
+     "color": (255, 132, 48), "price": 30, "weight": 3, "min_level": 5,
+     "effect": {"buff": "fire_aura", "turns": 14}},
+    {"id": "shield", "name": "Potion of Warding", "flask": "flask_big_blue",
+     "color": (150, 200, 255), "price": 30, "weight": 4, "min_level": 3,
+     "effect": {"shield": 25}},
+    # -- utility ---------------------------------------------------------
+    {"id": "invisibility", "name": "Potion of Invisibility", "flask": "flask_blue",
+     "color": (168, 158, 214), "price": 34, "weight": 3, "min_level": 5,
+     "effect": {"buff": "invisible", "turns": 12}},
+    {"id": "luck", "name": "Potion of Luck", "flask": "flask_big_yellow",
+     "color": (255, 200, 80), "price": 34, "weight": 3, "min_level": 4,
+     "effect": {"buff": "luck", "turns": 25}},
+    {"id": "clarity", "name": "Potion of Clarity", "flask": "flask_blue",
+     "color": (150, 210, 240), "price": 20, "weight": 4, "min_level": 2,
+     "effect": {"reveal": True}},
+    {"id": "blink", "name": "Potion of Blinking", "flask": "flask_green",
+     "color": (170, 140, 240), "price": 22, "weight": 4, "min_level": 3,
+     "effect": {"blink": True}},
+    {"id": "midas", "name": "Potion of Midas", "flask": "flask_big_yellow",
+     "color": (255, 215, 0), "price": 0, "weight": 2, "min_level": 3,
+     "effect": {"gold": (25, 70)}},
+    # -- cures -----------------------------------------------------------
+    {"id": "antidote", "name": "Antidote", "flask": "flask_green",
+     "color": (110, 200, 90), "price": 15, "weight": 5, "min_level": 2,
+     "effect": {"cure": ["poison_turns"]}},
+    {"id": "coagulant", "name": "Coagulant", "flask": "flask_red",
+     "color": (200, 90, 90), "price": 15, "weight": 4, "min_level": 3,
+     "effect": {"cure": ["bleed_turns"]}},
+    {"id": "panacea", "name": "Panacea", "flask": "flask_big_green",
+     "color": (190, 240, 200), "price": 40, "weight": 2, "min_level": 6,
+     "effect": {"cure": ["poison_turns", "bleed_turns"], "cure_debuffs": True,
+                "heal": 20}},
+    # -- offensive -------------------------------------------------------
+    {"id": "firebomb", "name": "Flask of Fire", "flask": "flask_big_red",
+     "color": (255, 110, 40), "price": 28, "weight": 4, "min_level": 3,
+     "effect": {"burst_damage": 18, "burst_burn": 3}},
+    {"id": "frostbomb", "name": "Flask of Frost", "flask": "flask_big_blue",
+     "color": (150, 220, 255), "price": 28, "weight": 3, "min_level": 5,
+     "effect": {"burst_damage": 10, "burst_slow": 4}},
+    {"id": "thunderbomb", "name": "Flask of Storms", "flask": "flask_big_yellow",
+     "color": (255, 240, 140), "price": 34, "weight": 3, "min_level": 7,
+     "effect": {"burst_damage": 14, "burst_stun": 2}},
+    # -- cursed: only ever found, never sold -----------------------------
+    {"id": "murky", "name": "Murky Flask", "flask": "flask_green",
+     "color": (120, 130, 96), "price": 0, "weight": 2, "min_level": 2,
+     "cursed": True, "effect": {"self_poison": 6}},
+    {"id": "bitter", "name": "Bitter Flask", "flask": "flask_yellow",
+     "color": (150, 140, 96), "price": 0, "weight": 2, "min_level": 3,
+     "cursed": True, "effect": {"buff": "clumsy", "turns": 12}},
+    {"id": "brittle", "name": "Brittle Flask", "flask": "flask_blue",
+     "color": (140, 130, 160), "price": 0, "weight": 2, "min_level": 4,
+     "cursed": True, "effect": {"buff": "frailty", "turns": 12}},
+]
+POTION_BY_ID = {p["id"]: p for p in POTION_TYPES}
+# The one the game starts you with and the one plain "potion" loot means
+# when nothing else applies.
+DEFAULT_POTION = "healing"
+# How far a thrown flask's burst reaches, in tiles.
+POTION_BURST_RADIUS = 2
+# The HUD's buff row does not wrap, and a dozen buffs can be up at once,
+# so it shows this many and counts the rest.
+HUD_MAX_BUFF_CHIPS = 5
+
 MERCHANT_CHANCE_PER_LEVEL = 0.35
 SHOP_STOCK = [
     {"kind": "potion", "name": "Healing Potion", "price": 12},
