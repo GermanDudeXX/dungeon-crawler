@@ -626,6 +626,16 @@ HAZARD_TYPES = {
 SUPERBOSS_LEVEL = 25
 SUPERBOSS_MULT = 3.0
 
+# --- event banners -------------------------------------------------------
+# The combat log lives in the bottom-right corner and is easy to miss
+# entirely - things like a trap going off, a level-up or "not enough
+# gold" happened silently as far as most players were concerned. The
+# important ones are announced across the top of the dungeon view as
+# well, big enough to read without looking for them.
+BANNER_TICKS = 72          # ~2.4s at the 30Hz animation tick
+BANNER_FADE_TICKS = 18     # how long the tail of that is spent fading
+BANNER_MAX = 3             # older ones are dropped rather than queued
+
 # --- juice ---------------------------------------------------------------
 # Particles are plain coloured squares with a velocity and a lifetime -
 # no sprites, no alpha surfaces per particle. At this resolution a 3px

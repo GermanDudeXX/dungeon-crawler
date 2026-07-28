@@ -157,6 +157,7 @@ class Game:
         self._use_class_sprite(self._class())
         self.particles = []
         self.hitstop_timer = 0
+        self.banners = []
         # Only ever true in the test room, and it gates the cheat panel:
         # none of this should be reachable from a real run.
         self.test_room = False
@@ -672,6 +673,7 @@ class Game:
         self.damage_numbers = []
         self.particles = []
         self.hitstop_timer = 0
+        self.banners = []
         self.test_room = False
         self.godmode = False
         self.enemies_off = False
@@ -782,6 +784,7 @@ class Game:
         self.damage_numbers = []
         self.particles = []
         self.hitstop_timer = 0
+        self.banners = []
         self.test_room = False
         self.godmode = False
         self.enemies_off = False
@@ -1020,6 +1023,7 @@ class Game:
         self.damage_numbers = []
         self.particles = []
         self.hitstop_timer = 0
+        self.banners = []
         self._scatter_decor()
         self._populate_level()
 
@@ -1108,7 +1112,7 @@ class Game:
             if self.dungeon_level >= C.SUPERBOSS_LEVEL and self.dungeon_level % C.SUPERBOSS_LEVEL == 0:
                 self._promote_to_superboss(boss)
             self.monsters.append(boss)
-            self.add_log(self.t("log_boss_guards"))
+            self._announce("log_boss_guards", C.COLOR_BOSS)
             if self.dungeon_level >= C.BOSS_DOOR_MIN_LEVEL:
                 self._lock_boss_door()
         elif self.dungeon_level % C.MINI_BOSS_EVERY == 0:
@@ -1215,7 +1219,7 @@ class Game:
         monster.xp_reward = int(monster.xp_reward * C.MINI_BOSS_XP_MULT)
         monster.is_mini_boss = True
         self.monsters.append(monster)
-        self.add_log(self.t("log_mini_boss", monster=self._monster_named(monster, "nom")))
+        self._announce("log_mini_boss", C.COLOR_BOSS, monster=self._monster_named(monster, "nom"))
 
     def _spawn_swarm(self, x, y, kind, count):
         """Fills the tiles around (x, y) with more of the same kind."""
@@ -1288,7 +1292,7 @@ class Game:
         self.chest_open = False
         self.sounds.play("boss")
         self.shake_timer, self.shake_intensity = 10, 5
-        self.add_log(self.t("log_mimic", monster=self._monster_named(mimic, "nom")))
+        self._announce("log_mimic", C.COLOR_DANGER, monster=self._monster_named(mimic, "nom"))
         self._attack(mimic, self.player)
 
     # The test room's cheat panel. Kept as data so the screen, the keys
@@ -1337,16 +1341,16 @@ class Game:
             p.hp = p.max_hp
         elif tool == "godmode":
             self.godmode = not self.godmode
-            self.add_log(self.t("log_godmode_on" if self.godmode
-                                else "log_godmode_off"))
+            self._announce("log_godmode_on" if self.godmode else "log_godmode_off",
+                           C.COLOR_ACCENT)
         elif tool == "enemies":
             # Switched off rather than deleted: the monsters stay in the
             # list, so turning them back on restores the same room instead
             # of an empty one you would have to rebuild.
             self.enemies_off = not self.enemies_off
             self.needs_redraw = True
-            self.add_log(self.t("log_enemies_off" if self.enemies_off
-                                else "log_enemies_on"))
+            self._announce("log_enemies_off" if self.enemies_off else "log_enemies_on",
+                           C.COLOR_ACCENT)
         self.sounds.play("equip")
 
     def _render_tools(self):
@@ -1396,7 +1400,7 @@ class Game:
         self.dungeon_level = 12
         self.test_room = True
         self._build_test_room()
-        self.add_log(self.t("log_testroom"))
+        self._announce("log_testroom", C.COLOR_ACCENT)
         self.state = "playing"
 
     def _build_test_room(self):
@@ -1602,7 +1606,7 @@ class Game:
             self._spring_mimic()
             return
         if self._chest_guard_alive():
-            self.add_log(self.t("log_chest_guarded"))
+            self._announce("log_chest_guarded", C.COLOR_DANGER)
             return
         self.chest_open = True
         self.sounds.play("equip")
@@ -1617,7 +1621,7 @@ class Game:
             if spot is None:
                 break
             self._spawn_item_at(spot[0], spot[1], kind)
-        self.add_log(self.t("log_chest_opened"))
+        self._announce("log_chest_opened", C.COLOR_ACCENT)
 
     def _lock_boss_door(self):
         """Bars the way down until the boss is dead.
@@ -1663,7 +1667,7 @@ class Game:
         if not damage:
             return
         self._spawn_damage_number(self.player.x, self.player.y, str(damage), info["color"])
-        self.add_log(self.t(f"log_hazard_{kind}", dmg=damage))
+        self._announce(f"log_hazard_{kind}", info["color"], dmg=damage)
         self.sounds.play("player_hurt")
         self.shake_timer, self.shake_intensity = 6, 4
         if info.get("burn"):
@@ -2294,7 +2298,7 @@ class Game:
     def _animations_active(self):
         if self.shake_timer > 0 or self.flash_timer > 0 or self.boss_banner_timer > 0:
             return True
-        if self.particles or self.hitstop_timer > 0:
+        if self.particles or self.hitstop_timer > 0 or self.banners:
             return True
         if self.damage_numbers:
             return True
@@ -2358,6 +2362,9 @@ class Game:
         for dn in self.damage_numbers:
             dn["timer"] -= 1
         self.damage_numbers = [dn for dn in self.damage_numbers if dn["timer"] > 0]
+        for banner in self.banners:
+            banner["timer"] -= 1
+        self.banners = [b for b in self.banners if b["timer"] > 0]
         self._update_particles()
 
     def _update_particles(self):
@@ -2398,6 +2405,67 @@ class Game:
             size = p["size"]
             self.screen.fill(p["color"],
                              (int(p["x"]) + ox, int(p["y"]) + oy, size, size))
+
+    def _notify(self, text, color=None):
+        """Puts one line across the top of the dungeon view.
+
+        The combat log is in the bottom-right corner and is genuinely
+        easy to miss - a trap going off, a level-up, or "not enough gold"
+        all happened silently as far as most players were concerned. This
+        is for the handful of events worth interrupting for; everything
+        else still just goes to the log.
+        """
+        self.banners.append({
+            "text": text,
+            "color": color or C.COLOR_TEXT,
+            "timer": C.BANNER_TICKS,
+        })
+        # Newest wins. A queue would mean an important line waiting
+        # behind two stale ones before it is ever seen.
+        if len(self.banners) > C.BANNER_MAX:
+            del self.banners[0]
+        self.needs_redraw = True
+
+    def _announce(self, key, color=None, **kw):
+        """Log it and put it on the banner - the usual case for an event
+        the player should not be able to miss."""
+        text = self.t(key, **kw)
+        self.add_log(text)
+        self._notify(text, color)
+        return text
+
+    def _render_banners(self):
+        if not self.banners:
+            return
+        pad = self.gap_s
+        y = self.gap_s
+        # Below the boss bar when there is one, so the two never overlap.
+        if any(m.is_boss and m.awake and m.is_alive() for m in self.monsters) \
+                and not self.enemies_off:
+            y += self.f_sm.get_linesize() + self.gap_s + self.gap_s
+
+        # f_body, not the log's f_sm: the whole point is that this is
+        # readable without going looking for it.
+        for banner in self.banners:
+            surf = self.f_body.render(banner["text"], True, banner["color"])
+            w = surf.get_width() + pad * 4
+            h = surf.get_height() + pad
+            rect = pygame.Rect(C.SCREEN_WIDTH // 2 - w // 2, y, w, h)
+
+            panel = pygame.Surface((w, h), pygame.SRCALPHA)
+            # Fades out over its last few ticks rather than vanishing, so
+            # a banner leaving does not read as a flicker.
+            alpha = 255
+            if banner["timer"] < C.BANNER_FADE_TICKS:
+                alpha = int(255 * banner["timer"] / C.BANNER_FADE_TICKS)
+            pygame.draw.rect(panel, (*C.COLOR_SURFACE, min(235, alpha)),
+                             (0, 0, w, h), border_radius=h // 3)
+            pygame.draw.rect(panel, (*banner["color"], alpha), (0, 0, w, h),
+                             width=2, border_radius=h // 3)
+            surf.set_alpha(alpha)
+            panel.blit(surf, surf.get_rect(center=(w // 2, h // 2)))
+            self.screen.blit(panel, rect)
+            y += h + self.gap_s
 
     def _spawn_damage_number(self, x, y, text, color):
         self.damage_numbers.append({"x": x, "y": y, "text": text, "color": color, "timer": 30, "max_timer": 30})
@@ -2681,7 +2749,7 @@ class Game:
             # Barred, not walled: the tile stays walkable so pathfinding,
             # the field of view and the map cache never have to know about
             # a door that appears and disappears.
-            self.add_log(self.t("log_boss_door_locked"))
+            self._announce("log_boss_door_locked", C.COLOR_DANGER)
             return
         elif dungeon.is_walkable(self.grid, target_x, target_y):
             self.player.move(dx, dy)
@@ -2777,7 +2845,7 @@ class Game:
             if not dmg:
                 return
             self._spawn_damage_number(*pos, str(dmg), C.COLOR_TRAP)
-            self.add_log(self.t("log_trap_damage", trap=trap_name, dmg=dmg))
+            self._announce("log_trap_damage", C.COLOR_TRAP, trap=trap_name, dmg=dmg)
             self.sounds.play("player_hurt")
             self.shake_timer = 6
             self.shake_intensity = 4
@@ -2804,28 +2872,28 @@ class Game:
         if event_id == "vitality":
             self.player.hp = self.player.max_hp
             self._spawn_damage_number(self.player.x, self.player.y, "+HP", (100, 220, 120))
-            self.add_log(self.t("log_shrine_vitality"))
+            self._announce("log_shrine_vitality", C.COLOR_SUCCESS)
             self.sounds.play("levelup")
         elif event_id == "power":
             self.player.base_power += 2
-            self.add_log(self.t("log_shrine_power"))
+            self._announce("log_shrine_power", C.COLOR_SUCCESS)
             self.sounds.play("levelup")
         elif event_id == "fortune":
             amount = self.dungeon_level * 15
             self.player.gold += amount
             self.stats["total_gold_collected"] = self.stats.get("total_gold_collected", 0) + amount
             self._spawn_damage_number(self.player.x, self.player.y, f"+{amount}", C.COLOR_GOLD)
-            self.add_log(self.t("log_shrine_fortune", amount=amount))
+            self._announce("log_shrine_fortune", C.COLOR_GOLD, amount=amount)
             self.sounds.play("levelup")
         elif event_id == "frailty":
             amount = min(5, max(1, self.player.max_hp // 5))
             self.player.max_hp = max(5, self.player.max_hp - amount)
             self.player.hp = min(self.player.hp, self.player.max_hp)
             self._spawn_damage_number(self.player.x, self.player.y, f"-{amount}", C.COLOR_TRAP)
-            self.add_log(self.t("log_shrine_frailty", amount=amount))
+            self._announce("log_shrine_frailty", C.COLOR_DANGER, amount=amount)
             self.sounds.play("player_hurt")
         elif event_id == "ambush":
-            self.add_log(self.t("log_shrine_ambush"))
+            self._announce("log_shrine_ambush", C.COLOR_DANGER)
             self.sounds.play("player_hurt")
             self._spawn_shrine_ambush()
 
@@ -2902,7 +2970,7 @@ class Game:
                 label = f"{self.tr(item.rarity_id)} {self.tn(item.name)}".strip()
                 if item.element_id:
                     label += f" ({self.te(item.element_id)})"
-                self.add_log(self.t("log_equip_weapon", item=label, bonus=item.bonus))
+                self._announce("log_equip_weapon", item.color, item=label, bonus=item.bonus)
                 self.sounds.play("equip")
             else:
                 self.add_log(self.t("log_find_worse_weapon", item=self.tn(item.name), current=self.tn(self.player.weapon_name)))
@@ -2912,7 +2980,7 @@ class Game:
                 self.player.armor_name = item.name
                 self.player.armor_rarity_id = item.rarity_id
                 label = f"{self.tr(item.rarity_id)} {self.tn(item.name)}".strip()
-                self.add_log(self.t("log_equip_armor", item=label, bonus=item.bonus))
+                self._announce("log_equip_armor", item.color, item=label, bonus=item.bonus)
                 self.sounds.play("equip")
             else:
                 self.add_log(self.t("log_find_worse_armor", item=self.tn(item.name), current=self.tn(self.player.armor_name)))
@@ -2977,7 +3045,7 @@ class Game:
         potion_id = potion_id or self.player.selected_potion
         info = C.POTION_BY_ID.get(potion_id)
         if info is None or self.player.potion_count(potion_id) <= 0:
-            self.add_log(self.t("log_no_potions"))
+            self._announce("log_no_potions", C.COLOR_DANGER)
             return
         # Only healing is refused at full health. Every other potion does
         # something useful regardless, and refusing them would make the
@@ -2985,7 +3053,7 @@ class Game:
         effect = info["effect"]
         heals_only = set(effect) <= {"heal", "heal_pct"}
         if heals_only and self.player.hp >= self.player.max_hp:
-            self.add_log(self.t("log_full_health"))
+            self._announce("log_full_health", C.COLOR_TEXT_DIM)
             return
 
         self.player.take_potion(potion_id)
@@ -3022,19 +3090,19 @@ class Game:
         if effect.get("max_hp"):
             p.max_hp += effect["max_hp"]
             p.hp += effect["max_hp"]
-            self.add_log(self.t("log_potion_max_hp", amount=effect["max_hp"]))
+            self._announce("log_potion_max_hp", C.COLOR_SUCCESS, amount=effect["max_hp"])
         if effect.get("base_power"):
             p.base_power += effect["base_power"]
-            self.add_log(self.t("log_potion_power", amount=effect["base_power"]))
+            self._announce("log_potion_power", C.COLOR_SUCCESS, amount=effect["base_power"])
         if effect.get("base_defense"):
             p.base_defense += effect["base_defense"]
-            self.add_log(self.t("log_potion_defense", amount=effect["base_defense"]))
+            self._announce("log_potion_defense", C.COLOR_SUCCESS, amount=effect["base_defense"])
         if effect.get("xp_levels"):
             amount = max(1, int(p.xp_to_next * effect["xp_levels"]))
             self.add_log(self.t("log_potion_xp", amount=amount))
             levels = p.gain_xp(amount)
             if levels:
-                self.add_log(self.t("log_level_up", level=p.level))
+                self._announce("log_level_up", C.COLOR_ACCENT, level=p.level)
                 self.sounds.play("levelup")
                 self.pending_perk_count += levels
 
@@ -3045,7 +3113,8 @@ class Game:
             # a stockpile cannot be turned into one permanent buff.
             p.buffs[buff] = max(p.buffs.get(buff, 0), turns)
             key = "log_potion_curse" if info.get("cursed") else "log_potion_buff"
-            self.add_log(self.t(key, buff=self._buff_name(buff), turns=turns))
+            self._announce(key, C.BUFFS.get(buff, {}).get("color"),
+                           buff=self._buff_name(buff), turns=turns)
 
         if effect.get("shield"):
             p.shield = max(p.shield, effect["shield"])
@@ -3063,7 +3132,7 @@ class Game:
 
         if effect.get("self_poison"):
             p.poison_turns = max(p.poison_turns, effect["self_poison"])
-            self.add_log(self.t("log_potion_self_poison"))
+            self._announce("log_potion_self_poison", C.COLOR_POISON)
 
         if effect.get("reveal"):
             self.explored = {(x, y) for y in range(C.MAP_HEIGHT)
@@ -3204,7 +3273,7 @@ class Game:
             return
         offer = offers[index]
         if self.player.gold < offer["price"]:
-            self.add_log(self.t("log_not_enough_gold"))
+            self._announce("log_not_enough_gold", C.COLOR_DANGER)
             return
         self.player.gold -= offer["price"]
         p = self.player
@@ -3238,7 +3307,7 @@ class Game:
                 self.add_log(self.t("log_smith_reforge", rarity=self.tr(tier["id"]),
                                     bonus=p.weapon_bonus))
             else:
-                self.add_log(self.t("log_smith_best_already"))
+                self._announce("log_smith_best_already", C.COLOR_TEXT_DIM)
                 self.player.gold += offer["price"]
                 return
         self.sounds.play("equip")
@@ -3315,7 +3384,7 @@ class Game:
         stock = stock_list[index]
         price = self._shop_price(stock)
         if self.player.gold < price:
-            self.add_log(self.t("log_not_enough_gold"))
+            self._announce("log_not_enough_gold", C.COLOR_DANGER)
             return
         self.player.gold -= price
         if stock["kind"] == "potion":
@@ -3339,7 +3408,7 @@ class Game:
                 default=None,
             )
             if target is None:
-                self.add_log(self.t("log_no_target"))
+                self._announce("log_no_target", C.COLOR_DANGER)
                 return
             self.player.scrolls[scroll_type] -= 1
             self.stats["total_scrolls_used"] = self.stats.get("total_scrolls_used", 0) + 1
@@ -3565,7 +3634,7 @@ class Game:
             self._spawn_slime_children(monster)
         levels = self.player.gain_xp(monster.xp_reward)
         if levels:
-            self.add_log(self.t("log_level_up", level=self.player.level))
+            self._announce("log_level_up", C.COLOR_ACCENT, level=self.player.level)
             self.sounds.play("levelup")
             self.pending_perk_count += levels
 
@@ -3619,7 +3688,8 @@ class Game:
                 continue
             if checks.get(ach_id):
                 unlocked.append(ach_id)
-                self.add_log(self.t("log_achievement_unlocked", name=self._achievement_name(ach_id, name)))
+                self._announce("log_achievement_unlocked", C.COLOR_ACCENT,
+                               name=self._achievement_name(ach_id, name))
                 self.sounds.play("levelup")
 
     def _maybe_show_levelup_choice(self):
@@ -4081,6 +4151,7 @@ class Game:
         self._render_minimap()
         self._render_boss_bar()
         self._render_boss_banner()
+        self._render_banners()
         self._render_hud()
         self._render_touch_controls()
 
