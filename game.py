@@ -2559,7 +2559,19 @@ class Game:
         # display surface, then present. See the comment where self.screen
         # is created for why nothing draws into the display surface
         # directly.
-        self.display.blit(self.screen, (0, 0))
+        #
+        # pygame.SCALED is supposed to stretch a smaller canvas to fill
+        # the window, and where it does the display surface reports the
+        # logical size, the two match, and this is a plain copy. On the
+        # device it does not: the canvas was drawn 1:1 in the middle with
+        # black all round it. So when the sizes differ we do the stretch
+        # ourselves, into the existing display surface - transform.scale
+        # with a destination allocates nothing.
+        if self.display.get_size() != self.screen.get_size():
+            pygame.transform.scale(self.screen, self.display.get_size(),
+                                   self.display)
+        else:
+            self.display.blit(self.screen, (0, 0))
         pygame.display.flip()
 
     def _handle_movement_repeat(self):
