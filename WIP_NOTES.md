@@ -134,18 +134,22 @@ Getestet mit `test_updater_swap.py` (echtes cmd.exe, echte Sperren).
 - **TLS-Prüfung im Updater niemals abschalten** (lädt eine ausführbare Datei).
 
 ### Test/Release-Ritual (bei JEDEM Abschluss)
-`$SCRATCH` = `C:/Users/budzm/AppData/Local/Temp/claude/C--Users-budzm/7dc4ccb0-bb29-44b6-8bcd-aa48375c8eb2/scratchpad`
 ```
-for t in test_music test_ssl test_installer test_tiers test_levelup          test_menu_layout test_run_loop test_map_cache test_depth_systems          test_up_stairs test_loop_timing test_updater test_updater_swap          test_wave1 test_potions test_rooms test_enemies test_classes          test_juice; do
-  python "$SCRATCH/$t.py" | tail -1
-done
+cd C:/Users/budzm/dungeon-crawler
+python tests/run_all.py            # alle 20
+python tests/run_all.py potions    # nur passende
 ```
-Alle 20 grün (Stand: `b212862`). Zusätzlich seit Welle 8:
-`test_smith` (Schmied, Schatzkammer, Testraum, Werkzeuge, Feinde-Schalter).
-Alle Suiten laufen **stumm** (`SDL_AUDIODRIVER=dummy`), auch `test_music` —
-der Dummy-Treiber lässt Laden/Abspielen/`get_busy` weiterlaufen.
+**Die Tests liegen jetzt im Repo unter `tests/`.** Sie lagen vorher im
+Claude-Scratchpad unter %TEMP% — Windows hat den geleert und damit die
+komplette Suite mitgenommen. Wiederhergestellt aus dem Sitzungsprotokoll
+(`~/.claude/projects/.../<session>.jsonl` enthält jeden Write mit Inhalt).
+`tests/sdl_stub.py` importieren, wenn eine Suite mehrere `Game()` baut —
+SDL gibt nur einen Renderer pro Prozess her.
 
-Veröffentlicht: **PC Build 80 · Android Build 60** (28.07.2026).
+Danach: `assets/build_version.txt` = Commit-Anzahl, PC-exe bauen,
+**erst der Nutzer testet am PC**, dann Push (löst den Android-Build aus)
+und exe ins `windows-latest`-Release hochladen.
+Veröffentlicht: **PC Build 82 · Android Build 61** (28.07.2026).
 
 ### Umgangsregeln mit dem Nutzer
 - Deutsch, kein Quellcode, keine technischen Erklärungen — nur kurzes Wiki/Changelog.

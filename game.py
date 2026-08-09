@@ -244,9 +244,8 @@ class Game:
         # 39% of the width - while the HUD band soaked up the rest. The
         # two constraints are the gutters (which must stay wide enough
         # for the touch controls) and the HUD band under the map.
-        min_hud = 250
         by_width = (win_w - 2 * C.MIN_GUTTER_WIDTH) // C.MAP_WIDTH
-        by_height = (win_h - min_hud) // C.MAP_HEIGHT
+        by_height = (win_h - C.MIN_HUD_HEIGHT) // C.MAP_HEIGHT
         tile = max(24, min(by_width, by_height))
         C.TILE_SIZE = tile
         C.MAP_PIXEL_WIDTH = C.MAP_WIDTH * tile
@@ -5783,9 +5782,29 @@ class Game:
             row4.append(("!", f"+{len(active) - C.HUD_MAX_BUFF_CHIPS}",
                          C.COLOR_TEXT_DIM, C.COLOR_TEXT_DIM))
 
+        # In priority order, and only while there is room. The band is
+        # whatever height the map did not use, and on a phone that is not
+        # enough for everything - it was silently clipping the bottom row
+        # off the screen. Dropping a whole row is honest; half a row of
+        # chips cut off by the screen edge is not.
+        #
+        # Supplies and status first because they change turn to turn,
+        # then active effects, then equipment, which is reference
+        # information you look at between fights.
+        band_bottom = hud_y + C.HUD_HEIGHT - gap
+        # How many chip rows the band can actually hold. The +gap is
+        # because the last row needs no trailing gap - without it this
+        # under-counted by one and quietly dropped the active-effects row,
+        # which is the one row you actually need mid-fight.
+        fits = max(1, (band_bottom - y + gap) // (chip_h + gap))
+        rows = self._hud_rows(row2, row3, row4, fits, weapon_color, armor_color)
         chips_right = left
         row_y = y
-        for row in ([row2, row3, row4] if row4 else [row2, row3]):
+        for row in rows:
+            if not row:
+                continue
+            if row_y + chip_h > band_bottom:
+                break
             x = left
             for icon, text, tcol, icol in row:
                 x += self._hud_chip(x, row_y, chip_h, icon, text,
@@ -5793,11 +5812,13 @@ class Game:
             chips_right = max(chips_right, x)
             row_y += chip_h + gap
 
-        # Depth and kills, on their own line under the chips.
+        # Depth and kills, on their own line under the chips - flavour,
+        # so it is the first thing to go when the band is short.
         stat = self.f_sm.render(
             f"{tier_label}  ·  {self.t('hud_kills')} {self.player.kills}",
             True, C.COLOR_TEXT_DIM)
-        self.screen.blit(stat, (left, row_y))
+        if row_y + stat.get_height() <= band_bottom:
+            self.screen.blit(stat, (left, row_y))
 
         # Log to the right of the chips, newest at the bottom, using
         # whatever width the chips did not need.
@@ -5815,6 +5836,35 @@ class Game:
             for i, line in enumerate(lines[-room:]):
                 self.screen.blit(log_font.render(line, True, C.COLOR_LOG_TEXT),
                                  (log_x, y + i * pitch))
+
+    def _hud_rows(self, equipment, supplies, buffs, fits,
+                  weapon_color=None, armor_color=None):
+        """Which chip rows to draw, given how many fit.
+
+        The band is whatever height the map did not use, and on a phone
+        that is not enough for all of them - it used to just draw them
+        anyway and let the screen edge cut the last one in half.
+
+        Order is by how often you need it: supplies and status change
+        turn to turn, active effects decide the next few, equipment is
+        reference information. When a row has to go, the equipment folds
+        into the supplies row without its item names rather than
+        vanishing - the bonus and the element are what matter at a
+        glance, and the full names are on the death screen and announced
+        when they change.
+        """
+        wanted = [supplies, buffs, equipment] if buffs else [supplies, equipment]
+        if len(wanted) <= fits:
+            return wanted[:fits]
+        compact = [
+            ("weapon", f"+{self.player.weapon_bonus}"
+             + (f" · {self.te(self.player.weapon_element_id)}"
+                if self.player.weapon_element_id else ""),
+             weapon_color, None),
+            ("armor", f"+{self.player.armor_bonus}", armor_color, None),
+        ]
+        folded = [compact + supplies] + [r for r in wanted[1:] if r is not equipment]
+        return folded[:fits]
 
     def _hud_icon_row(self, x, y, char, color, text, label_color=None):
         icon = self.f_sm.render(char, True, color)

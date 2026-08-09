@@ -19,12 +19,25 @@ SCREEN_WIDTH = MAP_PIXEL_WIDTH + 2 * GUTTER_WIDTH
 
 # Absolute floor a gutter can shrink to when the real device's aspect
 # ratio is fitted at startup (see Game._fit_screen_to_device). The D-pad
-# is a 3-wide cross of Game.btn_h-sized buttons plus gaps and margins, so
-# the gutter has to hold roughly 3 * 152 + padding. Below this the cross
-# would be drawn over the dungeon; _setup_touch_controls additionally
+# is a 3-wide cross of buttons plus gaps and margins; below this the
+# cross would be drawn over the dungeon. _setup_touch_controls also
 # clamps the buttons to whatever gutter it actually gets, so a narrower
 # device degrades to smaller controls instead of a broken layout.
-MIN_GUTTER_WIDTH = 540
+#
+# 3 * 144 + two gaps + two margins. 144px is Android's 48dp minimum touch
+# target at density 3, so this is as narrow as the cross can go without
+# the buttons dropping under it. It was 540, sized for 152px buttons -
+# eight pixels of comfort that cost a whole tile of map width, on a
+# screen where the gutters and the HUD between them were taking well over
+# half of everything.
+MIN_GUTTER_WIDTH = 512
+
+# Height held back for the HUD when fitting the map to a real device.
+# This is a *reservation*, not the final height: whatever the map does
+# not use goes to the HUD anyway (see Game._fit_screen_to_device), so
+# reserving more than the band needs only makes the tiles smaller. The
+# band genuinely needs about 190 - the same floor the desktop build uses.
+MIN_HUD_HEIGHT = 190
 SCREEN_HEIGHT = MAP_HEIGHT * TILE_SIZE + HUD_HEIGHT
 
 # Menu/info screens are laid out from these sizes rather than by zooming a
