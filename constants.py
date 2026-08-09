@@ -5,6 +5,13 @@ TILE_SIZE = 24
 MAP_WIDTH = 40
 MAP_HEIGHT = 25
 
+# The pristine values every layout pass derives from. TILE_SIZE and
+# GUTTER_WIDTH below are *results* - the fit and the zoom overwrite them -
+# so deriving the next pass from them compounds: a second layout pass
+# zoomed an already-zoomed tile and widened an already-widened gutter,
+# and the canvas grew until drawing off the end of it crashed.
+BASE_TILE_SIZE = TILE_SIZE
+
 HUD_HEIGHT = 190
 # The dungeon is drawn at TILE_SIZE, which the zoom multiplies - so the
 # whole map is bigger than the hole it is looked at through. MAP_PIXEL_*
@@ -27,6 +34,7 @@ DEFAULT_ZOOM = 1.5
 # actually filling the display instead of being letterboxed down to a
 # narrow strip in the middle.
 GUTTER_WIDTH = 260
+BASE_GUTTER_WIDTH = GUTTER_WIDTH
 MAP_OFFSET_X = GUTTER_WIDTH
 SCREEN_WIDTH = VIEW_W + 2 * GUTTER_WIDTH
 
@@ -51,6 +59,21 @@ MIN_GUTTER_WIDTH = 512
 # reserving more than the band needs only makes the tiles smaller. The
 # band genuinely needs about 190 - the same floor the desktop build uses.
 MIN_HUD_HEIGHT = 190
+
+# --- render scale --------------------------------------------------------
+# Everything is drawn into an in-RAM canvas and copied to the display once
+# a frame. On a 2448x1098 phone that canvas is 2.7 million pixels, so the
+# copy alone moves 10MB per frame - over 300MB/s at 30fps, before a single
+# tile is drawn. Rendering into a smaller canvas and letting SDL's SCALED
+# flag stretch it is the cheapest possible fix: the work drops with the
+# square of the factor, and the art is 16x16 pixel art being magnified
+# anyway, so it loses very little.
+#
+# "auto" picks the largest canvas under MAX_CANVAS_PIXELS; the explicit
+# levels are there so a slow device can be dialled down by hand.
+MAX_CANVAS_PIXELS = 1_500_000
+RENDER_SCALES = ("auto", 1.0, 0.75, 0.5)
+DEFAULT_RENDER_SCALE = "auto"
 SCREEN_HEIGHT = VIEW_H + HUD_HEIGHT
 
 # Menu/info screens are laid out from these sizes rather than by zooming a

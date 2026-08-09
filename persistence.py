@@ -61,6 +61,8 @@ DEFAULT_SETTINGS = {
     "difficulty": "normal",
     "char_class": "warrior",
     "zoom": 1.5,
+    "render_scale": "auto",
+    "show_fps": False,
 }
 
 DEFAULT_STATS = {

@@ -40,9 +40,27 @@ def main():
     env.setdefault("SDL_VIDEODRIVER", "dummy")
     env.setdefault("SDL_AUDIODRIVER", "dummy")
 
+    # Every suite starts from the same settings. They share the repo's
+    # settings.json, and several of them write it - a suite that leaves
+    # the zoom or the render scale changed hands the next one a different
+    # tile size and a different layout, which showed up as suites failing
+    # in the sweep but passing on their own.
+    import json
+    sys.path.insert(0, ROOT)
+    import persistence
+    saved = None
+    if os.path.exists(persistence.SETTINGS_PATH):
+        with open(persistence.SETTINGS_PATH, encoding="utf-8") as f:
+            saved = f.read()
+
+    def reset_settings():
+        with open(persistence.SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(persistence.DEFAULT_SETTINGS, f)
+
     failed = []
     started = time.perf_counter()
     for name in suites:
+        reset_settings()
         path = os.path.join(HERE, name + ".py")
         if not os.path.exists(path):
             print(f"  MISSING  {name}")
@@ -59,6 +77,15 @@ def main():
         else:
             print(f"  FAIL     {name:22s} {secs:5.1f}s  {last[:90]}")
             failed.append(name)
+
+    if saved is None:
+        try:
+            os.remove(persistence.SETTINGS_PATH)
+        except OSError:
+            pass
+    else:
+        with open(persistence.SETTINGS_PATH, "w", encoding="utf-8") as f:
+            f.write(saved)
 
     total = time.perf_counter() - started
     print(f"\n{len(suites) - len(failed)}/{len(suites)} passed in {total:.0f}s")

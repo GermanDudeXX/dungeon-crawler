@@ -58,6 +58,10 @@ class Game:
         # is needed before the display is sized.
         self.settings = persistence.load_settings()
         self.ui_scale = 1.0
+        self.render_scale = 1.0
+        self._fps_frames = 0
+        self._fps_since = 0
+        self._fps_surface = None
         # Without SCALED, SDL renders our fixed logical resolution into the
         # top-left corner of the real (much larger) device screen and
         # leaves the rest black. SCALED stretches the same fixed-size
@@ -219,6 +223,25 @@ class Game:
         # screen is opened, not popped up over the title.
         self._pending_update_failure = updater.take_failure_marker()
 
+    def _render_scale_for(self, win_w, win_h):
+        """How much to shrink the drawing canvas, 0 < scale <= 1.
+
+        "auto" takes the largest canvas that stays under
+        C.MAX_CANVAS_PIXELS, which is roughly what the desktop build draws
+        and runs comfortably. The fixed levels exist so a slow device can
+        be dialled down by hand without guessing at a pixel budget.
+        """
+        want = self.settings.get("render_scale", C.DEFAULT_RENDER_SCALE)
+        if want != "auto":
+            try:
+                return max(0.25, min(1.0, float(want)))
+            except (TypeError, ValueError):
+                pass
+        pixels = win_w * win_h
+        if pixels <= C.MAX_CANVAS_PIXELS:
+            return 1.0
+        return (C.MAX_CANVAS_PIXELS / pixels) ** 0.5
+
     def _zoom(self):
         levels = C.ZOOM_LEVELS
         want = self.settings.get("zoom", C.DEFAULT_ZOOM)
@@ -245,14 +268,17 @@ class Game:
         self._glow_cache = {}
 
     def _apply_pc_ui_scale(self):
+        # Every value here comes from the BASE_* constants, never from the
+        # live ones: those are results of a previous pass, and deriving
+        # from them compounds (see constants.BASE_TILE_SIZE).
         self.ui_scale = 1.3
-        self._apply_zoom(C.TILE_SIZE)
+        self._apply_zoom(C.BASE_TILE_SIZE)
         C.HUD_HEIGHT = int(190 * self.ui_scale)
         C.SCREEN_HEIGHT = C.VIEW_H + C.HUD_HEIGHT
         # Widen the gutter too, in proportion - otherwise the now-bigger
         # D-pad (see _setup_touch_controls) would overflow past the edge
         # of the unchanged default gutter width.
-        C.GUTTER_WIDTH = int(C.GUTTER_WIDTH * self.ui_scale)
+        C.GUTTER_WIDTH = int(C.BASE_GUTTER_WIDTH * self.ui_scale)
         C.MAP_OFFSET_X = C.GUTTER_WIDTH
         C.SCREEN_WIDTH = C.VIEW_W + 2 * C.GUTTER_WIDTH
 
@@ -274,21 +300,37 @@ class Game:
         if win_w <= 0 or win_h <= 0:
             return False
 
+        # Draw into a smaller canvas and let SCALED stretch it. Everything
+        # is copied to the display once a frame, and at the phone's full
+        # 2448x1098 that copy alone moves 10MB - over 300MB/s at 30fps,
+        # before anything is drawn into it. Halving the canvas quarters
+        # every fill, blit and the present itself.
+        self.render_scale = self._render_scale_for(win_w, win_h)
+        win_w = max(640, int(win_w * self.render_scale))
+        win_h = max(360, int(win_h * self.render_scale))
+
         # Pick the largest tile size the window can actually hold. The
         # tile size used to be a fixed 24px, which on this device left
         # the 40x25 map occupying only 960x600 of a 2448x1098 window -
         # 39% of the width - while the HUD band soaked up the rest. The
         # two constraints are the gutters (which must stay wide enough
         # for the touch controls) and the HUD band under the map.
-        by_width = (win_w - 2 * C.MIN_GUTTER_WIDTH) // C.MAP_WIDTH
-        by_height = (win_h - C.MIN_HUD_HEIGHT) // C.MAP_HEIGHT
+        # Both floors mean a *physical* size - a thumb-sized D-pad, a
+        # readable HUD band - so they shrink with the canvas. Left at their
+        # full value they would eat a downscaled canvas whole and force the
+        # tiles back to their minimum, undoing the saving entirely.
+        min_gutter = max(64, int(C.MIN_GUTTER_WIDTH * self.render_scale))
+        min_hud = max(40, int(C.MIN_HUD_HEIGHT * self.render_scale))
+        self._min_gutter = min_gutter
+        by_width = (win_w - 2 * min_gutter) // C.MAP_WIDTH
+        by_height = (win_h - min_hud) // C.MAP_HEIGHT
         tile = max(24, min(by_width, by_height))
         self._apply_zoom(tile)
 
         # Whatever vertical space the viewport leaves goes to the HUD,
         # floored at the original design height so a short window cannot
         # squeeze it away entirely.
-        C.HUD_HEIGHT = max(190, win_h - C.VIEW_H)
+        C.HUD_HEIGHT = max(min_hud, win_h - C.VIEW_H)
         C.SCREEN_HEIGHT = C.VIEW_H + C.HUD_HEIGHT
         self.ui_scale = C.HUD_HEIGHT / 190
 
@@ -297,7 +339,7 @@ class Game:
         # producing a broken layout - falls back to the static
         # GUTTER_WIDTH/SCREEN_WIDTH already set in constants.py.
         if 1.2 <= device_ratio <= 3.5:
-            new_gutter = max(C.MIN_GUTTER_WIDTH, (win_w - C.VIEW_W) // 2)
+            new_gutter = max(min_gutter, (win_w - C.VIEW_W) // 2)
             C.GUTTER_WIDTH = new_gutter
             C.MAP_OFFSET_X = new_gutter
             C.SCREEN_WIDTH = C.VIEW_W + 2 * new_gutter
@@ -2016,7 +2058,10 @@ class Game:
         k = C.SCREEN_HEIGHT / C.UI_REF_HEIGHT
         if not ON_ANDROID:
             k *= C.UI_DESKTOP_FACTOR
-        floor = 120 if ON_ANDROID else 0   # keep a real touch target on phones
+        # A real touch target on phones, in canvas pixels - so it follows
+        # the render scale, which is what turns canvas pixels into screen
+        # pixels.
+        floor = int(120 * getattr(self, "render_scale", 1.0)) if ON_ANDROID else 0
 
         def px(n, minimum=0):
             return max(minimum, int(round(n * k)))
@@ -2175,6 +2220,34 @@ class Game:
         self._badge_cache = {}
         self._potion_sprite_cache = {}
         self._hud_cache = None
+        self.needs_redraw = True
+        self.sounds.play("equip")
+
+    def _render_scale_name(self):
+        want = self.settings.get("render_scale", C.DEFAULT_RENDER_SCALE)
+        if want == "auto":
+            return self.t("render_auto", value=self._mult_text(self.render_scale))
+        return self._mult_text(float(want))
+
+    def _cycle_render_scale(self):
+        """Steps through the render scales. Takes effect on the next start.
+
+        The canvas size is fixed when the display is created, and
+        recreating it mid-run would mean rebuilding every cached surface
+        and the whole layout - so this is the one setting that waits.
+        """
+        levels = list(C.RENDER_SCALES)
+        current = self.settings.get("render_scale", C.DEFAULT_RENDER_SCALE)
+        nxt = levels[(levels.index(current) + 1) % len(levels)] if current in levels else levels[0]
+        self.settings["render_scale"] = nxt
+        persistence.save_settings(self.settings)
+        self._notify(self.t("log_render_scale_restart"), C.COLOR_ACCENT)
+        self.sounds.play("equip")
+
+    def _toggle_fps(self):
+        self.settings["show_fps"] = not self.settings.get("show_fps")
+        persistence.save_settings(self.settings)
+        self._fps_surface = None
         self.needs_redraw = True
         self.sounds.play("equip")
 
@@ -2456,6 +2529,31 @@ class Game:
             return True
         return any(m.render_x != m.x or m.render_y != m.y for m in self.monsters)
 
+    def _render_fps(self):
+        """Frame time and rate, top-left, when switched on in Settings.
+
+        Deliberately measured around the whole frame including the
+        present, because that copy is most of the cost on a phone. The
+        text is only re-rendered twice a second - a per-frame font render
+        in the thing that measures per-frame cost would be its own joke.
+        """
+        now = pygame.time.get_ticks()
+        self._fps_frames += 1
+        if now - self._fps_since >= 500:
+            elapsed = now - self._fps_since
+            fps = self._fps_frames * 1000.0 / max(1, elapsed)
+            ms = elapsed / max(1, self._fps_frames)
+            self._fps_surface = self._f_tiny_outlined(
+                f"{fps:.0f} fps   {ms:.0f} ms   {C.SCREEN_WIDTH}x{C.SCREEN_HEIGHT}"
+                f"   x{self.render_scale:.2f}",
+                C.COLOR_ACCENT)
+            self._fps_since = now
+            self._fps_frames = 0
+        if self._fps_surface is not None:
+            x = self.MINIMAP_POS[0]
+            y = self.MINIMAP_POS[1] + C.MAP_HEIGHT * self.MINIMAP_SCALE + 8
+            self.screen.blit(self._fps_surface, (x, y))
+
     def _present(self):
         # One large sequential copy of the in-RAM canvas onto the real
         # display surface, then present. See the comment where self.screen
@@ -2728,6 +2826,10 @@ class Game:
                 self._cycle_volume()
             elif key == pygame.K_z:
                 self._cycle_zoom()
+            elif key == pygame.K_r:
+                self._cycle_render_scale()
+            elif key == pygame.K_p:
+                self._toggle_fps()
             elif key == pygame.K_m:
                 self._toggle_music()
             elif key == pygame.K_k and not ON_ANDROID:
@@ -4348,6 +4450,8 @@ class Game:
         if self.state == "dead":
             self._render_game_over()
 
+        if self.settings.get("show_fps"):
+            self._render_fps()
         self._present()
 
     def _panel(self, rect, fill=None, border=None, radius=None, shadow=True):
@@ -5063,6 +5167,11 @@ class Game:
             (self.t("settings_music_label", state=music_state), self.t("btn_toggle"), pygame.K_m),
             (self.t("settings_zoom_label", state=self._mult_text(self._zoom())),
              self.t("btn_toggle"), pygame.K_z),
+            (self.t("settings_render_label", state=self._render_scale_name()),
+             self.t("btn_toggle"), pygame.K_r),
+            (self.t("settings_fps_label",
+                    state=self.t("on" if self.settings.get("show_fps") else "off")),
+             self.t("btn_toggle"), pygame.K_p),
             (self.t("settings_update_label", build=updater.current_build()),
              self.t("btn_check_update"), pygame.K_u),
         ]

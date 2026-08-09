@@ -22,7 +22,7 @@ import constants as C
 import game
 
 WIN = (2448, 1098)
-ANDROID_MIN_TOUCH = 144      # 48dp at density 3.0
+ANDROID_MIN_TOUCH = 144      # 48dp at density 3.0, in *screen* pixels
 
 _orig = pygame.display.set_mode
 _n = {"i": 0}
@@ -44,7 +44,13 @@ g.perk_choices = C.PERKS[:2]
 g.update_phase = "available"
 g.update_info = {"build": 99, "size": 33 * 1024 * 1024}
 
-print(f"canvas {C.SCREEN_WIDTH}x{C.SCREEN_HEIGHT}  btn_h={g.btn_h}  "
+# The game draws into a canvas smaller than the window and lets SDL
+# stretch it, so a button measured in canvas pixels is bigger than that on
+# the actual screen. The 48dp minimum is about what a thumb hits, so the
+# floor to compare against is scaled the same way.
+MIN_TOUCH = ANDROID_MIN_TOUCH * g.render_scale
+print(f"canvas {C.SCREEN_WIDTH}x{C.SCREEN_HEIGHT} (x{g.render_scale:.2f} of the "
+      f"window)  btn_h={g.btn_h}  min touch={MIN_TOUCH:.0f} canvas px  "
       f"body glyph={g.f_body.get_height()}  title glyph={g.f_title.get_height()}")
 
 SCREENS = ["title", "stats", "achievements", "bestiary", "tutorial", "settings",
@@ -63,10 +69,11 @@ for lang in ("en", "de"):
         targets = list(g._tap_targets)
         # 1. touch target size
         for rect, key in targets:
-            if min(rect.width, rect.height) < ANDROID_MIN_TOUCH:
+            if min(rect.width, rect.height) < MIN_TOUCH:
                 failures.append(
                     f"{lang}/{state}: tap target {rect.width}x{rect.height} "
-                    f"is under the {ANDROID_MIN_TOUCH}px Android minimum")
+                    f"canvas px is under the {MIN_TOUCH:.0f} needed for "
+                    f"{ANDROID_MIN_TOUCH}px on screen")
         # 2. no overlap between targets
         for i, (a, _) in enumerate(targets):
             for b, _ in targets[i + 1:]:
@@ -96,7 +103,7 @@ for lang in ("en", "de"):
                 failures.append(
                     f"{lang}/{state}: content runs off the bottom edge (colours {sorted(stray)[:3]})")
 
-        n_small = sum(1 for r, _ in targets if min(r.width, r.height) < ANDROID_MIN_TOUCH)
+        n_small = sum(1 for r, _ in targets if min(r.width, r.height) < MIN_TOUCH)
         if lang == "de":
             print(f"  de/{state:22s} {len(targets):2d} targets, "
                   f"{'all >= 48dp' if not n_small else str(n_small) + ' TOO SMALL'}")
