@@ -204,6 +204,12 @@ class Game:
         self._update_download_path = None
         self._quit_for_update = False
 
+        # Resolve the updater's Java classes now, on the main thread. The
+        # download runs on a worker, and a Python thread attached to the
+        # JVM gets the system class loader, which cannot see the app's own
+        # classes - looking PythonActivity up there fails.
+        updater.preload_android_classes()
+
         # Clears the previous build and any leaked onefile extraction
         # folders left in %TEMP%. Runs on a background thread.
         updater.cleanup_previous_update()

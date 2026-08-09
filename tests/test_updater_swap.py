@@ -161,6 +161,51 @@ finally:
     fh.close()
 shutil.rmtree(locked_dir, ignore_errors=True)
 
+
+print("android class loading")
+# The download runs on a worker thread. pyjnius resolves a Java class with
+# FindClass, and which class loader that uses depends on the calling
+# thread - a Python thread gets the system loader, which cannot see the
+# app's own classes. Looking PythonActivity up there fails with
+# "Didn't find class ... DexPathList[[directory "."],
+# nativeLibraryDirectories=[/system/lib64 ...]]". So every lookup has to
+# go through the cache that the main thread fills.
+import re
+
+src = open("updater.py", encoding="utf-8").read()
+check("there is a main-thread preload", "def preload_android_classes" in src)
+
+names = src.split("_ANDROID_CLASS_NAMES = (")[1].split(")")[0]
+for name in ("org.kivy.android.PythonActivity", "android.content.Intent",
+             "android.content.ContentValues", "android.provider.MediaStore$Downloads",
+             "android.provider.Settings", "android.os.Build$VERSION",
+             "android.net.Uri"):
+    check(f"{name} is preloaded", name in names, names)
+
+# Only the two cache functions may call autoclass; everything else asks
+# the cache, and that is what makes the worker thread safe.
+allowed = set()
+for fn in ("def preload_android_classes", "def _cls"):
+    seg = src[src.index(fn):]
+    nxt = seg.find("\ndef ", 1)
+    if nxt != -1:
+        seg = seg[:nxt]
+    allowed.update(ln.strip() for ln in seg.splitlines())
+stray = [ln.strip() for ln in src.splitlines()
+         if "autoclass(" in ln and not ln.strip().startswith("#")
+         and ln.strip() not in allowed]
+check("no Java class is looked up outside the cache", not stray, stray)
+
+game_src = open("game.py", encoding="utf-8").read()
+check("startup preloads them", "updater.preload_android_classes()" in game_src)
+workers = re.findall(r"def worker\(\):(.*?)self\._update_thread = threading",
+                     game_src, flags=re.S)
+check("the update workers resolve no Java classes themselves",
+      bool(workers) and not any("autoclass" in w or "preload_android_classes" in w
+                                for w in workers), len(workers))
+check("preloading is a no-op off Android",
+      updater.preload_android_classes() is None)
+
 print()
 if failures:
     print(f"{len(failures)} FAILED: {failures}")

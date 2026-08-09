@@ -458,10 +458,60 @@ def cleanup_previous_update():
     threading.Thread(target=worker, daemon=True).start()
 
 
-def android_download_dir():
-    from jnius import autoclass
+# --- Java classes, resolved once on the main thread ---------------------
+# pyjnius looks a class up with JNI FindClass, and which class loader that
+# uses depends on the thread. The app's own classes - PythonActivity above
+# all - are only visible to the loader Android gave the activity. A thread
+# Python created and attached itself gets the *system* loader instead,
+# which can see /system/lib64 and nothing of the APK, so autoclass there
+# fails with "Didn't find class org.kivy.android.PythonActivity on path:
+# DexPathList[[directory "."], nativeLibraryDirectories=[/system/lib64...]]".
+#
+# The download runs on a worker thread, so every lookup it needs is done
+# up front on the main thread and cached. The resulting proxies hold
+# global references and work from any thread; only the lookup is
+# thread-sensitive.
+_JAVA_CLASSES = {}
+_ANDROID_CLASS_NAMES = (
+    "org.kivy.android.PythonActivity",
+    "android.content.Intent",
+    "android.content.ContentValues",
+    "android.provider.MediaStore$Downloads",
+    "android.provider.Settings",
+    "android.os.Build$VERSION",
+    "android.net.Uri",
+)
 
-    activity = autoclass("org.kivy.android.PythonActivity").mActivity
+
+def preload_android_classes():
+    """Resolves the Java classes we use. Call once, from the main thread."""
+    if not ON_ANDROID:
+        return
+    try:
+        from jnius import autoclass
+    except ImportError:
+        # No jnius means no Android bridge at all - the update button will
+        # report that when pressed. This runs at startup, so it must never
+        # be the thing that stops the game from opening.
+        return
+    for name in _ANDROID_CLASS_NAMES:
+        try:
+            _JAVA_CLASSES[name] = autoclass(name)
+        except Exception:      # noqa: BLE001 - a missing one surfaces at use
+            pass
+
+
+def _cls(name):
+    cached = _JAVA_CLASSES.get(name)
+    if cached is not None:
+        return cached
+    from jnius import autoclass
+    cached = _JAVA_CLASSES[name] = autoclass(name)
+    return cached
+
+
+def android_download_dir():
+    activity = _cls("org.kivy.android.PythonActivity").mActivity
     return activity.getExternalFilesDir(None).getAbsolutePath()
 
 
@@ -476,15 +526,13 @@ def _publish_to_downloads(local_path, display_name):
     manifest merger. MediaStore needs no manifest changes and no storage
     permission at all: apps can always contribute their own files to
     shared collections like Downloads under scoped storage."""
-    from jnius import autoclass
-
-    VersionCls = autoclass("android.os.Build$VERSION")
+    VersionCls = _cls("android.os.Build$VERSION")
     if VersionCls.SDK_INT < 29:
         raise RuntimeError("in-app update needs Android 10 or newer")
 
-    PythonActivity = autoclass("org.kivy.android.PythonActivity")
-    ContentValues = autoclass("android.content.ContentValues")
-    MediaStoreDownloads = autoclass("android.provider.MediaStore$Downloads")
+    PythonActivity = _cls("org.kivy.android.PythonActivity")
+    ContentValues = _cls("android.content.ContentValues")
+    MediaStoreDownloads = _cls("android.provider.MediaStore$Downloads")
 
     activity = PythonActivity.mActivity
     resolver = activity.getContentResolver()
@@ -516,19 +564,17 @@ def apply_update_android(apk_path):
     "launched" on success, or "needs_permission" if the user first has to
     grant 'install unknown apps' for this app in Android Settings - the
     Settings screen to do that is opened automatically in that case."""
-    from jnius import autoclass
-
-    PythonActivity = autoclass("org.kivy.android.PythonActivity")
-    Intent = autoclass("android.content.Intent")
-    VersionCls = autoclass("android.os.Build$VERSION")
+    PythonActivity = _cls("org.kivy.android.PythonActivity")
+    Intent = _cls("android.content.Intent")
+    VersionCls = _cls("android.os.Build$VERSION")
 
     activity = PythonActivity.mActivity
     package_name = activity.getPackageName()
 
     if VersionCls.SDK_INT >= 26:
         if not activity.getPackageManager().canRequestPackageInstalls():
-            Settings = autoclass("android.provider.Settings")
-            Uri = autoclass("android.net.Uri")
+            Settings = _cls("android.provider.Settings")
+            Uri = _cls("android.net.Uri")
             redirect = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + package_name))
             redirect.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             activity.startActivity(redirect)
