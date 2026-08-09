@@ -91,11 +91,15 @@ assert draws <= 1, f"idle scene still redrawing {draws} times"
 # --- 3. a turn must always produce a redraw ---
 g2.needs_redraw = False
 g2._last_draw_ms = pygame.time.get_ticks()
-import dungeon as dmod
+# Ask the same question the game does. is_walkable only knows about
+# walls; crates and columns are solid too, so a direction that looked
+# walkable could produce no move at all and therefore no redraw.
 for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
-    if dmod.is_walkable(g2.grid, g2.player.x + dx, g2.player.y + dy):
+    if not g2.blocks_movement(g2.player.x + dx, g2.player.y + dy):
         g2._player_turn(dx, dy)
         break
+else:
+    raise AssertionError("the player was walled in - cannot test a turn")
 assert g2._should_redraw(), "a player turn did not mark the screen dirty"
 print("  a player turn does mark the screen dirty")
 

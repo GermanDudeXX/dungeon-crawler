@@ -6,7 +6,20 @@ MAP_WIDTH = 40
 MAP_HEIGHT = 25
 
 HUD_HEIGHT = 190
+# The dungeon is drawn at TILE_SIZE, which the zoom multiplies - so the
+# whole map is bigger than the hole it is looked at through. MAP_PIXEL_*
+# is the map's full extent (what the cached surface holds); VIEW_* is the
+# rectangle of screen it is seen through, and that is what the layout -
+# gutters, HUD, touch buttons - is built from.
 MAP_PIXEL_WIDTH = MAP_WIDTH * TILE_SIZE
+VIEW_W = MAP_PIXEL_WIDTH
+VIEW_H = MAP_HEIGHT * TILE_SIZE
+
+# How far in the dungeon view is zoomed. 1.0 fits the whole 40x25 grid on
+# screen at once, which on a phone makes every tile tiny; above that the
+# view becomes a window that follows the player. Chosen in Settings.
+ZOOM_LEVELS = (1.0, 1.25, 1.5, 2.0)
+DEFAULT_ZOOM = 1.5
 # Extra space on each side of the map, reserved for touch controls so they
 # sit next to the dungeon view instead of floating on top of it, and so
 # there's room for buttons big enough to actually hit on a phone. On a
@@ -15,7 +28,7 @@ MAP_PIXEL_WIDTH = MAP_WIDTH * TILE_SIZE
 # narrow strip in the middle.
 GUTTER_WIDTH = 260
 MAP_OFFSET_X = GUTTER_WIDTH
-SCREEN_WIDTH = MAP_PIXEL_WIDTH + 2 * GUTTER_WIDTH
+SCREEN_WIDTH = VIEW_W + 2 * GUTTER_WIDTH
 
 # Absolute floor a gutter can shrink to when the real device's aspect
 # ratio is fitted at startup (see Game._fit_screen_to_device). The D-pad
@@ -38,7 +51,7 @@ MIN_GUTTER_WIDTH = 512
 # reserving more than the band needs only makes the tiles smaller. The
 # band genuinely needs about 190 - the same floor the desktop build uses.
 MIN_HUD_HEIGHT = 190
-SCREEN_HEIGHT = MAP_HEIGHT * TILE_SIZE + HUD_HEIGHT
+SCREEN_HEIGHT = VIEW_H + HUD_HEIGHT
 
 # Menu/info screens are laid out from these sizes rather than by zooming a
 # fixed small design, which is what kept the buttons tiny: a uniform zoom
@@ -69,6 +82,8 @@ FONT_SM = 54          # secondary/help text
 FONT_XS = 44          # dense list rows
 
 BTN_H = 152           # ~50dp: comfortably over Android's 48dp minimum
+BTN_H_MIN = 144       # 48dp exactly - the floor for a screen that has to
+                      # squeeze rows in, never a default
 BTN_H_HERO = 184      # for a screen with room to spare
 BTN_MIN_W = 260
 BTN_PAD_X = 40        # per side, added to the measured label width

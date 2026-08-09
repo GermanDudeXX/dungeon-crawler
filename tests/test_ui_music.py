@@ -115,30 +115,31 @@ check("no active effects means no empty effects row", len(rows) == 2, len(rows))
 
 # --- and all of it on a real phone canvas -----------------------------
 print("phone canvas")
-saved = (C.TILE_SIZE, C.MAP_PIXEL_WIDTH, C.HUD_HEIGHT, C.SCREEN_HEIGHT,
-         C.GUTTER_WIDTH, C.MAP_OFFSET_X, C.SCREEN_WIDTH)
+saved = (C.TILE_SIZE, C.MAP_PIXEL_WIDTH, C.VIEW_W, C.VIEW_H, C.HUD_HEIGHT,
+         C.SCREEN_HEIGHT, C.GUTTER_WIDTH, C.MAP_OFFSET_X, C.SCREEN_WIDTH)
 try:
     win_w, win_h = 2448, 1098          # measured on the real device
     tile = max(24, min((win_w - 2 * C.MIN_GUTTER_WIDTH) // C.MAP_WIDTH,
                        (win_h - C.MIN_HUD_HEIGHT) // C.MAP_HEIGHT))
-    C.TILE_SIZE = tile
-    C.MAP_PIXEL_WIDTH = C.MAP_WIDTH * tile
-    g._rescale_tile_constants()
-    mh = C.MAP_HEIGHT * tile
+    # Through _apply_zoom, so the viewport and the drawn tile size stay
+    # in step - the layout is built from VIEW_*, not from TILE_SIZE.
+    g.settings["zoom"] = 1.0
+    g._apply_zoom(tile)
+    mh = C.VIEW_H
     C.HUD_HEIGHT = max(190, win_h - mh)
     C.SCREEN_HEIGHT = mh + C.HUD_HEIGHT
-    gut = max(C.MIN_GUTTER_WIDTH, (win_w - C.MAP_PIXEL_WIDTH) // 2)
+    gut = max(C.MIN_GUTTER_WIDTH, (win_w - C.VIEW_W) // 2)
     C.GUTTER_WIDTH = gut
     C.MAP_OFFSET_X = gut
-    C.SCREEN_WIDTH = C.MAP_PIXEL_WIDTH + 2 * gut
+    C.SCREEN_WIDTH = C.VIEW_W + 2 * gut
     _G.ON_ANDROID = True
     g.ui_scale = C.HUD_HEIGHT / 190
     g._build_ui_metrics()
     g._setup_touch_controls()
     g.screen = pygame.Surface((C.SCREEN_WIDTH, C.SCREEN_HEIGHT), 0, 32)
 
-    share = (C.MAP_PIXEL_WIDTH * mh) / (C.SCREEN_WIDTH * C.SCREEN_HEIGHT)
-    print(f"       tile {tile}, map {C.MAP_PIXEL_WIDTH}x{mh}, HUD {C.HUD_HEIGHT} "
+    share = (C.VIEW_W * mh) / (C.SCREEN_WIDTH * C.SCREEN_HEIGHT)
+    print(f"       tile {tile}, view {C.VIEW_W}x{mh}, HUD {C.HUD_HEIGHT} "
           f"({C.HUD_HEIGHT / C.SCREEN_HEIGHT * 100:.0f}% tall), "
           f"play area {share * 100:.0f}%")
     check("the phone gets a bigger tile than the old 33", tile >= 34, tile)
@@ -168,8 +169,8 @@ try:
     g.render()
     check("the phone play view renders", True)
 finally:
-    (C.TILE_SIZE, C.MAP_PIXEL_WIDTH, C.HUD_HEIGHT, C.SCREEN_HEIGHT,
-     C.GUTTER_WIDTH, C.MAP_OFFSET_X, C.SCREEN_WIDTH) = saved
+    (C.TILE_SIZE, C.MAP_PIXEL_WIDTH, C.VIEW_W, C.VIEW_H, C.HUD_HEIGHT,
+     C.SCREEN_HEIGHT, C.GUTTER_WIDTH, C.MAP_OFFSET_X, C.SCREEN_WIDTH) = saved
     _G.ON_ANDROID = False
     g._rescale_tile_constants()
     g._build_ui_metrics()

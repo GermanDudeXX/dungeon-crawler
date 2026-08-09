@@ -54,6 +54,9 @@ class Game:
     def __init__(self):
         pygame.init()
         pygame.display.set_caption("Dungeon Crawler")
+        # Loaded first: the zoom setting decides the tile size, and that
+        # is needed before the display is sized.
+        self.settings = persistence.load_settings()
         self.ui_scale = 1.0
         # Without SCALED, SDL renders our fixed logical resolution into the
         # top-left corner of the real (much larger) device screen and
@@ -116,7 +119,6 @@ class Game:
         self._build_ui_metrics()
         self.stats = persistence.load_stats()
         self.save_data = persistence.load_save()
-        self.settings = persistence.load_settings()
         self.sounds = sound.Sounds(volume=self.settings.get("volume", sound.MASTER_VOLUME))
         self.player_sprite_right, self.player_sprite_left, self.player_sprite_large = self._load_player_sprite()
         self._measure_player_head()
@@ -140,6 +142,9 @@ class Game:
         self._name_cache = {}
         self._badge_cache = {}
         self._potion_sprite_cache = {}
+        self._glow_cache = {}
+        self._wash_cache = {}
+        self._hud_cache = None
         self.bag_page = 0
         self.shop_stock = None
         self._class_sprite_cache = {}
@@ -208,17 +213,42 @@ class Game:
         # screen is opened, not popped up over the title.
         self._pending_update_failure = updater.take_failure_marker()
 
+    def _zoom(self):
+        levels = C.ZOOM_LEVELS
+        want = self.settings.get("zoom", C.DEFAULT_ZOOM)
+        return min(levels, key=lambda z: abs(z - want))
+
+    def _apply_zoom(self, base_tile):
+        """Sets the drawn tile size from a base tile size and the zoom.
+
+        The viewport - the hole in the layout the dungeon is seen through
+        - stays the size the base tile gives, so the gutters, the HUD and
+        the touch buttons do not move when the zoom changes. Only the
+        tiles get bigger, and the view becomes a window that follows the
+        player (see _shake_offset).
+        """
+        C.VIEW_W = C.MAP_WIDTH * base_tile
+        C.VIEW_H = C.MAP_HEIGHT * base_tile
+        C.TILE_SIZE = max(base_tile, int(round(base_tile * self._zoom())))
+        C.MAP_PIXEL_WIDTH = C.MAP_WIDTH * C.TILE_SIZE
+        self._rescale_tile_constants()
+        self._map_cache = None
+        self._minimap_cache = None
+        self._tile_cache = {}
+        self._wash_cache = {}
+        self._glow_cache = {}
+
     def _apply_pc_ui_scale(self):
         self.ui_scale = 1.3
-        map_pixel_height = C.MAP_HEIGHT * C.TILE_SIZE
+        self._apply_zoom(C.TILE_SIZE)
         C.HUD_HEIGHT = int(190 * self.ui_scale)
-        C.SCREEN_HEIGHT = map_pixel_height + C.HUD_HEIGHT
+        C.SCREEN_HEIGHT = C.VIEW_H + C.HUD_HEIGHT
         # Widen the gutter too, in proportion - otherwise the now-bigger
         # D-pad (see _setup_touch_controls) would overflow past the edge
         # of the unchanged default gutter width.
         C.GUTTER_WIDTH = int(C.GUTTER_WIDTH * self.ui_scale)
         C.MAP_OFFSET_X = C.GUTTER_WIDTH
-        C.SCREEN_WIDTH = C.MAP_PIXEL_WIDTH + 2 * C.GUTTER_WIDTH
+        C.SCREEN_WIDTH = C.VIEW_W + 2 * C.GUTTER_WIDTH
 
     def _fit_screen_to_device(self):
         # pygame.display.Info() (used here previously) reports the full
@@ -247,16 +277,13 @@ class Game:
         by_width = (win_w - 2 * C.MIN_GUTTER_WIDTH) // C.MAP_WIDTH
         by_height = (win_h - C.MIN_HUD_HEIGHT) // C.MAP_HEIGHT
         tile = max(24, min(by_width, by_height))
-        C.TILE_SIZE = tile
-        C.MAP_PIXEL_WIDTH = C.MAP_WIDTH * tile
-        self._rescale_tile_constants()
+        self._apply_zoom(tile)
 
-        map_pixel_height = C.MAP_HEIGHT * C.TILE_SIZE
-        # Whatever vertical space the map leaves goes to the HUD, floored
-        # at the original design height so a short window cannot squeeze
-        # it away entirely.
-        C.HUD_HEIGHT = max(190, win_h - map_pixel_height)
-        C.SCREEN_HEIGHT = map_pixel_height + C.HUD_HEIGHT
+        # Whatever vertical space the viewport leaves goes to the HUD,
+        # floored at the original design height so a short window cannot
+        # squeeze it away entirely.
+        C.HUD_HEIGHT = max(190, win_h - C.VIEW_H)
+        C.SCREEN_HEIGHT = C.VIEW_H + C.HUD_HEIGHT
         self.ui_scale = C.HUD_HEIGHT / 190
 
         device_ratio = win_w / win_h
@@ -264,10 +291,10 @@ class Game:
         # producing a broken layout - falls back to the static
         # GUTTER_WIDTH/SCREEN_WIDTH already set in constants.py.
         if 1.2 <= device_ratio <= 3.5:
-            new_gutter = max(C.MIN_GUTTER_WIDTH, (win_w - C.MAP_PIXEL_WIDTH) // 2)
+            new_gutter = max(C.MIN_GUTTER_WIDTH, (win_w - C.VIEW_W) // 2)
             C.GUTTER_WIDTH = new_gutter
             C.MAP_OFFSET_X = new_gutter
-            C.SCREEN_WIDTH = C.MAP_PIXEL_WIDTH + 2 * new_gutter
+            C.SCREEN_WIDTH = C.VIEW_W + 2 * new_gutter
         return True
 
     def _rescale_tile_constants(self):
@@ -477,7 +504,7 @@ class Game:
 
         # Anchor the whole cluster just above the HUD band so nothing
         # overlaps it: the cross reaches s/2 + g + s beyond its centre.
-        map_bottom = C.MAP_HEIGHT * C.TILE_SIZE
+        map_bottom = C.VIEW_H
         dpad_cx = C.GUTTER_WIDTH // 2
         dpad_cy = map_bottom - self.gap_m - (s // 2 + g + s)
         self.dpad_buttons = {
@@ -1597,6 +1624,7 @@ class Game:
             self.player.armor_bonus = armor["bonus"]
 
         self._map_cache = None
+        self._minimap_cache = None
         self._recompute_fov()
 
     def _make_vault(self, rooms):
@@ -1729,6 +1757,7 @@ class Game:
         if info.get("one_shot"):
             del self.hazards[pos]
             self._map_cache = None
+            self._minimap_cache = None
         damage = self._hurt_player(info["damage"])
         if not damage:
             return
@@ -1845,6 +1874,7 @@ class Game:
         # (see _rebuild_map_cache), so this is the single place that has
         # to invalidate it - every map/level change routes through here.
         self._map_cache = None
+        self._minimap_cache = None
         self.needs_redraw = True
 
     def add_log(self, message):
@@ -1998,6 +2028,9 @@ class Game:
         self.f_tiny = pygame.font.Font(None, max(11, int(C.TILE_SIZE * 0.62)))
 
         self.btn_h = px(C.BTN_H, floor)
+        # Android's 48dp minimum touch target, in canvas pixels. Screens
+        # that have to squeeze rows in may shrink to this and no further.
+        self.btn_h_min = max(floor, px(C.BTN_H_MIN))
         self.btn_h_hero = px(C.BTN_H_HERO, floor)
         self.btn_min_w = px(C.BTN_MIN_W)
         self.btn_pad_x = px(C.BTN_PAD_X)
@@ -2117,6 +2150,27 @@ class Game:
         persistence.save_settings(self.settings)
 
     VOLUME_LEVELS = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+
+    def _cycle_zoom(self):
+        """Steps through the zoom levels and rebuilds the layout.
+
+        The viewport does not change size, so nothing else on screen
+        moves - only the tiles get bigger and the view starts following
+        the player. Everything derived from the tile size is rebuilt
+        here, which is why this is not just a settings write.
+        """
+        levels = list(C.ZOOM_LEVELS)
+        nxt = levels[(levels.index(self._zoom()) + 1) % len(levels)]
+        self.settings["zoom"] = nxt
+        persistence.save_settings(self.settings)
+        base = C.VIEW_W // C.MAP_WIDTH
+        self._apply_zoom(base)
+        self._name_cache = {}
+        self._badge_cache = {}
+        self._potion_sprite_cache = {}
+        self._hud_cache = None
+        self.needs_redraw = True
+        self.sounds.play("equip")
 
     def _cycle_volume(self):
         current = self.settings.get("volume", sound.MASTER_VOLUME)
@@ -2537,24 +2591,32 @@ class Game:
         # f_body, not the log's f_sm: the whole point is that this is
         # readable without going looking for it.
         for banner in self.banners:
-            surf = self.f_body.render(banner["text"], True, banner["color"])
-            w = surf.get_width() + pad * 4
-            h = surf.get_height() + pad
-            rect = pygame.Rect(C.SCREEN_WIDTH // 2 - w // 2, y, w, h)
-
-            panel = pygame.Surface((w, h), pygame.SRCALPHA)
+            panel = banner.get("surface")
+            if panel is None:
+                # Built once, on the frame the banner first draws, and
+                # kept. Rasterising the text and rebuilding a translucent
+                # rounded panel every frame is precisely the kind of
+                # per-frame work that costs this game its frame rate on
+                # a real device.
+                surf = self.f_body.render(banner["text"], True, banner["color"])
+                w = surf.get_width() + pad * 4
+                h = surf.get_height() + pad
+                panel = pygame.Surface((w, h), pygame.SRCALPHA)
+                pygame.draw.rect(panel, (*C.COLOR_SURFACE, 235),
+                                 (0, 0, w, h), border_radius=h // 3)
+                pygame.draw.rect(panel, (*banner["color"], 255), (0, 0, w, h),
+                                 width=2, border_radius=h // 3)
+                panel.blit(surf, surf.get_rect(center=(w // 2, h // 2)))
+                banner["surface"] = panel
+            w, h = panel.get_size()
             # Fades out over its last few ticks rather than vanishing, so
-            # a banner leaving does not read as a flicker.
+            # a banner leaving does not read as a flicker. Only the alpha
+            # changes, which is a flag on the cached surface.
             alpha = 255
             if banner["timer"] < C.BANNER_FADE_TICKS:
                 alpha = int(255 * banner["timer"] / C.BANNER_FADE_TICKS)
-            pygame.draw.rect(panel, (*C.COLOR_SURFACE, min(235, alpha)),
-                             (0, 0, w, h), border_radius=h // 3)
-            pygame.draw.rect(panel, (*banner["color"], alpha), (0, 0, w, h),
-                             width=2, border_radius=h // 3)
-            surf.set_alpha(alpha)
-            panel.blit(surf, surf.get_rect(center=(w // 2, h // 2)))
-            self.screen.blit(panel, rect)
+            panel.set_alpha(alpha)
+            self.screen.blit(panel, (C.SCREEN_WIDTH // 2 - w // 2, y))
             y += h + self.gap_s
 
     def _spawn_damage_number(self, x, y, text, color):
@@ -2658,6 +2720,8 @@ class Game:
                 self._toggle_language()
             elif key == pygame.K_v:
                 self._cycle_volume()
+            elif key == pygame.K_z:
+                self._cycle_zoom()
             elif key == pygame.K_m:
                 self._toggle_music()
             elif key == pygame.K_k and not ON_ANDROID:
@@ -3228,6 +3292,7 @@ class Game:
             self.explored = {(x, y) for y in range(C.MAP_HEIGHT)
                              for x in range(C.MAP_WIDTH)}
             self._map_cache = None
+            self._minimap_cache = None
             self.add_log(self.t("log_potion_reveal"))
         if effect.get("blink"):
             self._blink_player()
@@ -3540,6 +3605,7 @@ class Game:
             # other path this one never reaches _recompute_fov - invalidate
             # the cached tile surface here or the reveal would not show up.
             self._map_cache = None
+            self._minimap_cache = None
             self.add_log(self.t("log_reveal"))
 
         self._check_achievements()
@@ -4127,15 +4193,31 @@ class Game:
             return True
         return False
 
+    def _camera(self):
+        """Top-left corner of the map, in pixels, for the current zoom.
+
+        At zoom 1 the whole map fits the viewport and this is always
+        (0, 0). Zoomed in it follows the player, clamped so the view
+        never runs off the edge of the map and shows background.
+        """
+        map_w = C.MAP_WIDTH * C.TILE_SIZE
+        map_h = C.MAP_HEIGHT * C.TILE_SIZE
+        cam_x = int(self.player.render_x * C.TILE_SIZE + C.TILE_SIZE / 2 - C.VIEW_W / 2)
+        cam_y = int(self.player.render_y * C.TILE_SIZE + C.TILE_SIZE / 2 - C.VIEW_H / 2)
+        return (max(0, min(cam_x, map_w - C.VIEW_W)),
+                max(0, min(cam_y, map_h - C.VIEW_H)))
+
     def _shake_offset(self):
-        # C.MAP_OFFSET_X is the base offset that keeps the map centered
-        # between the two control gutters - not just a screen-shake delta.
+        # C.MAP_OFFSET_X is the base offset that keeps the viewport
+        # centred between the two control gutters - not just a screen-shake
+        # delta. The camera folds in here too, so every draw that converts
+        # a tile to a pixel picks it up without knowing about it.
+        cam_x, cam_y = self._camera()
+        ox, oy = C.MAP_OFFSET_X - cam_x, -cam_y
         if self.shake_timer <= 0:
-            return C.MAP_OFFSET_X, 0
-        return (
-            C.MAP_OFFSET_X + random.randint(-self.shake_intensity, self.shake_intensity),
-            random.randint(-self.shake_intensity, self.shake_intensity),
-        )
+            return ox, oy
+        return (ox + random.randint(-self.shake_intensity, self.shake_intensity),
+                oy + random.randint(-self.shake_intensity, self.shake_intensity))
 
     def render(self):
         if self.state == "install_prompt":
@@ -4229,7 +4311,7 @@ class Game:
         # map is inset by the shake offset, so clear a little wider than
         # the gutters to catch it.
         ox, oy = self._shake_offset()
-        map_w, map_h = C.MAP_PIXEL_WIDTH, C.MAP_HEIGHT * C.TILE_SIZE
+        map_w, map_h = C.VIEW_W, C.VIEW_H
         slack = self.shake_intensity if self.shake_timer > 0 else 0
         self.screen.fill(C.COLOR_BG, (0, 0, C.MAP_OFFSET_X + slack, map_h))
         self.screen.fill(C.COLOR_BG,
@@ -4237,12 +4319,18 @@ class Game:
                           C.SCREEN_WIDTH - C.MAP_OFFSET_X - map_w + slack, map_h))
         if slack:
             self.screen.fill(C.COLOR_BG, (0, 0, C.SCREEN_WIDTH, slack))
+        # Everything below is drawn in map coordinates and, zoomed in,
+        # reaches past the viewport on every side. Clipping is what makes
+        # the view a window rather than a drawing that overflows into the
+        # gutters and the HUD.
+        self.screen.set_clip((C.MAP_OFFSET_X, 0, C.VIEW_W, C.VIEW_H))
         self._render_map(ox, oy)
         self._render_entities(ox, oy)
         self._render_particles(ox, oy)
         self._render_nameplates(ox, oy)
         self._render_player_marker(ox, oy)
         self._render_damage_numbers(ox, oy)
+        self.screen.set_clip(None)
         self._render_flash()
         self._render_minimap()
         self._render_boss_bar()
@@ -4396,10 +4484,22 @@ class Game:
 
         title_surf = self.f_title.render("DUNGEON CRAWLER", True, C.COLOR_ACCENT)
         text_h = sum(self.pitch_body if l else self.gap_m for l in lines)
-        total = (title_surf.get_height() + self.gap_m
-                 + (sprite.get_height() + self.gap_m if sprite else 0)
-                 + text_h + self.gap_l
-                 + self.btn_h + self.btn_gap + self.btn_h)
+        fixed = (title_surf.get_height() + self.gap_m + text_h + self.gap_l
+                 + self.btn_h + self.btn_gap + self.btn_h + 2 * self.pad)
+        if sprite:
+            # The hero portrait gets whatever vertical room is left over,
+            # never more than its natural size. It is the only elastic
+            # thing on this screen, and drawing it at a fixed size pushed
+            # the button rows off the bottom of a phone canvas.
+            room = C.SCREEN_HEIGHT - fixed - self.gap_m
+            if room < sprite.get_height():
+                if room < self.gap_xl:
+                    sprite = None
+                else:
+                    w, h = sprite.get_size()
+                    sprite = pygame.transform.scale(
+                        sprite, (max(1, int(w * room / h)), int(room)))
+        total = fixed - 2 * self.pad + (sprite.get_height() + self.gap_m if sprite else 0)
         y = max(self.pad, (C.SCREEN_HEIGHT - total) // 2)
 
         self.screen.blit(title_surf, title_surf.get_rect(midtop=(C.SCREEN_WIDTH // 2, y)))
@@ -4955,6 +5055,8 @@ class Game:
             (self.t("settings_volume_label", state=f"{int(round(volume * 100))}%"),
              self.t("btn_toggle"), pygame.K_v),
             (self.t("settings_music_label", state=music_state), self.t("btn_toggle"), pygame.K_m),
+            (self.t("settings_zoom_label", state=self._mult_text(self._zoom())),
+             self.t("btn_toggle"), pygame.K_z),
             (self.t("settings_update_label", build=updater.current_build()),
              self.t("btn_check_update"), pygame.K_u),
         ]
@@ -4964,14 +5066,39 @@ class Game:
                 self.t("btn_create"), pygame.K_k,
             ))
         # Label left, button right on one shared row - stacking the label
-        # above its button needs 5 extra rows and overflows.
+        # above its button needs one extra row each and overflows.
+        #
+        # The row height is fitted to the space rather than fixed: the
+        # list has grown to six or seven entries and at a fixed btn_h the
+        # last one ran off the bottom of a phone. Floored at the 48dp
+        # touch minimum, so it shrinks only as far as it may.
         btn_w = max(self._btn_w(b) for _, b, _ in rows)
-        for label, btn, key in rows:
-            text = self.f_body.render(label, True, C.COLOR_HUD_TEXT)
-            self.screen.blit(text, text.get_rect(midleft=(self.pad, y + self.btn_h // 2)))
+        available = C.SCREEN_HEIGHT - self.pad - y
+
+        # Two columns once one will not hold the list at a legal touch
+        # size. The list has grown to six or seven entries and a phone
+        # canvas cannot stack that many 48dp rows - but it is 2448px
+        # wide, so the room is there sideways.
+        per_col = len(rows)
+        while (per_col * self.btn_h_min
+               + self.btn_gap * (per_col - 1)) > available and per_col > 1:
+            per_col = (per_col + 1) // 2
+        columns = (len(rows) + per_col - 1) // per_col
+        col_w = (C.SCREEN_WIDTH - 2 * self.pad
+                 - self.gap_l * (columns - 1)) // columns
+        row_h = max(self.btn_h_min,
+                    min(self.btn_h,
+                        (available - self.btn_gap * (per_col - 1)) // per_col))
+        font = self.f_body if columns == 1 else self.f_sm
+
+        for i, (label, btn, key) in enumerate(rows):
+            col, slot = divmod(i, per_col)
+            x = self.pad + col * (col_w + self.gap_l)
+            ry = y + slot * (row_h + self.btn_gap)
+            text = font.render(label, True, C.COLOR_HUD_TEXT)
+            self.screen.blit(text, text.get_rect(midleft=(x, ry + row_h // 2)))
             self._draw_tap_button(
-                (C.SCREEN_WIDTH - self.pad - btn_w, y, btn_w, self.btn_h), btn, key)
-            y += self.btn_h + self.btn_gap
+                (x + col_w - btn_w, ry, btn_w, row_h), btn, key, font=font)
 
     def _render_confirm_disable_touch(self):
         self.screen.fill(C.COLOR_BG)
@@ -5168,20 +5295,44 @@ class Game:
         self._button_row([(self.t("btn_leave"), pygame.K_ESCAPE)],
                          C.SCREEN_HEIGHT - self.pad - self.btn_h)
 
-    def _render_minimap(self):
-        mini_x, mini_y, scale = 8, 8, 3
+    MINIMAP_POS = (8, 8)
+    MINIMAP_SCALE = 3
+
+    def _rebuild_minimap_cache(self):
+        """Paints the explored tiles into a surface, once per change.
+
+        This used to draw one rectangle per explored tile every frame -
+        a thousand of them on a fully explored floor, plus a fresh
+        translucent panel surface each time. It was the single largest
+        item in a frame, and "many small draws" is exactly the pattern
+        that is slow on the device (see Game.__init__). Invalidated
+        alongside the map cache, which has the same trigger.
+        """
+        scale = self.MINIMAP_SCALE
         w, h = C.MAP_WIDTH * scale, C.MAP_HEIGHT * scale
-        panel = pygame.Surface((w + 4, h + 4), pygame.SRCALPHA)
-        panel.fill((10, 10, 16, 170))
-        self.screen.blit(panel, (mini_x, mini_y))
+        surf = pygame.Surface((w + 4, h + 4), pygame.SRCALPHA)
+        surf.fill((10, 10, 16, 170))
         for (x, y) in self.explored:
             color = (90, 90, 100) if self.grid[y][x] == dungeon.WALL else (55, 55, 65)
-            pygame.draw.rect(self.screen, color, (mini_x + 2 + x * scale, mini_y + 2 + y * scale, scale, scale))
+            pygame.draw.rect(surf, color, (2 + x * scale, 2 + y * scale, scale, scale))
+        self._minimap_cache = surf
+
+    def _render_minimap(self):
+        if getattr(self, "_minimap_cache", None) is None:
+            self._rebuild_minimap_cache()
+        mini_x, mini_y = self.MINIMAP_POS
+        scale = self.MINIMAP_SCALE
+        self.screen.blit(self._minimap_cache, (mini_x, mini_y))
+        # The two markers move without the explored set changing, so they
+        # stay out of the cache - two rectangles a frame instead of a
+        # thousand.
         if self.stairs_pos in self.explored:
             sx, sy = self.stairs_pos
-            pygame.draw.rect(self.screen, C.COLOR_STAIRS, (mini_x + 2 + sx * scale, mini_y + 2 + sy * scale, scale, scale))
+            pygame.draw.rect(self.screen, C.COLOR_STAIRS,
+                             (mini_x + 2 + sx * scale, mini_y + 2 + sy * scale, scale, scale))
         px, py = self.player.x, self.player.y
-        pygame.draw.rect(self.screen, (255, 255, 255), (mini_x + 2 + px * scale, mini_y + 2 + py * scale, scale, scale))
+        pygame.draw.rect(self.screen, (255, 255, 255),
+                         (mini_x + 2 + px * scale, mini_y + 2 + py * scale, scale, scale))
 
     def _render_boss_bar(self):
         if self.enemies_off:
@@ -5246,14 +5397,25 @@ class Game:
         # cached surface turns the per-frame cost into one 0.11ms blit.
         # Invalidated from _recompute_fov and wherever the map is replaced.
         tier = getattr(self, "tier", None) or C.DUNGEON_TIERS[0]
-        surf = pygame.Surface((C.MAP_PIXEL_WIDTH, C.MAP_HEIGHT * C.TILE_SIZE))
-        surf.fill(C.COLOR_BG)
         ts = C.TILE_SIZE
-        for y in range(C.MAP_HEIGHT):
+        # Only the window the camera can see, plus a tile of margin, not
+        # the whole map. Zoomed in the map is several times the size of
+        # the viewport, and painting all of it cost 19MB and 19ms a turn
+        # to produce something that was then 80% off-screen.
+        cam_x, cam_y = self._camera()
+        x0 = max(0, cam_x // ts - 1)
+        y0 = max(0, cam_y // ts - 1)
+        cols = min(C.MAP_WIDTH - x0, C.VIEW_W // ts + 3)
+        rows_n = min(C.MAP_HEIGHT - y0, C.VIEW_H // ts + 3)
+        self._map_cache_origin = (x0, y0, cols, rows_n)
+        surf = pygame.Surface((cols * ts, rows_n * ts))
+        surf.fill(C.COLOR_BG)
+        for y in range(y0, y0 + rows_n):
             row = self.grid[y]
-            for x in range(C.MAP_WIDTH):
+            for x in range(x0, x0 + cols):
                 if (x, y) not in self.explored:
                     continue
+                px, py = (x - x0) * ts, (y - y0) * ts
                 dim = (x, y) not in self.visible
                 is_wall = row[x] == dungeon.WALL
                 name = self._wall_tile_name(x, y) if is_wall else self._floor_tile_name(x, y)
@@ -5271,29 +5433,43 @@ class Game:
                     rock = tier["wall_dim"]
                     if dim:
                         rock = tuple(int(c * C.TILE_DIM_FACTOR) for c in rock)
-                    pygame.draw.rect(surf, rock, (x * ts, y * ts, ts, ts))
+                    pygame.draw.rect(surf, rock, (px, py, ts, ts))
                 if tile is None:
                     # Solid rock, or a missing tileset - a flat fill in the
                     # theme colour, so a missing asset degrades to the old
                     # look instead of an invisible dungeon.
                     if not is_wall:
                         color = tier["floor_dim"] if dim else tier["floor"]
-                        pygame.draw.rect(surf, color, (x * ts, y * ts, ts, ts))
+                        pygame.draw.rect(surf, color, (px, py, ts, ts))
                     continue
                 # Tiles taller than one cell (wall fronts, columns) hang
                 # upwards out of their cell, the way the tileset is drawn.
-                surf.blit(tile, (x * ts, y * ts + ts - tile.get_height()))
+                surf.blit(tile, (px, py + ts - tile.get_height()))
                 decor = self._decor.get((x, y))
                 if decor:
                     piece = self._tile(decor, dim)
                     if piece is not None:
-                        surf.blit(piece, (x * ts, y * ts + ts - piece.get_height()))
+                        surf.blit(piece, (px, py + ts - piece.get_height()))
         self._map_cache = surf
 
+    def _map_window_stale(self):
+        """Whether the cached window still covers what the camera sees."""
+        origin = getattr(self, "_map_cache_origin", None)
+        if origin is None:
+            return True
+        x0, y0, cols, rows_n = origin
+        ts = C.TILE_SIZE
+        cam_x, cam_y = self._camera()
+        return not (x0 * ts <= cam_x and y0 * ts <= cam_y
+                    and (x0 + cols) * ts >= cam_x + C.VIEW_W
+                    and (y0 + rows_n) * ts >= cam_y + C.VIEW_H)
+
     def _render_map(self, ox=0, oy=0):
-        if getattr(self, "_map_cache", None) is None:
+        if getattr(self, "_map_cache", None) is None or self._map_window_stale():
             self._rebuild_map_cache()
-        self.screen.blit(self._map_cache, (ox, oy))
+        x0, y0, _cols, _rows = self._map_cache_origin
+        self.screen.blit(self._map_cache,
+                         (ox + x0 * C.TILE_SIZE, oy + y0 * C.TILE_SIZE))
 
         if self.stairs_pos in self.explored:
             self._draw_ladder(*self.stairs_pos, ox, oy)
@@ -5320,11 +5496,8 @@ class Game:
             # at a glance is just an unfair hit. Over, not under: these
             # frames are fully opaque and painted straight over a wash.
             self._draw_tile_at(info["tile"], hx, hy, ox, oy, dim=dim)
-            wash = pygame.Surface((ts, ts), pygame.SRCALPHA)
-            wash.fill((*info["color"], 60 if dim else 120))
-            pygame.draw.rect(wash, (*info["color"], 110 if dim else 235),
-                             (0, 0, ts, ts), width=max(1, ts // 12))
-            self.screen.blit(wash, (hx * ts + ox, hy * ts + oy))
+            self.screen.blit(self._hazard_wash(kind, dim),
+                             (hx * ts + ox, hy * ts + oy))
 
         if self.chest_pos and self.chest_pos in self.explored:
             dim = self.chest_pos not in self.visible
@@ -5332,8 +5505,7 @@ class Game:
                 # Same halo trick as elite monsters: a closed chest is
                 # otherwise a small dark box that the guardian standing
                 # over it hides completely.
-                glow = pygame.Surface((ts * 2, ts * 2), pygame.SRCALPHA)
-                pygame.draw.ellipse(glow, (*C.COLOR_ACCENT, 70), glow.get_rect())
+                glow = self._glow(C.COLOR_ACCENT, ts * 2)
                 self.screen.blit(glow, glow.get_rect(center=(
                     self.chest_pos[0] * ts + ts // 2 + ox,
                     self.chest_pos[1] * ts + ts // 2 + oy)))
@@ -5347,6 +5519,42 @@ class Game:
         if self.boss_door_pos and self.boss_door_pos in self.explored and self._boss_door_blocked():
             self._draw_tile_at("doors_leaf_closed", *self.boss_door_pos, ox, oy,
                                dim=self.boss_door_pos not in self.visible)
+
+    def _glow(self, color, size, alpha=70):
+        """A soft elliptical halo, cached.
+
+        Elites, the chest and the blacksmith all draw one of these every
+        frame, and each was allocating a fresh per-pixel-alpha surface to
+        do it. Allocating and alpha-blending small surfaces per frame is
+        the exact pattern that costs this game its frame rate on a real
+        device - the same reason the map is painted into a cache.
+        """
+        key = (tuple(color), size, alpha)
+        cached = self._glow_cache.get(key)
+        if cached is None:
+            cached = pygame.Surface((size, size), pygame.SRCALPHA)
+            pygame.draw.ellipse(cached, (*color, alpha), cached.get_rect())
+            self._glow_cache[key] = cached
+        return cached
+
+    def _hazard_wash(self, kind, dim):
+        """The colour overlay for one hazard tile, cached per kind.
+
+        Every tile of a kind looks the same, so this was building an
+        identical surface per hazard per frame - a dozen allocations a
+        frame on a floor with a lava field on it.
+        """
+        key = (kind, dim, C.TILE_SIZE)
+        cached = self._wash_cache.get(key)
+        if cached is None:
+            info = C.HAZARD_TYPES[kind]
+            ts = C.TILE_SIZE
+            cached = pygame.Surface((ts, ts), pygame.SRCALPHA)
+            cached.fill((*info["color"], 60 if dim else 120))
+            pygame.draw.rect(cached, (*info["color"], 110 if dim else 235),
+                             (0, 0, ts, ts), width=max(1, ts // 12))
+            self._wash_cache[key] = cached
+        return cached
 
     def _draw_tile_at(self, name, x, y, ox=0, oy=0, dim=False):
         """Blits one tileset frame over a map cell, bottom-aligned.
@@ -5579,8 +5787,8 @@ class Game:
             # Soft colour-matched halo (same blended colour already used
             # for the elite's HP/name tint) instead of recolouring the
             # sprite itself - cheap and reads as "special" at a glance.
-            glow = pygame.Surface((int(sprite.get_width() * 1.3), int(sprite.get_height() * 1.3)), pygame.SRCALPHA)
-            pygame.draw.ellipse(glow, (*monster.color, 100), glow.get_rect())
+            glow = self._glow(monster.color,
+                              int(max(sprite.get_size()) * 1.3), alpha=100)
             self.screen.blit(glow, glow.get_rect(center=rect.center))
 
         self.screen.blit(sprite, rect)
@@ -5639,8 +5847,7 @@ class Game:
         center = (int(smith.x * ts + ts // 2 + ox), int(smith.y * ts + ts // 2 + oy))
         # A warm halo, the same trick elites and the chest use: he is one
         # small figure in a room and worth walking over to.
-        glow = pygame.Surface((ts * 2, ts * 2), pygame.SRCALPHA)
-        pygame.draw.ellipse(glow, (*C.COLOR_BLACKSMITH, 70), glow.get_rect())
+        glow = self._glow(C.COLOR_BLACKSMITH, ts * 2)
         self.screen.blit(glow, glow.get_rect(center=center))
         rect = sprite.get_rect(midbottom=(center[0], int(smith.y * ts + ts + oy) + 2))
         self.screen.blit(sprite, rect)
@@ -5657,7 +5864,7 @@ class Game:
     def _render_flash(self):
         if self.flash_timer <= 0:
             return
-        overlay = pygame.Surface((C.MAP_WIDTH * C.TILE_SIZE, C.MAP_HEIGHT * C.TILE_SIZE))
+        overlay = pygame.Surface((C.VIEW_W, C.VIEW_H))
         overlay.set_alpha(int(90 * (self.flash_timer / 6)))
         overlay.fill((200, 30, 30))
         self.screen.blit(overlay, (C.MAP_OFFSET_X, 0))
@@ -5699,10 +5906,27 @@ class Game:
         self.screen.blit(label, label.get_rect(center=(x + w // 2, y + h // 2)))
 
     def _render_hud(self):
+        """Draws the HUD band, reusing last frame's when nothing changed.
+
+        The band is a few dozen text renders and rounded chips, and none
+        of it can change without input: a turn only happens because the
+        player pressed or tapped something, and that same event sets
+        needs_redraw. Frames that redraw purely because something is
+        animating - a monster sliding, sparks falling - therefore get the
+        cached band instead of rasterising the same text again.
+        """
+        hud_y = C.VIEW_H
+        band = (0, hud_y, C.SCREEN_WIDTH, C.HUD_HEIGHT)
+        if not self.needs_redraw and self._hud_cache is not None:
+            self.screen.blit(self._hud_cache, (0, hud_y))
+            return
+        self._paint_hud(hud_y)
+        self._hud_cache = self.screen.subsurface(band).copy()
+
+    def _paint_hud(self, hud_y):
         # Uses the full width: the touch controls now sit above the band
         # (see _setup_touch_controls), so the old habit of indenting all
         # HUD content by the gutter left a third of the row empty.
-        hud_y = C.MAP_HEIGHT * C.TILE_SIZE
         pygame.draw.rect(self.screen, C.COLOR_HUD_BG, (0, hud_y, C.SCREEN_WIDTH, C.HUD_HEIGHT))
         pygame.draw.rect(self.screen, C.COLOR_BORDER, (0, hud_y, C.SCREEN_WIDTH, 2))
 

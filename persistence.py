@@ -60,6 +60,7 @@ DEFAULT_SETTINGS = {
     "music": True,
     "difficulty": "normal",
     "char_class": "warrior",
+    "zoom": 1.5,
 }
 
 DEFAULT_STATS = {
