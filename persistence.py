@@ -21,6 +21,16 @@ if getattr(sys, "frozen", False):
         os.makedirs(BASE_DIR, exist_ok=True)
     else:
         BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+elif "ANDROID_ARGUMENT" in os.environ:
+    # python-for-android unpacks the app into <files>/app, and on every
+    # version change it deletes that entire directory and unpacks the new
+    # one. Saving next to the source - which is what the branch below
+    # does - therefore loses stats, the current run and every setting on
+    # each update, silently, which is why the app kept coming back in
+    # English. ANDROID_PRIVATE is <files> itself, one level up, and p4a
+    # never touches it.
+    BASE_DIR = (os.environ.get("ANDROID_PRIVATE")
+                or os.path.dirname(os.path.abspath(__file__)))
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATS_PATH = os.path.join(BASE_DIR, "stats.json")
@@ -29,13 +39,19 @@ SETTINGS_PATH = os.path.join(BASE_DIR, "settings.json")
 
 
 def _migrate_legacy_files():
-    """Copies any stats/save/settings files an earlier build left next to
-    the .exe into the new AppData location, once, then removes the old
-    copies - so switching locations doesn't look like lost progress to
-    someone who already has real save data sitting next to their .exe."""
-    if not getattr(sys, "frozen", False):
+    """Moves stats/save/settings out of wherever an earlier build kept them.
+
+    Once, on the way past. On Windows that was next to the .exe (typically
+    the Downloads folder); on Android it was next to the source, in the
+    directory p4a wipes on every update. Neither switch should look like
+    lost progress to someone who already had real save data.
+    """
+    if getattr(sys, "frozen", False):
+        legacy_dir = os.path.dirname(os.path.abspath(sys.executable))
+    elif "ANDROID_ARGUMENT" in os.environ:
+        legacy_dir = os.path.dirname(os.path.abspath(__file__))
+    else:
         return
-    legacy_dir = os.path.dirname(os.path.abspath(sys.executable))
     if os.path.abspath(legacy_dir) == os.path.abspath(BASE_DIR):
         return
     for name, dest in (("stats.json", STATS_PATH), ("save.json", SAVE_PATH), ("settings.json", SETTINGS_PATH)):
