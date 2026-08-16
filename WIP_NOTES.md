@@ -138,6 +138,18 @@ hat also still Statistik, laufenden Run und alle Einstellungen mitgenommen
 `ANDROID_PRIVATE` (= `<files>`), Altbestand wird einmalig mitgenommen.
 Frischinstallation übernimmt außerdem die Gerätesprache.
 
+**„Nur auf x1 spielbar" = Tipp-Koordinaten, nicht Leistung.** Seit dem
+Letterbox-Fix streckt `_present` den Canvas selbst auf die Fenstergröße. Die
+Tipp-Ereignisse kommen aber in **Fenster**-Pixeln, alle Knöpfe liegen in
+**Canvas**-Pixeln — gleich groß sind beide nur bei x1. Bei Auto lag jeder
+Knopf rund ein Drittel Bildschirm neben seiner gezeichneten Stelle. Deshalb
+war x1 die einzige spielbare Stufe (und das Ruckeln dort der Preis dafür).
+`_canvas_pos()` rechnet jetzt um; **jede** neue Eingabequelle muss da durch.
+Ein PC-Test kann das nie finden — dort wird das Fenster in Canvas-Größe
+erzeugt, die beiden weichen nie ab. `test_touch_mapping.py` streckt deshalb
+die Display-Surface selbst **und** prüft, dass die rohe Position danebenläge
+(sonst wäre der Fix als No-Op unbemerkt wieder rausgefallen).
+
 **x1 ist kein Bug.** Voller Canvas = 2,69 Mio. Pixel/Frame gegen 1,50 Mio. bei
 Auto; der Frame skaliert sauber mit, nichts Pathologisches drin. Falsch war
 die *Beschriftung*: „1x" direkt unter „Zoom: 1.5x" liest sich wie die normale
@@ -166,7 +178,7 @@ auf dem Gerät, siehe Kommentar in `game.py`) — der Canvas-Umweg bleibt.
 ### Test/Release-Ritual (bei JEDEM Abschluss)
 ```
 cd C:/Users/budzm/dungeon-crawler
-python tests/run_all.py            # alle 22
+python tests/run_all.py            # alle 23
 python tests/run_all.py potions    # nur passende
 ```
 **Die Tests liegen jetzt im Repo unter `tests/`.** Sie lagen vorher im
@@ -179,7 +191,7 @@ SDL gibt nur einen Renderer pro Prozess her.
 Danach: `assets/build_version.txt` = Commit-Anzahl, PC-exe bauen,
 **erst der Nutzer testet am PC**, dann Push (löst den Android-Build aus)
 und exe ins `windows-latest`-Release hochladen.
-Veröffentlicht: **PC Build 82 · Android Build 72** (16.08.2026).
+Veröffentlicht: **PC Build 82 · Android Build 73** (16.08.2026).
 
 ### Umgangsregeln mit dem Nutzer
 - Deutsch, kein Quellcode, keine technischen Erklärungen — nur kurzes Wiki/Changelog.
