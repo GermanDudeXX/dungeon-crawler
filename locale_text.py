@@ -97,11 +97,13 @@ STRINGS = {
     "settings_zoom_label": {"en": "Zoom: {state}", "de": "Zoom: {state}"},
     "settings_render_label": {"en": "Graphics: {state}", "de": "Grafik: {state}"},
     "settings_fps_label": {"en": "Show frame rate: {state}", "de": "Bildrate anzeigen: {state}"},
-    "render_auto": {"en": "Auto - recommended ({value})",
-                    "de": "Automatisch - empfohlen ({value})"},
-    "render_full": {"en": "Full {value} - slow on phones",
-                    "de": "Voll {value} - am Handy langsam"},
-    "render_reduced": {"en": "{value} - faster", "de": "{value} - schneller"},
+    # Short on purpose: the settings row puts the state next to a button,
+    # and a longer one ran underneath it on a phone. The exact factor is
+    # not missed - it is already on screen whenever the frame-rate
+    # display is switched on.
+    "render_auto": {"en": "Auto (recommended)", "de": "Auto (empfohlen)"},
+    "render_full": {"en": "Full (slow)", "de": "Voll (langsam)"},
+    "render_reduced": {"en": "{value} (faster)", "de": "{value} (schneller)"},
     "log_render_scale_slow": {
         "en": "Frames are slow. Settings -> Graphics -> Auto makes it smooth again.",
         "de": "Die Bildrate ist niedrig. Einstellungen -> Grafik -> Automatisch "

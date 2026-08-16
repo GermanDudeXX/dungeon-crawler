@@ -114,6 +114,17 @@ class Game:
         # Android every pixel becomes an unaligned 3-byte access with no
         # SIMD fast path - which fits the measured ~20M px/s fill rate.
         self.screen = pygame.Surface((C.SCREEN_WIDTH, C.SCREEN_HEIGHT), 0, 32)
+        if ON_ANDROID:
+            # Once, to the log. The copy from canvas to display measured
+            # 34-66ms on the phone against a 3ms flip, and whether that is
+            # a straight copy or a per-pixel format conversion depends on
+            # these two agreeing - which cannot be guessed from a desktop.
+            print(f"canvas {self.screen.get_size()} {self.screen.get_bitsize()}bit "
+                  f"masks={self.screen.get_masks()} | "
+                  f"display {self.display.get_size()} "
+                  f"{self.display.get_bitsize()}bit "
+                  f"masks={self.display.get_masks()} | "
+                  f"window {pygame.display.get_window_size()}", flush=True)
         self.clock = pygame.time.Clock()
         # pygame.font.SysFont looks up a named font through the OS's font
         # system, which crashes on Android (no such font, no font-listing
@@ -1923,10 +1934,12 @@ class Game:
     def _recompute_fov(self):
         self.visible = fov.compute_fov(self.grid, self.player.x, self.player.y, C.FOV_RADIUS)
         self.explored |= self.visible
-        # The cached tile surface is painted from exactly these two sets
-        # (see _rebuild_map_cache), so this is the single place that has
-        # to invalidate it - every map/level change routes through here.
-        self._map_cache = None
+        # The cached tile surface is painted from exactly these two sets,
+        # so it does NOT get thrown away here: _patch_map_cache compares
+        # them against what the cache was painted from and repaints only
+        # the difference. Discarding it was costing a full ~1000-cell
+        # repaint on every step. Everything that changes the map itself
+        # rather than the view of it still sets _map_cache = None.
         self._minimap_cache = None
         self.needs_redraw = True
 
@@ -5646,50 +5659,174 @@ class Game:
         y0 = max(0, cam_y // ts - 1)
         cols = min(C.MAP_WIDTH - x0, C.VIEW_W // ts + 3)
         rows_n = min(C.MAP_HEIGHT - y0, C.VIEW_H // ts + 3)
-        self._map_cache_origin = (x0, y0, cols, rows_n)
         surf = pygame.Surface((cols * ts, rows_n * ts))
         surf.fill(C.COLOR_BG)
+
+        # The window follows the camera, so a step usually slides it by
+        # one tile and asks for almost exactly what is already painted.
+        # Copying the part they share and painting only the strip that
+        # came into view turns "the view moved" from a ~1000-cell repaint
+        # into a blit and a couple of dozen cells. Whoever calls this has
+        # brought the old cache up to date first (see _render_map), or
+        # the copied half would keep the lighting it had last turn.
+        keep = None
+        old, old_origin = self._map_cache, getattr(self, "_map_cache_origin", None)
+        if old is not None and old_origin and getattr(self, "_cache_ts", None) == ts:
+            ox0, oy0, ocols, orows = old_origin
+            kx0, ky0 = max(x0, ox0), max(y0, oy0)
+            kx1, ky1 = min(x0 + cols, ox0 + ocols), min(y0 + rows_n, oy0 + orows)
+            if kx1 > kx0 and ky1 > ky0:
+                surf.blit(old, ((kx0 - x0) * ts, (ky0 - y0) * ts),
+                          ((kx0 - ox0) * ts, (ky0 - oy0) * ts,
+                           (kx1 - kx0) * ts, (ky1 - ky0) * ts))
+                keep = (kx0, ky0, kx1, ky1)
+
         for y in range(y0, y0 + rows_n):
-            row = self.grid[y]
             for x in range(x0, x0 + cols):
-                if (x, y) not in self.explored:
+                if keep and keep[0] <= x < keep[2] and keep[1] <= y < keep[3]:
                     continue
-                px, py = (x - x0) * ts, (y - y0) * ts
-                dim = (x, y) not in self.visible
-                is_wall = row[x] == dungeon.WALL
-                name = self._wall_tile_name(x, y) if is_wall else self._floor_tile_name(x, y)
-                tile = self._tile(name, dim) if name else None
-                if is_wall:
-                    # Every wall cell gets flat rock underneath, then its
-                    # frame on top. The frames are wall *surfaces* with
-                    # transparent gaps - a room's bottom edge is a thin
-                    # ledge band and nothing else - so without a fill they
-                    # hang in mid-air as floating stripes. Deliberately the
-                    # *dim* colour even when lit: this is unlit rock behind
-                    # the wall face, and at the lit colour it matched the
-                    # floor tiles closely enough that rooms and solid rock
-                    # were hard to tell apart.
-                    rock = tier["wall_dim"]
-                    if dim:
-                        rock = tuple(int(c * C.TILE_DIM_FACTOR) for c in rock)
-                    pygame.draw.rect(surf, rock, (px, py, ts, ts))
-                if tile is None:
-                    # Solid rock, or a missing tileset - a flat fill in the
-                    # theme colour, so a missing asset degrades to the old
-                    # look instead of an invisible dungeon.
-                    if not is_wall:
-                        color = tier["floor_dim"] if dim else tier["floor"]
-                        pygame.draw.rect(surf, color, (px, py, ts, ts))
-                    continue
-                # Tiles taller than one cell (wall fronts, columns) hang
-                # upwards out of their cell, the way the tileset is drawn.
-                surf.blit(tile, (px, py + ts - tile.get_height()))
-                decor = self._decor.get((x, y))
-                if decor:
-                    piece = self._tile(decor, dim)
-                    if piece is not None:
-                        surf.blit(piece, (px, py + ts - piece.get_height()))
+                self._paint_map_cell(surf, x, y, x0, y0, tier)
+        if keep and keep[1] > y0:
+            # A wall tile is taller than its cell and hangs up into the
+            # one above. That overhang lives in the row above's pixels,
+            # which is outside the copied rectangle - so when the window
+            # scrolls up, the freshly painted row above the copy has
+            # nothing hanging over it and the wall comes out topless.
+            # Repainting the copy's first row puts it back.
+            top_rows = {(x, keep[1] + k)
+                        for x in range(keep[0], keep[2])
+                        for k in range(max(1, self._overhang_rows()))}
+            for x, y in self._with_overhangs(top_rows):
+                if y0 <= y < y0 + rows_n:
+                    self._paint_map_cell(surf, x, y, x0, y0, tier)
         self._map_cache = surf
+        self._map_cache_origin = (x0, y0, cols, rows_n)
+        self._cache_ts = ts
+        self._cache_lit = set(self.visible)
+        self._cache_explored = set(self.explored)
+
+    def _paint_map_cell(self, surf, x, y, x0, y0, tier=None):
+        """Paints one grid cell into the cached tile surface.
+
+        Split out of the full rebuild so that a turn can repaint the few
+        cells whose lighting moved instead of all of them - see
+        _patch_map_cache.
+        """
+        tier = tier or getattr(self, "tier", None) or C.DUNGEON_TIERS[0]
+        ts = C.TILE_SIZE
+        px, py = (x - x0) * ts, (y - y0) * ts
+        if (x, y) not in self.explored:
+            surf.fill(C.COLOR_BG, (px, py, ts, ts))
+            return
+        dim = (x, y) not in self.visible
+        is_wall = self.grid[y][x] == dungeon.WALL
+        name = self._wall_tile_name(x, y) if is_wall else self._floor_tile_name(x, y)
+        tile = self._tile(name, dim) if name else None
+        if is_wall:
+            # Every wall cell gets flat rock underneath, then its
+            # frame on top. The frames are wall *surfaces* with
+            # transparent gaps - a room's bottom edge is a thin
+            # ledge band and nothing else - so without a fill they
+            # hang in mid-air as floating stripes. Deliberately the
+            # *dim* colour even when lit: this is unlit rock behind
+            # the wall face, and at the lit colour it matched the
+            # floor tiles closely enough that rooms and solid rock
+            # were hard to tell apart.
+            rock = tier["wall_dim"]
+            if dim:
+                rock = tuple(int(c * C.TILE_DIM_FACTOR) for c in rock)
+            pygame.draw.rect(surf, rock, (px, py, ts, ts))
+        if tile is None:
+            # Solid rock, or a missing tileset - a flat fill in the
+            # theme colour, so a missing asset degrades to the old
+            # look instead of an invisible dungeon.
+            if not is_wall:
+                color = tier["floor_dim"] if dim else tier["floor"]
+                pygame.draw.rect(surf, color, (px, py, ts, ts))
+            return
+        if not is_wall:
+            # Repainting a single cell draws over what was there, and a
+            # floor tile can be smaller than its cell or have transparent
+            # corners - without clearing first, the old lighting shows
+            # through at the edges.
+            surf.fill(C.COLOR_BG, (px, py, ts, ts))
+        # Tiles taller than one cell (wall fronts, columns) hang
+        # upwards out of their cell, the way the tileset is drawn.
+        surf.blit(tile, (px, py + ts - tile.get_height()))
+        decor = self._decor.get((x, y))
+        if decor:
+            piece = self._tile(decor, dim)
+            if piece is not None:
+                surf.blit(piece, (px, py + ts - piece.get_height()))
+
+    def _patch_map_cache(self):
+        """Repaints only the cells whose lighting or explored state moved.
+
+        A step changes the field of view around the player, not the whole
+        window - but the cache was thrown away and painted again in full
+        on every single step, all ~1000 cells of it, in Python. On this
+        desktop that is 5.8ms against a 3.7ms frame; on the phone, where
+        the same frame costs 155ms and the graphics setting makes no
+        difference to it, it is most of what a step costs. Repainting the
+        handful of cells that actually changed is the same picture for a
+        fraction of the work.
+        """
+        # Symmetric difference on both sets, not "what was added": in
+        # play `explored` only ever grows, but a set that can only be
+        # compared one way is a trap for whatever changes next, and the
+        # difference costs exactly the same to compute.
+        changed = (self._cache_lit ^ self.visible) | (self.explored ^ self._cache_explored)
+        if not changed:
+            return
+        x0, y0, cols, rows_n = self._map_cache_origin
+        tier = getattr(self, "tier", None) or C.DUNGEON_TIERS[0]
+        for (x, y) in self._with_overhangs(changed):
+            if x0 <= x < x0 + cols and y0 <= y < y0 + rows_n:
+                self._paint_map_cell(self._map_cache, x, y, x0, y0, tier)
+        self._cache_lit = set(self.visible)
+        self._cache_explored = set(self.explored)
+
+    def _overhang_rows(self):
+        """How many cells above its own a tile can reach into.
+
+        The walls are all exactly one cell, so it is tempting to say
+        none - but the decor is not: a column is 48px of a 16px grid,
+        three cells tall, and a crate one and a half. Measured from the
+        artwork rather than assumed, because getting it wrong leaves the
+        top of a column sliced off and only on some maps.
+        """
+        cached = getattr(self, "_overhang_cells", None)
+        if cached is None:
+            tallest = max((s.get_height() for s in self._tile_sources.values()),
+                          default=C.TILE_SOURCE_SIZE)
+            cells = -(-tallest // C.TILE_SOURCE_SIZE)      # rounded up
+            cached = self._overhang_cells = max(0, cells - 1)
+        return cached
+
+    def _with_overhangs(self, cells):
+        """The given cells plus whatever stands below and reaches into them.
+
+        Repainting a cell paints its own rectangle, which wipes out the
+        part of anything standing below that reaches up into it - so
+        those have to be repainted afterwards. Repainting *those* wipes
+        out whatever reaches into them, so it is a closure and not one
+        pass: a column is three cells tall, and the cells it was cut off
+        in were two rows above it.
+
+        Only decor stands taller than its own cell - every wall and floor
+        frame in the set is exactly one cell - and decor is sparse, so
+        this stops after a step or two instead of running to the bottom
+        of the map.
+        """
+        reach = self._overhang_rows()
+        out = set(cells)
+        frontier = out
+        while frontier and reach:
+            frontier = {(x, y + k) for (x, y) in frontier
+                        for k in range(1, reach + 1)
+                        if (x, y + k) in self._decor} - out
+            out |= frontier
+        return sorted(out, key=lambda c: (c[1], c[0]))
 
     def _map_window_stale(self):
         """Whether the cached window still covers what the camera sees."""
@@ -5704,8 +5841,15 @@ class Game:
                     and (y0 + rows_n) * ts >= cam_y + C.VIEW_H)
 
     def _render_map(self, ox=0, oy=0):
-        if getattr(self, "_map_cache", None) is None or self._map_window_stale():
+        # Lighting first, then the window - in that order, because the
+        # rebuild reuses whatever the cache already holds and would
+        # otherwise carry last turn's lighting into the new window.
+        if getattr(self, "_map_cache", None) is None:
             self._rebuild_map_cache()
+        else:
+            self._patch_map_cache()
+            if self._map_window_stale():
+                self._rebuild_map_cache()
         x0, y0, _cols, _rows = self._map_cache_origin
         self.screen.blit(self._map_cache,
                          (ox + x0 * C.TILE_SIZE, oy + y0 * C.TILE_SIZE))
@@ -6144,23 +6288,47 @@ class Game:
         label = self.f_sm.render(text, True, C.COLOR_TEXT)
         self.screen.blit(label, label.get_rect(center=(x + w // 2, y + h // 2)))
 
-    def _render_hud(self):
-        """Draws the HUD band, reusing last frame's when nothing changed.
+    def _hud_signature(self):
+        """Everything the band shows, as one comparable value.
 
-        The band is a few dozen text renders and rounded chips, and none
-        of it can change without input: a turn only happens because the
-        player pressed or tapped something, and that same event sets
-        needs_redraw. Frames that redraw purely because something is
-        animating - a monster sliding, sparks falling - therefore get the
-        cached band instead of rasterising the same text again.
+        Anything drawn in _paint_hud that is not in here will go stale on
+        screen, so a new line in the band needs a new entry here.
+        """
+        p = self.player
+        return (
+            p.hp, p.max_hp, p.xp, p.xp_to_next, p.level, p.kills, p.gold,
+            p.weapon_name, p.weapon_bonus, p.weapon_rarity_id, p.weapon_element_id,
+            p.armor_name, p.armor_bonus, p.armor_rarity_id,
+            p.selected_potion, p.potion_count(p.selected_potion), p.potions,
+            p.scrolls["fireball"], p.scrolls["teleport"], p.scrolls["reveal"],
+            p.shield, p.poison_turns, p.bleed_turns,
+            tuple(sorted(p.buffs.items())),
+            self._tier_name(getattr(self, "tier", C.DUNGEON_TIERS[0])),
+            tuple(self.log),
+            # The band is laid out from these, and the language decides
+            # every word in it.
+            C.SCREEN_WIDTH, C.HUD_HEIGHT, self._lang(),
+        )
+
+    def _render_hud(self):
+        """Draws the HUD band, reusing the last one whenever it still fits.
+
+        The band is a few dozen text renders and rounded chips - measured
+        on the phone at 25ms, and up to 131ms once the log has lines to
+        wrap. It used to repaint whenever needs_redraw was set, which is
+        every key and every tap: walking across a room repainted the same
+        numbers on every step. Comparing what it would say instead means
+        it only rasterises when a number in it actually moved.
         """
         hud_y = C.VIEW_H
         band = (0, hud_y, C.SCREEN_WIDTH, C.HUD_HEIGHT)
-        if not self.needs_redraw and self._hud_cache is not None:
+        sig = self._hud_signature()
+        if self._hud_cache is not None and sig == getattr(self, "_hud_sig", None):
             self.screen.blit(self._hud_cache, (0, hud_y))
             return
         self._paint_hud(hud_y)
         self._hud_cache = self.screen.subsurface(band).copy()
+        self._hud_sig = sig
 
     def _paint_hud(self, hud_y):
         # Uses the full width: the touch controls now sit above the band
@@ -6352,7 +6520,15 @@ class Game:
         # The shadow is the panel offset downwards, so the surface has to
         # be that much taller or it would be clipped off.
         drop = max(2, h // 22)
-        surf = pygame.Surface((w, h + drop), pygame.SRCALPHA)
+        # Deliberately opaque, with the background painted in, rather than
+        # SRCALPHA for the rounded corners. Measured on the phone: eleven
+        # per-pixel-alpha blits of this size cost 88ms a frame - more than
+        # the three rounded rects and the font render they replaced, and
+        # the single largest constant item in a frame. An opaque blit is a
+        # straight copy. It is only correct because every one of these
+        # buttons sits in the gutters, on flat COLOR_BG.
+        surf = pygame.Surface((w, h + drop))
+        surf.fill(C.COLOR_BG)
         face = pygame.Rect(0, 0, w, h)
         if not active:
             pygame.draw.rect(surf, C.COLOR_BG, face.move(0, drop), border_radius=radius)
