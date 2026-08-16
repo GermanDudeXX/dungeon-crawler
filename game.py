@@ -2,6 +2,7 @@ import os
 import random
 import sys
 import threading
+import time
 
 import pygame
 
@@ -2568,13 +2569,45 @@ class Game:
             return True
         return any(m.render_x != m.x or m.render_y != m.y for m in self.monsters)
 
+    def _begin_frame(self):
+        """Starts the per-part timing behind the frame-rate display.
+
+        A frame that costs 155ms on the phone and 6ms on this desktop
+        cannot be found by profiling the desktop, and "it is the pixels"
+        turned out to be wrong: the full canvas and a 25% smaller one
+        cost the same 6fps on the device. So the frame has to say where
+        it went, on the device, in its own words.
+
+        Skipped entirely unless the display is switched on - a timer
+        around every part of every frame is exactly the sort of per-frame
+        cost this exists to find.
+        """
+        if not self.settings.get("show_fps"):
+            self._timings = None
+            return
+        self._timings = []
+        self._mark_at = time.perf_counter()
+
+    def _mark(self, name):
+        if self._timings is None:
+            return
+        now = time.perf_counter()
+        self._timings.append((name, (now - self._mark_at) * 1000.0))
+        self._mark_at = now
+
     def _render_fps(self):
         """Frame time and rate, top-left, when switched on in Settings.
 
-        Deliberately measured around the whole frame including the
-        present, because that copy is most of the cost on a phone. The
-        text is only re-rendered twice a second - a per-frame font render
-        in the thing that measures per-frame cost would be its own joke.
+        The rate is the interval between drawn frames, which is the frame
+        cost only while something is moving - this is a turn-based game
+        and a still screen is deliberately redrawn twice a second, so a
+        reading taken on a standing player says 500ms and means nothing.
+        The breakdown underneath is the previous frame's, since the
+        present has not happened yet when this draws.
+
+        The text is only re-rendered twice a second - a per-frame font
+        render in the thing that measures per-frame cost would be its own
+        joke.
         """
         now = pygame.time.get_ticks()
         self._fps_frames += 1
@@ -2586,12 +2619,22 @@ class Game:
                 f"{fps:.0f} fps   {ms:.0f} ms   {C.SCREEN_WIDTH}x{C.SCREEN_HEIGHT}"
                 f"   x{self.render_scale:.2f}",
                 C.COLOR_ACCENT)
+            parts = getattr(self, "_last_timings", None)
+            if parts:
+                text = "  ".join(f"{n} {v:.0f}" for n, v in parts)
+                self._fps_parts_surface = self._f_tiny_outlined(text, C.COLOR_ACCENT)
+                # Also to the log, where it can be read off a device over
+                # adb without squinting at a screenshot.
+                print("frame ms: " + text, flush=True)
             self._fps_since = now
             self._fps_frames = 0
         if self._fps_surface is not None:
             x = self.MINIMAP_POS[0]
             y = self.MINIMAP_POS[1] + C.MAP_HEIGHT * self.MINIMAP_SCALE + 8
             self.screen.blit(self._fps_surface, (x, y))
+            parts = getattr(self, "_fps_parts_surface", None)
+            if parts is not None:
+                self.screen.blit(parts, (x, y + self._fps_surface.get_height() + 2))
 
     def _present(self):
         # One large sequential copy of the in-RAM canvas onto the real
@@ -2611,7 +2654,10 @@ class Game:
                                    self.display)
         else:
             self.display.blit(self.screen, (0, 0))
+        self._mark("copy")
         pygame.display.flip()
+        self._mark("flip")
+        self._last_timings = self._timings
 
     def _handle_movement_repeat(self):
         keys = pygame.key.get_pressed()
@@ -4399,6 +4445,7 @@ class Game:
                 oy + random.randint(-self.shake_intensity, self.shake_intensity))
 
     def render(self):
+        self._begin_frame()
         if self.state == "install_prompt":
             self._render_install_prompt()
             self._present()
@@ -4502,21 +4549,27 @@ class Game:
         # reaches past the viewport on every side. Clipping is what makes
         # the view a window rather than a drawing that overflows into the
         # gutters and the HUD.
+        self._mark("clear")
         self.screen.set_clip((C.MAP_OFFSET_X, 0, C.VIEW_W, C.VIEW_H))
         self._render_map(ox, oy)
+        self._mark("map")
         self._render_entities(ox, oy)
         self._render_particles(ox, oy)
         self._render_nameplates(ox, oy)
         self._render_player_marker(ox, oy)
         self._render_damage_numbers(ox, oy)
+        self._mark("ents")
         self.screen.set_clip(None)
         self._render_flash()
         self._render_minimap()
+        self._mark("mini")
         self._render_boss_bar()
         self._render_boss_banner()
         self._render_banners()
         self._render_hud()
+        self._mark("hud")
         self._render_touch_controls()
+        self._mark("touch")
 
         if self.state == "dead":
             self._render_game_over()
