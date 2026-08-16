@@ -95,11 +95,24 @@ jobs:
             echo "::error::be updated in place. See the comment in this workflow."
             exit 1
           fi
-          mkdir -p ~/.android
-          echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
-          keytool -list -keystore ~/.android/debug.keystore                   -storepass android -alias androiddebugkey             || { echo "::error::the restored keystore is not usable"; exit 1; }
-          echo "signing key restored:"
-          keytool -list -v -keystore ~/.android/debug.keystore                   -storepass android -alias androiddebugkey             | grep -i "SHA256:" | head -1
+          echo "$KEYSTORE_B64" | base64 -d > /tmp/debug.keystore
+          keytool -list -keystore /tmp/debug.keystore                   -storepass android -alias androiddebugkey             || { echo "::error::the restored keystore is not usable"; exit 1; }
+
+          # Into every .android directory the build might read. The Android
+          # Gradle plugin takes the debug keystore from
+          # $ANDROID_SDK_HOME/.android, and buildozer points ANDROID_SDK_HOME
+          # at its own platform directory - so writing only to $HOME/.android
+          # left Gradle to generate a key of its own, and the published APK
+          # came out signed with that instead. Verified after the build
+          # below, because that is exactly the sort of thing that looks
+          # fine in the log and is wrong in the artifact.
+          for d in "$HOME/.android"                    "$HOME/.buildozer/android/platform/.android"                    "$HOME/.buildozer/android/platform/android-sdk/.android"; do
+            mkdir -p "$d"
+            cp /tmp/debug.keystore "$d/debug.keystore"
+          done
+          FP=$(keytool -list -v -keystore /tmp/debug.keystore -storepass android                  -alias androiddebugkey | grep -i "SHA256:" | head -1                | tr -d ' ' | sed 's/^SHA256://I' | tr -d ':' | tr 'A-Z' 'a-z')
+          echo "EXPECTED_FINGERPRINT=$FP" >> "$GITHUB_ENV"
+          echo "signing key: $FP"
 
       # Baked into the app bundle (assets/) so a running build can compare
       # itself against the build number in the latest GitHub release's
@@ -126,6 +139,31 @@ jobs:
       - name: Build APK
         run: |
           yes | buildozer -v android debug
+
+      # The APK is what ships, so the APK is what gets checked. Android
+      # refuses to install an update whose signature differs from the
+      # installed app, and the user sees "conflicts with an existing
+      # package" with no way to keep their save data - so publishing one
+      # signed with the wrong key is worse than not publishing at all.
+      - name: Verify the APK is signed with that key
+        run: |
+          APK=$(ls bin/*.apk | head -1)
+          APKSIGNER=$(find "$HOME/.buildozer" -name apksigner -type f 2>/dev/null                       | sort | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::apksigner not found - cannot verify the signature"
+            exit 1
+          fi
+          ACTUAL=$("$APKSIGNER" verify --print-certs "$APK"                    | grep -i "SHA-256 digest" | head -1                    | awk '{print $NF}' | tr -d ':' | tr 'A-Z' 'a-z')
+          echo "expected: $EXPECTED_FINGERPRINT"
+          echo "actual:   $ACTUAL"
+          if [ "$ACTUAL" != "$EXPECTED_FINGERPRINT" ]; then
+            echo "::error::the APK is signed with a different key than the one"
+            echo "::error::restored from ANDROID_DEBUG_KEYSTORE. Installing it"
+            echo "::error::over the existing app would fail with a package"
+            echo "::error::conflict, so this build is not being published."
+            exit 1
+          fi
+          echo "signature matches"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
