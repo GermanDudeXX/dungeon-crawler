@@ -116,7 +116,7 @@ Schritt geprüft + 15 Wiederholungen + Rollback, Fehlermarker → Meldung im
 Update-Screen, sauberer Exit statt `os._exit`, `_MEI`-Aufräumen beim Start.
 Getestet mit `test_updater_swap.py` (echtes cmd.exe, echte Sperren).
 
-### Android-Paketkonflikt + „Lags bei x1" (16.08.2026): **BEHOBEN**
+### Android-Paketkonflikt + „Lags" (16.08.2026): **BEHOBEN**
 **Konflikt:** Der Debug-Keystore lag in einem `actions/cache`. GitHub wirft
 einen Cache raus, der 7 Tage nicht gelesen wurde — das Repo lag 12 Tage still,
 Gradle erzeugte einen neuen Schlüssel, und Android verweigert ein Update mit
@@ -150,6 +150,42 @@ erzeugt, die beiden weichen nie ab. `test_touch_mapping.py` streckt deshalb
 die Display-Surface selbst **und** prüft, dass die rohe Position danebenläge
 (sonst wäre der Fix als No-Op unbemerkt wieder rausgefallen).
 
+### Was einen Frame auf dem Handy wirklich kostet (16.08.2026, am Gerät gemessen)
+**Nicht raten — messen.** `show_fps` schaltet jetzt eine Aufschlüsselung pro
+Frame-Abschnitt ein, die auch nach logcat geht (`frame ms: …`). Am PC kostet
+derselbe Frame 6 ms, am Handy 155 ms; jede Erklärung, die am PC hergeleitet
+wurde, war falsch.
+
+Gemessen bei 0,75 **und** bei 1,0: **155 ms bzw. 178 ms** — die Canvas-Größe
+ist also *nicht* der Engpass (nur ~15 %). Die Brocken waren:
+| Posten | stehend | in Bewegung | Ursache |
+|---|---|---|---|
+| Touch-Knöpfe | 82–91 ms | 61–78 ms | 11 SRCALPHA-Blits → jetzt undurchsichtig |
+| Karten-Cache | 2–4 ms | 106–277 ms | Vollneubau pro Schritt → jetzt inkrementell |
+| HUD-Band | 1–2 ms | 25–131 ms | Neubau bei jedem `needs_redraw` → jetzt bei echter Änderung |
+| Kopie Canvas→Display | 34–57 ms | 6–66 ms | langsamer Speicher, bleibt |
+| `flip` (SDL) | 3 ms | 4 ms | unkritisch |
+
+**Fallstricke beim inkrementellen Karten-Cache** (beides von
+`test_incremental_cache.py` pixelgenau über 40 Karten abgesichert):
+- Eine Zelle neu zu malen löscht, was von **unten** hineinragt. Wände sind
+  exakt eine Zelle hoch — die hohen Kacheln sind die **Deko**: `column` ist
+  48 px = **drei** Zellen. Darum `_with_overhangs()` als Abschluss über
+  `self._decor`, nicht als ein Schritt nach unten.
+- Beim Verschieben des Fensters verlieren die frisch gemalten Reihen über dem
+  kopierten Bereich ihren Überstand → oberste Reihen des Kopierbereichs
+  nachmalen.
+
+**Achtung bei Messungen:** Die fps-Anzeige zeigt den *Abstand* zwischen zwei
+Zeichenvorgängen. Das Spiel ist rundenbasiert und zeichnet ein stehendes Bild
+nur alle 500 ms — im Stand zeigt sie darum ~660 ms und bedeutet nichts. Immer
+mit gehaltener Richtungstaste messen
+(`adb shell input swipe X Y X Y 6000`).
+
+**Gerät testen:** Bildschirm muss **entsperrt** sein, sonst wartet SDL auf die
+Oberfläche und Python startet gar nicht (schwarzes Bild, keine Log-Ausgabe).
+Nach jedem Update entpackt p4a erst das Python-Bündel (~30 s schwarz).
+
 **x1 ist kein Bug.** Voller Canvas = 2,69 Mio. Pixel/Frame gegen 1,50 Mio. bei
 Auto; der Frame skaliert sauber mit, nichts Pathologisches drin. Falsch war
 die *Beschriftung*: „1x" direkt unter „Zoom: 1.5x" liest sich wie die normale
@@ -178,7 +214,7 @@ auf dem Gerät, siehe Kommentar in `game.py`) — der Canvas-Umweg bleibt.
 ### Test/Release-Ritual (bei JEDEM Abschluss)
 ```
 cd C:/Users/budzm/dungeon-crawler
-python tests/run_all.py            # alle 23
+python tests/run_all.py            # alle 24
 python tests/run_all.py potions    # nur passende
 ```
 **Die Tests liegen jetzt im Repo unter `tests/`.** Sie lagen vorher im
@@ -191,7 +227,7 @@ SDL gibt nur einen Renderer pro Prozess her.
 Danach: `assets/build_version.txt` = Commit-Anzahl, PC-exe bauen,
 **erst der Nutzer testet am PC**, dann Push (löst den Android-Build aus)
 und exe ins `windows-latest`-Release hochladen.
-Veröffentlicht: **PC Build 82 · Android Build 73** (16.08.2026).
+Veröffentlicht: **PC Build 82 · Android Build 75** (16.08.2026).
 
 ### Umgangsregeln mit dem Nutzer
 - Deutsch, kein Quellcode, keine technischen Erklärungen — nur kurzes Wiki/Changelog.
