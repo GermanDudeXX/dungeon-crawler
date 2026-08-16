@@ -110,7 +110,10 @@ jobs:
             mkdir -p "$d"
             cp /tmp/debug.keystore "$d/debug.keystore"
           done
-          FP=$(keytool -list -v -keystore /tmp/debug.keystore -storepass android                  -alias androiddebugkey | grep -i "SHA256:" | head -1                | tr -d ' ' | sed 's/^SHA256://I' | tr -d ':' | tr 'A-Z' 'a-z')
+          # The fingerprint is the last field on keytool's SHA256 line;
+          # taking it any other way drags the label and the leading tab
+          # along with it.
+          FP=$(keytool -list -v -keystore /tmp/debug.keystore -storepass android                  -alias androiddebugkey | grep -i "SHA256:" | head -1                | awk '{print $NF}' | tr -d ':' | tr 'A-Z' 'a-z')
           echo "EXPECTED_FINGERPRINT=$FP" >> "$GITHUB_ENV"
           echo "signing key: $FP"
 
@@ -147,23 +150,53 @@ jobs:
       # signed with the wrong key is worse than not publishing at all.
       - name: Verify the APK is signed with that key
         run: |
-          APK=$(ls bin/*.apk | head -1)
-          APKSIGNER=$(find "$HOME/.buildozer" -name apksigner -type f 2>/dev/null                       | sort | tail -1)
-          if [ -z "$APKSIGNER" ]; then
-            echo "::error::apksigner not found - cannot verify the signature"
-            exit 1
-          fi
-          ACTUAL=$("$APKSIGNER" verify --print-certs "$APK"                    | grep -i "SHA-256 digest" | head -1                    | awk '{print $NF}' | tr -d ':' | tr 'A-Z' 'a-z')
-          echo "expected: $EXPECTED_FINGERPRINT"
-          echo "actual:   $ACTUAL"
-          if [ "$ACTUAL" != "$EXPECTED_FINGERPRINT" ]; then
-            echo "::error::the APK is signed with a different key than the one"
-            echo "::error::restored from ANDROID_DEBUG_KEYSTORE. Installing it"
-            echo "::error::over the existing app would fail with a package"
-            echo "::error::conflict, so this build is not being published."
-            exit 1
-          fi
-          echo "signature matches"
+          python3 - "$(ls bin/*.apk | head -1)" "$EXPECTED_FINGERPRINT" <<'PY'
+          import hashlib, re, struct, sys
+
+          apk_path, expected = sys.argv[1], sys.argv[2].lower()
+          data = open(apk_path, "rb").read()
+
+          # The certificate lives in the APK Signing Block, which sits just
+          # before the central directory and ends with this magic. Read it
+          # here rather than shelling out to apksigner: the SDK's location
+          # depends on how buildozer laid itself out, and a verification
+          # step that cannot find its tool just fails for the wrong reason.
+          magic = data.rfind(b"APK Sig Block 42")
+          if magic == -1:
+              sys.exit("no APK signing block - the APK is not signed")
+          end = magic + 16
+          size = struct.unpack_from("<Q", data, magic - 8)[0]
+          block = data[end - 8 - size:end]
+
+          found = set()
+          i = 0
+          while True:
+              i = block.find(bytes([0x30, 0x82]), i)
+              if i == -1:
+                  break
+              length = struct.unpack_from(">H", block, i + 2)[0] + 4
+              cand = block[i:i + length]
+              # A signing certificate, not some other DER structure that
+              # happens to start the same way: a Certificate is a SEQUENCE
+              # whose first member is itself a SEQUENCE (the tbsCertificate),
+              # it carries the subject name, and it is of plausible size.
+              if (cand[4:6] == bytes([0x30, 0x82])
+                      and b"Android" in cand and 400 < length < 4000):
+                  found.add(hashlib.sha256(cand).hexdigest())
+              i += 1
+
+          print("expected:", expected)
+          for f in sorted(found):
+              print("in APK:  ", f)
+          if expected in found:
+              print("signature matches")
+          else:
+              sys.exit(
+                  "the APK is signed with a different key than the one restored "
+                  "from ANDROID_DEBUG_KEYSTORE. Installing it over the existing "
+                  "app would fail with a package conflict, so this build is not "
+                  "being published.")
+          PY
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
