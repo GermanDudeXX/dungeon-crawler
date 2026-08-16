@@ -116,6 +116,36 @@ Schritt geprüft + 15 Wiederholungen + Rollback, Fehlermarker → Meldung im
 Update-Screen, sauberer Exit statt `os._exit`, `_MEI`-Aufräumen beim Start.
 Getestet mit `test_updater_swap.py` (echtes cmd.exe, echte Sperren).
 
+### Android-Paketkonflikt + „Lags bei x1" (16.08.2026): **BEHOBEN**
+**Konflikt:** Der Debug-Keystore lag in einem `actions/cache`. GitHub wirft
+einen Cache raus, der 7 Tage nicht gelesen wurde — das Repo lag 12 Tage still,
+Gradle erzeugte einen neuen Schlüssel, und Android verweigert ein Update mit
+geänderter Signatur. Keystore liegt jetzt im Repo-Secret
+`ANDROID_DEBUG_KEYSTORE` (kein Ablaufdatum), Fingerabdruck
+`4C:73:58:71:9C:2F:C7:71:…:DA:F1:B2:DB`.
+Den Keystore in `.android`-Verzeichnisse zu kopieren reichte **zweimal nicht**
+— wo die Android-Tools ihre Preferences suchen, verschiebt buildozer. Die APK
+wird deshalb nach dem Build **selbst signiert** (`apksigner`, v1+v2+v3), und
+ein Prüfschritt liest das Zertifikat direkt aus dem APK-Signing-Block und
+bricht ab, statt eine falsch signierte APK zu veröffentlichen.
+Der Keystore gehört **nicht** ins öffentliche Repo: nur ein Debug-Key, aber
+wer ihn hat, baut eine APK, die sich über diese drüber installiert.
+
+**Spielstände:** p4a entpackt die App nach `<files>/app` und **löscht dieses
+Verzeichnis bei jedem Versionswechsel**. Die Daten lagen darin — jedes Update
+hat also still Statistik, laufenden Run und alle Einstellungen mitgenommen
+(daher kam die App immer wieder auf Englisch hoch). Liegen jetzt in
+`ANDROID_PRIVATE` (= `<files>`), Altbestand wird einmalig mitgenommen.
+Frischinstallation übernimmt außerdem die Gerätesprache.
+
+**x1 ist kein Bug.** Voller Canvas = 2,69 Mio. Pixel/Frame gegen 1,50 Mio. bei
+Auto; der Frame skaliert sauber mit, nichts Pathologisches drin. Falsch war
+die *Beschriftung*: „1x" direkt unter „Zoom: 1.5x" liest sich wie die normale
+Wahl. Jede Stufe sagt jetzt, was sie kostet, und eine anhaltende Serie zu
+langsamer Frames bei selbst gewählter Stufe weist einmal auf Auto hin.
+Direkt in die Display-Surface zu zeichnen ist **keine** Option (250 ms/Frame
+auf dem Gerät, siehe Kommentar in `game.py`) — der Canvas-Umweg bleibt.
+
 ### Wichtige Design-Entscheidungen (nicht versehentlich rückgängig machen)
 - **Map-Cache**: Tiles NUR in `_rebuild_map_cache` blitten, nie pro Frame.
   Voll erkundet 5,2 ms, nur bei FOV-Wechsel. Frame bleibt bei 2,9 ms.
@@ -136,7 +166,7 @@ Getestet mit `test_updater_swap.py` (echtes cmd.exe, echte Sperren).
 ### Test/Release-Ritual (bei JEDEM Abschluss)
 ```
 cd C:/Users/budzm/dungeon-crawler
-python tests/run_all.py            # alle 20
+python tests/run_all.py            # alle 22
 python tests/run_all.py potions    # nur passende
 ```
 **Die Tests liegen jetzt im Repo unter `tests/`.** Sie lagen vorher im
@@ -149,7 +179,7 @@ SDL gibt nur einen Renderer pro Prozess her.
 Danach: `assets/build_version.txt` = Commit-Anzahl, PC-exe bauen,
 **erst der Nutzer testet am PC**, dann Push (löst den Android-Build aus)
 und exe ins `windows-latest`-Release hochladen.
-Veröffentlicht: **PC Build 82 · Android Build 61** (28.07.2026).
+Veröffentlicht: **PC Build 82 · Android Build 72** (16.08.2026).
 
 ### Umgangsregeln mit dem Nutzer
 - Deutsch, kein Quellcode, keine technischen Erklärungen — nur kurzes Wiki/Changelog.
