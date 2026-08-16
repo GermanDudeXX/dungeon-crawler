@@ -132,14 +132,57 @@ def delete_save():
         os.remove(SAVE_PATH)
 
 
+def device_language():
+    """The language the device is set to, as one of locale_text's codes.
+
+    A fresh install has no settings file. Defaulting flatly to English
+    meant the first screen was in a language the player had not picked,
+    and there is no first-run prompt to correct it - they had to find
+    Settings in a menu they could not read yet. This comes up more often
+    than "first install" suggests: an Android app whose signing key
+    changes has to be reinstalled, which takes the settings with it.
+
+    Only the two languages the game actually has are considered.
+    """
+    tag = ""
+    if "ANDROID_ARGUMENT" in os.environ:
+        try:
+            from jnius import autoclass
+            tag = autoclass("java.util.Locale").getDefault().getLanguage() or ""
+        except Exception:
+            # Any failure here (no pyjnius, a class loader that cannot
+            # see it) only means we do not know - never a broken start.
+            tag = ""
+    if not tag:
+        for var in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+            tag = os.environ.get(var) or ""
+            if tag:
+                break
+    if not tag:
+        # Windows sets none of those, and this is where a German
+        # desktop actually answers.
+        try:
+            import locale
+            tag = locale.getdefaultlocale()[0] or ""
+        except (ValueError, TypeError, AttributeError):
+            tag = ""
+    return "de" if tag.lower().startswith("de") else "en"
+
+
+def _defaults_for_a_new_install():
+    fresh = dict(DEFAULT_SETTINGS)
+    fresh["language"] = device_language()
+    return fresh
+
+
 def load_settings():
     if not os.path.exists(SETTINGS_PATH):
-        return dict(DEFAULT_SETTINGS)
+        return _defaults_for_a_new_install()
     try:
         with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
-        return dict(DEFAULT_SETTINGS)
+        return _defaults_for_a_new_install()
     merged = dict(DEFAULT_SETTINGS)
     merged.update(data)
     return merged

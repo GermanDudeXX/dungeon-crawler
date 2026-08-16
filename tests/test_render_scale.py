@@ -142,4 +142,40 @@ g._apply_zoom(C.BASE_TILE_SIZE)
 assert not g._touch_btn_cache, "the zoom left buttons cached at the old size"
 print("  zoom clears the cache")
 
+# --- 4. a fresh install speaks the device's language -----------------------
+# The reinstall an APK signing change forces takes settings.json with it,
+# so this is the screen the player comes back to.
+import importlib
+
+saved_env = {k: os.environ.get(k)
+             for k in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG")}
+try:
+    for tag, want in (("de_DE.UTF-8", "de"), ("de", "de"),
+                      ("en_GB.UTF-8", "en"), ("fr_FR.UTF-8", "en")):
+        for k in saved_env:
+            os.environ.pop(k, None)
+        os.environ["LANGUAGE"] = tag
+        got = persistence.device_language()
+        assert got == want, f"{tag!r} -> {got!r}, expected {want!r}"
+    print("  device language: de_DE/de -> de, en_GB/fr_FR -> en")
+
+    # An unreadable settings file must land on the same footing as no
+    # settings file at all, not on a flat English default.
+    os.environ["LANGUAGE"] = "de_DE.UTF-8"
+    real_exists = os.path.exists
+    persistence_path = persistence.SETTINGS_PATH
+    try:
+        os.path.exists = lambda p: False if p == persistence_path else real_exists(p)
+        assert persistence.load_settings()["language"] == "de", (
+            "a fresh install ignored the device language")
+    finally:
+        os.path.exists = real_exists
+    print("  a fresh install starts in the device's language")
+finally:
+    for k, v in saved_env.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
 print("\nALL RENDER-SCALE CHECKS PASSED")
