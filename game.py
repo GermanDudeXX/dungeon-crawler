@@ -62,6 +62,8 @@ class Game:
         self._fps_frames = 0
         self._fps_since = 0
         self._fps_surface = None
+        self._slow_frames = 0
+        self._slow_warned = False
         # Without SCALED, SDL renders our fixed logical resolution into the
         # top-left corner of the real (much larger) device screen and
         # leaves the rest black. SCALED stretches the same fixed-size
@@ -148,6 +150,7 @@ class Game:
         self._potion_sprite_cache = {}
         self._glow_cache = {}
         self._wash_cache = {}
+        self._touch_btn_cache = {}
         self._hud_cache = None
         self.bag_page = 0
         self.shop_stock = None
@@ -266,6 +269,7 @@ class Game:
         self._tile_cache = {}
         self._wash_cache = {}
         self._glow_cache = {}
+        self._touch_btn_cache = {}
 
     def _apply_pc_ui_scale(self):
         # Every value here comes from the BASE_* constants, never from the
@@ -2058,6 +2062,9 @@ class Game:
         k = C.SCREEN_HEIGHT / C.UI_REF_HEIGHT
         if not ON_ANDROID:
             k *= C.UI_DESKTOP_FACTOR
+        # The finished touch buttons were drawn with the fonts and sizes
+        # this is about to replace.
+        self._touch_btn_cache = {}
         # A real touch target on phones, in canvas pixels - so it follows
         # the render scale, which is what turns canvas pixels into screen
         # pixels.
@@ -2224,10 +2231,20 @@ class Game:
         self.sounds.play("equip")
 
     def _render_scale_name(self):
+        """Names each setting by what it costs, not by its number.
+
+        The full canvas showed as "1x" one row under "Zoom: 1.5x", which
+        makes it read as the neutral, normal choice. On a phone it is the
+        expensive one - nearly twice the pixels per frame of auto - and
+        the only way to find that out was to play on it.
+        """
         want = self.settings.get("render_scale", C.DEFAULT_RENDER_SCALE)
         if want == "auto":
             return self.t("render_auto", value=self._mult_text(self.render_scale))
-        return self._mult_text(float(want))
+        value = self._mult_text(float(want))
+        if float(want) >= 1.0:
+            return self.t("render_full", value=value)
+        return self.t("render_reduced", value=value)
 
     def _cycle_render_scale(self):
         """Steps through the render scales. Takes effect on the next start.
@@ -2498,10 +2515,31 @@ class Game:
             self._music_watchdog()
 
             if self._should_redraw():
+                began = pygame.time.get_ticks()
                 self.render()
                 self.needs_redraw = False
                 self._last_draw_ms = pygame.time.get_ticks()
+                self._note_frame_cost(self._last_draw_ms - began)
             self.clock.tick(POLL_HZ)
+
+    def _note_frame_cost(self, ms):
+        """Says once when the chosen graphics setting is too slow here.
+
+        Only for an explicitly chosen scale: "auto" already sizes the
+        canvas to a pixel budget, so a slow frame there is not something
+        the player can do anything about, and a message would just be
+        noise. The full canvas is nearly twice the pixels of auto on a
+        phone and there is no way to make it cheaper - the only useful
+        thing to say is which setting to change.
+        """
+        if self._slow_warned or self.state != "playing":
+            return
+        if self.settings.get("render_scale", C.DEFAULT_RENDER_SCALE) == "auto":
+            return
+        self._slow_frames = self._slow_frames + 1 if ms > C.SLOW_FRAME_MS else 0
+        if self._slow_frames >= C.SLOW_FRAME_STREAK:
+            self._slow_warned = True
+            self._notify(self.t("log_render_scale_slow"), C.COLOR_ACCENT)
 
     def _should_redraw(self):
         # This is a turn-based game: between the player's moves the screen
@@ -6223,14 +6261,40 @@ class Game:
         label = self.f_sm.render(text, True, label_color or C.COLOR_HUD_TEXT)
         self.screen.blit(label, (x + self.f_sm.size("XX")[0], y))
 
-    def _draw_touch_button(self, rect, label, active=False):
-        radius = rect.height // 4
-        fill = C.COLOR_ACCENT if active else C.COLOR_SURFACE
-        border = C.COLOR_ACCENT if active else C.COLOR_BORDER
-        self._panel(rect, fill=fill, border=border, radius=radius, shadow=not active)
+    def _touch_button_surface(self, size, label, active):
+        """One finished button, kept until the layout or language changes.
+
+        A button is three rounded rects and a font render, and there are
+        up to eleven of them on screen - every frame, for a picture that
+        only changes when a direction is held down. Drawn once into a
+        small surface, the frame pays a blit instead.
+        """
+        key = (size, label, active)
+        surf = self._touch_btn_cache.get(key)
+        if surf is not None:
+            return surf
+        w, h = size
+        radius = h // 4
+        # The shadow is the panel offset downwards, so the surface has to
+        # be that much taller or it would be clipped off.
+        drop = max(2, h // 22)
+        surf = pygame.Surface((w, h + drop), pygame.SRCALPHA)
+        face = pygame.Rect(0, 0, w, h)
+        if not active:
+            pygame.draw.rect(surf, C.COLOR_BG, face.move(0, drop), border_radius=radius)
+        pygame.draw.rect(surf, C.COLOR_ACCENT if active else C.COLOR_SURFACE,
+                         face, border_radius=radius)
+        pygame.draw.rect(surf, C.COLOR_ACCENT if active else C.COLOR_BORDER,
+                         face, width=2, border_radius=radius)
         text = self.f_sm.render(label, True,
                                 C.COLOR_ON_ACCENT if active else C.COLOR_TEXT)
-        self.screen.blit(text, text.get_rect(center=rect.center))
+        surf.blit(text, text.get_rect(center=face.center))
+        self._touch_btn_cache[key] = surf
+        return surf
+
+    def _draw_touch_button(self, rect, label, active=False):
+        self.screen.blit(self._touch_button_surface(rect.size, label, active),
+                         rect.topleft)
 
     def _render_touch_controls(self):
         # The menu button is the only touch path to the pause menu (and

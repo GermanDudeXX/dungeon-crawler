@@ -143,6 +143,45 @@ jobs:
         run: |
           yes | buildozer -v android debug
 
+      # Seeding debug.keystore into the directories the build might read
+      # was tried twice and produced two different keys, neither of them
+      # ours: where the Android tooling looks for its preferences depends
+      # on ANDROID_USER_HOME / ANDROID_SDK_HOME / $HOME in an order that
+      # buildozer rearranges. Rather than keep guessing at that, sign the
+      # finished APK ourselves - then it does not matter what Gradle did.
+      - name: Sign the APK with our key
+        run: |
+          APK=$(ls bin/*.apk | head -1)
+          SDK_TOOL() {
+            find "$HOME/.buildozer" "$ANDROID_SDK_ROOT" "$ANDROID_HOME" \
+                 /usr/local/lib/android -name "$1" -type f 2>/dev/null \
+              | sort -V | tail -1
+          }
+          APKSIGNER=$(SDK_TOOL apksigner)
+          ZIPALIGN=$(SDK_TOOL zipalign)
+          if [ -z "$APKSIGNER" ] || [ -z "$ZIPALIGN" ]; then
+            echo "::error::apksigner/zipalign not found in the Android SDK"
+            exit 1
+          fi
+          echo "apksigner: $APKSIGNER"
+
+          # Gradle's own signature has to go first: apksigner would leave
+          # the old v1 signature files in META-INF and the APK would carry
+          # two conflicting JAR signatures.
+          zip -q -d "$APK" 'META-INF/*.RSA' 'META-INF/*.SF' 'META-INF/*.DSA' \
+            || true
+          # Deleting entries rewrites the archive, which loses the
+          # alignment the native libraries are mapped from - so realign
+          # before signing, and never after (v2 signs the bytes as they
+          # are, and moving them afterwards invalidates it).
+          "$ZIPALIGN" -p -f 4 "$APK" "$APK.aligned"
+          mv "$APK.aligned" "$APK"
+          "$APKSIGNER" sign --ks /tmp/debug.keystore --ks-pass pass:android \
+                       --ks-key-alias androiddebugkey --key-pass pass:android \
+                       --v1-signing-enabled true --v2-signing-enabled true \
+                       --v3-signing-enabled true "$APK"
+          rm -f "$APK.idsig"
+
       # The APK is what ships, so the APK is what gets checked. Android
       # refuses to install an update whose signature differs from the
       # installed app, and the user sees "conflicts with an existing

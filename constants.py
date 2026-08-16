@@ -74,6 +74,16 @@ MIN_HUD_HEIGHT = 190
 MAX_CANVAS_PIXELS = 1_500_000
 RENDER_SCALES = ("auto", 1.0, 0.75, 0.5)
 DEFAULT_RENDER_SCALE = "auto"
+
+# Picking 1.0 by hand on a phone is choosing to draw 2.7M pixels a frame
+# instead of 1.5M, and it is the one setting where the consequence only
+# shows up later, in play. Nothing here can make those pixels cheaper -
+# so instead, a sustained run of frames this far over the 33ms budget
+# says once, in the game, which setting to change. A single slow frame
+# means nothing (a level loads, the OS takes the CPU away), hence the
+# streak.
+SLOW_FRAME_MS = 60
+SLOW_FRAME_STREAK = 20
 SCREEN_HEIGHT = VIEW_H + HUD_HEIGHT
 
 # Menu/info screens are laid out from these sizes rather than by zooming a

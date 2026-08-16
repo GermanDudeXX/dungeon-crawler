@@ -97,7 +97,16 @@ STRINGS = {
     "settings_zoom_label": {"en": "Zoom: {state}", "de": "Zoom: {state}"},
     "settings_render_label": {"en": "Graphics: {state}", "de": "Grafik: {state}"},
     "settings_fps_label": {"en": "Show frame rate: {state}", "de": "Bildrate anzeigen: {state}"},
-    "render_auto": {"en": "Auto ({value})", "de": "Automatisch ({value})"},
+    "render_auto": {"en": "Auto - recommended ({value})",
+                    "de": "Automatisch - empfohlen ({value})"},
+    "render_full": {"en": "Full {value} - slow on phones",
+                    "de": "Voll {value} - am Handy langsam"},
+    "render_reduced": {"en": "{value} - faster", "de": "{value} - schneller"},
+    "log_render_scale_slow": {
+        "en": "Frames are slow. Settings -> Graphics -> Auto makes it smooth again.",
+        "de": "Die Bildrate ist niedrig. Einstellungen -> Grafik -> Automatisch "
+              "macht es wieder flüssig.",
+    },
     "log_render_scale_restart": {
         "en": "Graphics setting saved - it applies next time you start the game.",
         "de": "Grafik-Einstellung gespeichert - sie greift beim nächsten Start.",
