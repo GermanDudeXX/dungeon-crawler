@@ -71,17 +71,35 @@ jobs:
       # Gradle's default debug signing config auto-generates
       # ~/.android/debug.keystore with fixed, well-known credentials if it
       # doesn't already exist, and reuses it if it does. A fresh Actions
-      # runner has none, so every build was getting signed with a brand
-      # new key - Android then refuses to install a new APK over the old
-      # one ("update" becomes "conflicting install", forcing an uninstall
-      # first). Caching this one file with a key that's NOT tied to
-      # buildozer.spec (unlike the cache above) makes it survive forever
-      # once created, so every build after this one signs identically.
-      - name: Cache debug keystore (stable signing key across builds)
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: debug-keystore-v1
+      # runner has none, so a build with no key of its own gets signed
+      # with a brand new one - and Android then refuses to install the
+      # APK over the existing app, because a package's signature may not
+      # change. The user sees "conflicts with an existing package" and has
+      # to uninstall, which takes their save data with it.
+      #
+      # This used to live in an actions/cache entry. That is not a durable
+      # home: GitHub evicts a cache that has not been read for 7 days, the
+      # repo sat idle for twelve, the key was regenerated, and the
+      # conflict came back. A repository secret has no expiry.
+      #
+      # The keystore is not in the repository on purpose. It is only a
+      # debug key, but anyone holding it can build an APK that installs
+      # over this one, so it does not belong in a public tree.
+      - name: Restore the signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::ANDROID_DEBUG_KEYSTORE is not set. Every build would"
+            echo "::error::be signed with a different key and the app could not"
+            echo "::error::be updated in place. See the comment in this workflow."
+            exit 1
+          fi
+          mkdir -p ~/.android
+          echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+          keytool -list -keystore ~/.android/debug.keystore                   -storepass android -alias androiddebugkey             || { echo "::error::the restored keystore is not usable"; exit 1; }
+          echo "signing key restored:"
+          keytool -list -v -keystore ~/.android/debug.keystore                   -storepass android -alias androiddebugkey             | grep -i "SHA256:" | head -1
 
       # Baked into the app bundle (assets/) so a running build can compare
       # itself against the build number in the latest GitHub release's
