@@ -7,6 +7,18 @@ source.include_exts = py,png,jpg,jpeg,ttf,json,txt,mp3,ogg,pem
 source.exclude_dirs = p4a-recipes
 version = 0.1
 
+# Neither of these was set, so the app carried python-for-android's
+# default icon and showed nothing at all while starting. That second
+# part is worse than it sounds: p4a unpacks the whole Python bundle on
+# the first launch after every update, about half a minute on a phone,
+# and a blank screen for half a minute after an update reads as a crash.
+# Both images are generated from the game's own art by
+# tools/make_launcher_art.py. The colour is COLOR_BG, so the frame
+# around the start-up image is the same black the game itself opens on.
+icon.filename = %(source.dir)s/assets/icon.png
+presplash.filename = %(source.dir)s/assets/presplash.png
+android.presplash_color = #0d0f14
+
 # pygame pinned to 2.6.1: p4a's bundled pygame recipe (recipes/pygame in
 # kivy/python-for-android) hardcodes version 2.1.0 unless overridden here.
 # Both 2.1.0 and 2.5.0's checked-in src_c/_sdl2/sdl2.c contain an unqualified

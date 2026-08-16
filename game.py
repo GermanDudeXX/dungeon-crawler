@@ -4850,15 +4850,36 @@ class Game:
         card_w = min(self.content_w // len(cards) - self.gap_s, self.content_w // 3)
 
         rows = [self._class_rows(k) for k in cards]
+        body_h = max(len(r) for r in rows) * self.pitch_xs
+
+        def card_height(sprite_h, blurb_lines):
+            return (self.gap_s + sprite_h + self.gap_s + self.f_h1.get_height()
+                    + self.gap_s + body_h + blurb_lines * self.pitch_xs
+                    + self.gap_m + self.btn_h + self.gap_s)
+
         # Sized from the card, not the font: this is the one screen where
         # the hero art is meant to be looked at rather than glanced past.
         sprite_h = max(64, int(card_w * 0.22))
-        body_h = max(len(r) for r in rows) * self.pitch_xs
-        blurb_h = 2 * self.pitch_xs
-        card_h = (self.gap_s + sprite_h + self.gap_s + self.f_h1.get_height()
-                  + self.gap_s + body_h + blurb_h + self.gap_m + self.btn_h + self.gap_s)
+        blurb_lines = 2
+        # The trailing gap_s keeps the button off the very bottom edge
+        # rather than flush against it.
+        back_h = self.btn_h + self.gap_l + self.gap_s
 
-        back_h = self.btn_h + self.gap_l
+        # ...but not at the cost of the back button, which is the only way
+        # off this screen with a finger. It used to be placed under the
+        # cards at whatever height they came out, which on a phone put it
+        # half off the bottom edge at every graphics setting. The art
+        # gives way first, then the blurb: both are nice to have, a button
+        # that is not on the screen is not.
+        room = C.SCREEN_HEIGHT - y - back_h
+        card_h = card_height(sprite_h, blurb_lines)
+        while card_h > room and sprite_h > 32:
+            sprite_h = max(32, sprite_h - 4)
+            card_h = card_height(sprite_h, blurb_lines)
+        while card_h > room and blurb_lines > 0:
+            blurb_lines -= 1
+            card_h = card_height(sprite_h, blurb_lines)
+
         y = max(y, y + (C.SCREEN_HEIGHT - y - card_h - back_h) // 3)
 
         total_w = card_w * len(cards) + self.gap_s * (len(cards) - 1)
@@ -4883,7 +4904,7 @@ class Game:
                 self.screen.blit(surf, surf.get_rect(midtop=(rect.centerx, ly)))
                 ly += self.pitch_xs
             for line in self._wrap_text(self._class_blurb(klass), self.f_xs,
-                                        card_w - 2 * self.gap_s)[:2]:
+                                        card_w - 2 * self.gap_s)[:blurb_lines]:
                 surf = self.f_xs.render(line, True, C.COLOR_TEXT)
                 self.screen.blit(surf, surf.get_rect(midtop=(rect.centerx, ly)))
                 ly += self.pitch_xs
@@ -5671,7 +5692,9 @@ class Game:
         # the copied half would keep the lighting it had last turn.
         keep = None
         old, old_origin = self._map_cache, getattr(self, "_map_cache_origin", None)
-        if old is not None and old_origin and getattr(self, "_cache_ts", None) == ts:
+        if (old is not None and old_origin
+                and getattr(self, "_cache_ts", None) == ts
+                and getattr(self, "_cache_grid", None) is self.grid):
             ox0, oy0, ocols, orows = old_origin
             kx0, ky0 = max(x0, ox0), max(y0, oy0)
             kx1, ky1 = min(x0 + cols, ox0 + ocols), min(y0 + rows_n, oy0 + orows)
@@ -5702,6 +5725,7 @@ class Game:
         self._map_cache = surf
         self._map_cache_origin = (x0, y0, cols, rows_n)
         self._cache_ts = ts
+        self._cache_grid = self.grid
         self._cache_lit = set(self.visible)
         self._cache_explored = set(self.explored)
 
@@ -5844,7 +5868,16 @@ class Game:
         # Lighting first, then the window - in that order, because the
         # rebuild reuses whatever the cache already holds and would
         # otherwise carry last turn's lighting into the new window.
-        if getattr(self, "_map_cache", None) is None:
+        #
+        # A different grid object means a different level: a new floor, a
+        # loaded save, the test room. That used to be caught by
+        # _recompute_fov throwing the cache away, which it no longer
+        # does, and descending then showed the previous floor's stonework
+        # under the new one's layout. Checked here rather than by
+        # invalidating at each of the four places that build a map,
+        # because the fifth one would forget.
+        if (getattr(self, "_map_cache", None) is None
+                or getattr(self, "_cache_grid", None) is not self.grid):
             self._rebuild_map_cache()
         else:
             self._patch_map_cache()
