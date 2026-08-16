@@ -2476,8 +2476,9 @@ class Game:
                 if event.type == pygame.KEYDOWN:
                     self._handle_key(event.key)
                 elif event.type == pygame.MOUSEBUTTONDOWN:
-                    self._note_press(event.pos)
-                    self._handle_tap(event.pos)
+                    pos = self._canvas_pos(event.pos)
+                    self._note_press(pos)
+                    self._handle_tap(pos)
                 elif event.type == pygame.MOUSEBUTTONUP:
                     self.touch_direction = None
                     self._pressed_key = None
@@ -2775,6 +2776,26 @@ class Game:
 
     def _spawn_damage_number(self, x, y, text, color):
         self.damage_numbers.append({"x": x, "y": y, "text": text, "color": color, "timer": 30, "max_timer": 30})
+
+    def _canvas_pos(self, pos):
+        """Where a touch landed on the canvas, not on the display.
+
+        Every button is laid out and hit-tested in canvas coordinates,
+        but the events arrive in the display's. Those are the same size
+        only when the canvas is not being stretched - that is, only at
+        graphics 1x. At any other setting _present blows the canvas up to
+        fill the window, and an untranslated touch lands short of where
+        the button is drawn by exactly that factor: at auto on a phone,
+        about a third of the screen off. Buttons that do nothing and taps
+        that hit the wrong thing is the whole of "unplayable unless it is
+        on 1x", and it starts at the letterboxing fix, which is what made
+        the two sizes differ in the first place.
+        """
+        dw, dh = self.display.get_size()
+        cw, ch = self.screen.get_size()
+        if not dw or not dh or (dw, dh) == (cw, ch):
+            return pos
+        return (pos[0] * cw // dw, pos[1] * ch // dh)
 
     def _note_press(self, pos):
         """Remember which button is under the finger, for the pressed look.
