@@ -225,7 +225,16 @@ check("springing a mimic adds exactly one monster",
 check("the chest is gone once it turns out to be a mimic", g.chest_pos is None)
 check("a mimic gets the first hit", g.player.hp < 999, g.player.hp)
 mimic = next(m for m in g.monsters if m.is_mimic)
-check("a mimic stands where the chest was", (mimic.x, mimic.y) == chest)
+# Next to the chest, not on it - and above all not on the player, who
+# is standing on the chest, because that is how a chest gets opened.
+# A mimic sharing the hero's tile cannot be attacked at all: attacks
+# are aimed at the tile you walk into, and that is never your own.
+# This test used to require the old behaviour, which is how it stayed
+# that way; playing the game is what turned it up.
+beside_chest = (abs(mimic.x - chest[0]) <= 1 and abs(mimic.y - chest[1]) <= 1)
+check("a mimic springs up at the chest", beside_chest, (mimic.x, mimic.y))
+check("a mimic does not stand on the player",
+      (mimic.x, mimic.y) != (g.player.x, g.player.y))
 check("a mimic is awake", mimic.awake)
 plain = g._make_monster(1, 1, mimic.kind)
 check("a mimic is tougher than its plain version", mimic.max_hp > plain.max_hp)

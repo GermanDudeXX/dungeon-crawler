@@ -25,7 +25,8 @@ SUITES = [
     "test_classes", "test_juice", "test_smith", "test_ui_music",
     "test_render_scale", "test_android_paths", "test_touch_mapping",
     "test_incremental_cache", "test_screen_fits", "test_partial_present",
-    "test_testroom_save",
+    "test_testroom_save", "test_shopkeeper_blocks",
+    "test_playthrough",
 ]
 
 
