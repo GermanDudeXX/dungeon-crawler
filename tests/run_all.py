@@ -23,7 +23,8 @@ SUITES = [
     "test_up_stairs", "test_loop_timing", "test_updater_swap",
     "test_wave1", "test_potions", "test_rooms", "test_enemies",
     "test_classes", "test_juice", "test_smith", "test_ui_music",
-    "test_render_scale", "test_android_paths", "test_touch_mapping", "test_incremental_cache", "test_screen_fits",
+    "test_render_scale", "test_android_paths", "test_touch_mapping",
+    "test_incremental_cache", "test_screen_fits", "test_partial_present",
 ]
 
 

@@ -2582,6 +2582,46 @@ class Game:
             return True
         return any(m.render_x != m.x or m.render_y != m.y for m in self.monsters)
 
+    def _viewport_rect(self):
+        """The dungeon view, plus the slack the screen shake draws into."""
+        slack = self.shake_intensity if self.shake_timer > 0 else 0
+        return pygame.Rect(C.MAP_OFFSET_X - slack, 0,
+                           C.VIEW_W + 2 * slack, C.VIEW_H + slack
+                           ).clip(self.screen.get_rect())
+
+    def _mark_dirty(self, rect):
+        if self._dirty is not None:
+            self._dirty.append(pygame.Rect(rect).clip(self.screen.get_rect()))
+
+    def _furniture_signature(self):
+        """Everything outside the dungeon view, as one comparable value.
+
+        If any of this moves, the whole frame is redrawn and the whole
+        canvas is copied; otherwise only the dungeon view is. So anything
+        drawn outside the view that is missing here would freeze on
+        screen - it must all be in the tuple, and when in doubt it goes
+        in, since being here only costs an occasional full frame.
+        """
+        boss = next((m for m in self.monsters
+                     if m.is_boss and m.awake and m.is_alive()), None)
+        return (
+            self.state,
+            self._hud_signature(),
+            # The minimap is deliberately absent: it draws itself on
+            # every frame and asks for its own corner, because the player
+            # marker on it moves on every step.
+            # Buttons: which ones exist, and which one is held down.
+            self.touch_direction, self.settings.get("show_touch_controls", True),
+            self.test_room, tuple(sorted(self.scroll_buttons)),
+            # Overlays that sit across the whole screen.
+            self.flash_timer, self.boss_banner_timer,
+            self.shake_timer > 0,
+            boss.hp if boss else None, boss.max_hp if boss else None,
+            len(self.banners),
+            tuple(self._banner_alpha(b) for b in self.banners),
+            getattr(self, "_pressed_key", None),
+        )
+
     def _begin_frame(self):
         """Starts the per-part timing behind the frame-rate display.
 
@@ -2644,10 +2684,23 @@ class Game:
         if self._fps_surface is not None:
             x = self.MINIMAP_POS[0]
             y = self.MINIMAP_POS[1] + C.MAP_HEIGHT * self.MINIMAP_SCALE + 8
-            self.screen.blit(self._fps_surface, (x, y))
             parts = getattr(self, "_fps_parts_surface", None)
+            area = pygame.Rect(x, y, self._fps_surface.get_width(),
+                               self._fps_surface.get_height())
+            if parts is not None:
+                area.union_ip(pygame.Rect(x, y + self._fps_surface.get_height() + 2,
+                                          *parts.get_size()))
+            # This sits in the gutter, which is no longer cleared on
+            # every frame - so it clears its own patch, and asks for that
+            # patch to be copied, rather than drawing new numbers on top
+            # of the old ones and having nobody carry them to the screen.
+            area.union_ip(getattr(self, "_fps_rect", area))
+            self.screen.fill(C.COLOR_BG, area)
+            self.screen.blit(self._fps_surface, (x, y))
             if parts is not None:
                 self.screen.blit(parts, (x, y + self._fps_surface.get_height() + 2))
+            self._fps_rect = area
+            self._mark_dirty(area)
 
     def _present(self):
         # One large sequential copy of the in-RAM canvas onto the real
@@ -2665,8 +2718,17 @@ class Game:
         if self.display.get_size() != self.screen.get_size():
             pygame.transform.scale(self.screen, self.display.get_size(),
                                    self.display)
-        else:
+        elif self._dirty is None:
             self.display.blit(self.screen, (0, 0))
+        else:
+            # Only what moved. This copy is the single most expensive
+            # thing in a frame on the phone - the display surface lives in
+            # memory the CPU writes to slowly - and it costs in
+            # proportion to the area, so copying the dungeon view instead
+            # of the whole canvas is most of the way to a playable frame
+            # rate. What may be left out is decided in render(); this end
+            # only obeys.
+            self.display.blits([(self.screen, r, r) for r in self._dirty])
         self._mark("copy")
         pygame.display.flip()
         self._mark("flip")
@@ -2792,6 +2854,19 @@ class Game:
         self._notify(text, color)
         return text
 
+    @staticmethod
+    def _banner_alpha(banner):
+        """How solid a banner is drawn - full, until its last few ticks.
+
+        This is what the screen shows, as opposed to the banner's timer,
+        which counts down on every tick and would otherwise make every
+        frame with a banner on it a full redraw for a picture that has
+        not changed.
+        """
+        if banner["timer"] >= C.BANNER_FADE_TICKS:
+            return 255
+        return int(255 * banner["timer"] / C.BANNER_FADE_TICKS)
+
     def _render_banners(self):
         if not self.banners:
             return
@@ -2826,11 +2901,11 @@ class Game:
             # Fades out over its last few ticks rather than vanishing, so
             # a banner leaving does not read as a flicker. Only the alpha
             # changes, which is a flag on the cached surface.
-            alpha = 255
-            if banner["timer"] < C.BANNER_FADE_TICKS:
-                alpha = int(255 * banner["timer"] / C.BANNER_FADE_TICKS)
-            panel.set_alpha(alpha)
+            panel.set_alpha(self._banner_alpha(banner))
             self.screen.blit(panel, (C.SCREEN_WIDTH // 2 - w // 2, y))
+            # A banner is wider than the dungeon view and hangs into the
+            # gutters, which are not copied to the screen unless asked.
+            self._mark_dirty((C.SCREEN_WIDTH // 2 - w // 2, y, w, h))
             y += h + self.gap_s
 
     def _spawn_damage_number(self, x, y, text, color):
@@ -4459,6 +4534,9 @@ class Game:
 
     def render(self):
         self._begin_frame()
+        # Menus and the title are laid out fresh every time and are rare,
+        # so they copy the whole canvas; only gameplay narrows this down.
+        self._dirty = None
         if self.state == "install_prompt":
             self._render_install_prompt()
             self._present()
@@ -4552,12 +4630,29 @@ class Game:
         ox, oy = self._shake_offset()
         map_w, map_h = C.VIEW_W, C.VIEW_H
         slack = self.shake_intensity if self.shake_timer > 0 else 0
-        self.screen.fill(C.COLOR_BG, (0, 0, C.MAP_OFFSET_X + slack, map_h))
-        self.screen.fill(C.COLOR_BG,
-                         (C.MAP_OFFSET_X + map_w - slack, 0,
-                          C.SCREEN_WIDTH - C.MAP_OFFSET_X - map_w + slack, map_h))
-        if slack:
-            self.screen.fill(C.COLOR_BG, (0, 0, C.SCREEN_WIDTH, slack))
+
+        # Everything outside the dungeon view - the gutters, the buttons,
+        # the minimap, the band - is the same picture as last frame
+        # almost every frame, and the canvas still holds it. Redrawing it
+        # anyway cost most of a frame on the phone, and copying it to the
+        # display cost the rest. So it is compared first and skipped when
+        # nothing in it moved; see _furniture_signature for what counts
+        # as moved, and _present for the other half of this.
+        self._dirty = []
+        furniture = self._furniture_signature()
+        # The death screen lays a translucent sheet over the whole canvas
+        # every frame, so it needs the canvas painted fresh underneath -
+        # otherwise the sheet stacks on itself and the picture keeps
+        # getting darker.
+        redraw_all = (furniture != getattr(self, "_furniture_sig", None)
+                      or self.state != "playing")
+        if redraw_all:
+            self.screen.fill(C.COLOR_BG, (0, 0, C.MAP_OFFSET_X + slack, map_h))
+            self.screen.fill(C.COLOR_BG,
+                             (C.MAP_OFFSET_X + map_w - slack, 0,
+                              C.SCREEN_WIDTH - C.MAP_OFFSET_X - map_w + slack, map_h))
+            if slack:
+                self.screen.fill(C.COLOR_BG, (0, 0, C.SCREEN_WIDTH, slack))
         # Everything below is drawn in map coordinates and, zoomed in,
         # reaches past the viewport on every side. Clipping is what makes
         # the view a window rather than a drawing that overflows into the
@@ -4573,16 +4668,25 @@ class Game:
         self._render_damage_numbers(ox, oy)
         self._mark("ents")
         self.screen.set_clip(None)
+        # These four sit *over* the dungeon view, which is repainted every
+        # frame - so they are too, or the view would simply cover them up.
+        # Each marks the patch it drew, because a banner is wider than the
+        # view and reaches into the gutters.
         self._render_flash()
-        self._render_minimap()
-        self._mark("mini")
         self._render_boss_bar()
         self._render_boss_banner()
         self._render_banners()
-        self._render_hud()
-        self._mark("hud")
-        self._render_touch_controls()
-        self._mark("touch")
+        self._render_minimap()
+        self._mark("mini")
+        if redraw_all:
+            self._render_hud()
+            self._mark("hud")
+            self._render_touch_controls()
+            self._mark("touch")
+            self._dirty = None                  # the whole canvas moved
+        else:
+            self._mark_dirty(self._viewport_rect())
+        self._furniture_sig = furniture
 
         if self.state == "dead":
             self._render_game_over()
@@ -5595,7 +5699,19 @@ class Game:
             self._rebuild_minimap_cache()
         mini_x, mini_y = self.MINIMAP_POS
         scale = self.MINIMAP_SCALE
+        area = pygame.Rect(mini_x, mini_y, *self._minimap_cache.get_size())
+        # The cached panel is translucent, and the gutter under it is no
+        # longer cleared on every frame - so without this the map would
+        # be laid over the last frame's copy of itself and get darker
+        # every frame.
+        self.screen.fill(C.COLOR_BG, area)
         self.screen.blit(self._minimap_cache, (mini_x, mini_y))
+        # Drawn on every frame and asking only for its own corner, rather
+        # than being part of the furniture: the player marker moves on
+        # every step, and rebuilding the whole screen for a three-pixel
+        # dot was turning every step into a full frame. The whole map is
+        # a couple of hundred pixels across.
+        self._mark_dirty(area)
         # The two markers move without the explored set changing, so they
         # stay out of the cache - two rectangles a frame instead of a
         # thousand.
@@ -5639,7 +5755,9 @@ class Game:
         if phase:
             label += f"  ·  {self.tn(phase['name']).upper()}"
         name_text = self.font.render(label, True, (255, 255, 255))
-        self.screen.blit(name_text, name_text.get_rect(center=(C.SCREEN_WIDTH // 2, y + bar_h // 2)))
+        where = name_text.get_rect(center=(C.SCREEN_WIDTH // 2, y + bar_h // 2))
+        self.screen.blit(name_text, where)
+        self._mark_dirty(pygame.Rect(x, y, bar_w, bar_h).union(where))
 
     def _render_boss_banner(self):
         if self.boss_banner_timer <= 0:
@@ -5647,7 +5765,9 @@ class Game:
         ratio = min(1.0, (self.boss_banner_timer / 90) * 2)
         text = self.big_font.render(self.t("boss_appears"), True, C.COLOR_BOSS)
         text.set_alpha(int(255 * ratio))
-        self.screen.blit(text, text.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - 250)))
+        where = text.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - 250))
+        self.screen.blit(text, where)
+        self._mark_dirty(where)
 
     def _render_damage_numbers(self, ox=0, oy=0):
         for dn in self.damage_numbers:
@@ -6284,6 +6404,7 @@ class Game:
         overlay.set_alpha(int(90 * (self.flash_timer / 6)))
         overlay.fill((200, 30, 30))
         self.screen.blit(overlay, (C.MAP_OFFSET_X, 0))
+        self._mark_dirty((C.MAP_OFFSET_X, 0, C.VIEW_W, C.VIEW_H))
 
     def _hud_chip(self, x, y, h, icon, text, text_color=None, icon_color=None,
                   min_w=0):
