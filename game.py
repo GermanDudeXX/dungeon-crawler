@@ -2761,10 +2761,12 @@ class Game:
             self.shake_timer > 0,
             self.boss_banner_timer > 0,
             boss is not None,
-            # Their texts, not their fade: the text decides how wide the
-            # panel is, and a narrower one replacing a wider one has to
-            # repaint what the wider one covered.
-            tuple(b["text"] for b in self.banners),
+            # The banners are deliberately absent: they draw over the
+            # view every frame and record their patch, and the frame one
+            # of them leaves, the patch it left is cleaned up below - so
+            # a banner arriving no longer costs a whole screen. They come
+            # up constantly in play (a coin picked up, a trap sprung),
+            # and each one was a 150-215ms frame on the phone.
             getattr(self, "_pressed_key", None),
         )
 
@@ -4882,6 +4884,14 @@ class Game:
         # frame - so they are too, or the view would simply cover them up.
         # Each marks the patch it drew, because a banner is wider than the
         # view and reaches into the gutters.
+        # Whatever an overlay covered last frame is cleaned up first:
+        # inside the view the map has just been repainted over it (the
+        # region takes these patches in), outside it there is nothing
+        # else to do it, and a banner that has gone would otherwise
+        # stay on the gutters until something else repainted them.
+        for patch in getattr(self, "_overlay_rects_prev", ()):
+            self._clear_outside_view(patch)
+            self._mark_dirty(patch)
         self._render_flash()
         self._render_boss_bar()
         self._render_boss_banner()

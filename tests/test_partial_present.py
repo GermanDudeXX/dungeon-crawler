@@ -185,7 +185,7 @@ culprits = Counter()
 # In the order _furniture_signature builds them, so a failure names
 # the field instead of an index.
 FIELDS = ["state", "touch_dir", "show_touch", "test_room", "scrolls",
-          "shake", "boss_banner", "boss_present", "banner_texts",
+          "shake", "boss_banner", "boss_present",
           "pressed_key"]
 assert len(FIELDS) == len(g._furniture_signature()), (
     "the labels have drifted from the signature - a failure below "
@@ -269,6 +269,10 @@ for _ in range(6):
             break
     for _ in range(4):
         g._update_animations()
+        # Killing things earns levels, and the level-up choice is a
+        # menu over the whole screen - correct, and not what is being
+        # measured here.
+        g.state = "playing"
         note_changes()
         g.render()
         fight_copied.append(sum(r.w * r.h for r in g._dirty)
