@@ -152,6 +152,8 @@ def note_changes():
             culprits[FIELDS[i] if i < len(FIELDS) else f"#{i}"] += 1
 
 
+copied = []
+canvas_px = g.screen.get_width() * g.screen.get_height()
 frames = turns = 0
 for _ in range(8):
     for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
@@ -166,6 +168,8 @@ for _ in range(8):
         g._update_animations()
         note_changes()
         g.render()
+        copied.append(sum(r.w * r.h for r in g._dirty)
+                      if g._dirty is not None else canvas_px)
         frames += 1
 g._render_touch_controls = real
 print(f"  {frames} Bilder über {turns} Züge -> die Tasten wurden "
@@ -195,6 +199,22 @@ for _ in range(200):
 assert len(seen) > 1, (
     "the overlay never changed, so this proved nothing - it is refreshed "
     "twice a second and 200 frames should have crossed that")
+# How much of the canvas a walking frame copies. This is the number the
+# whole thing is for: the copy lands in memory the phone writes to
+# slowly, so it costs in proportion to this area. Asserted as work
+# rather than as milliseconds, which would only measure this desktop.
+import statistics
+
+# The median, not the worst: a turn that changes the band is a full
+# frame by design, and one of those in the run would otherwise hide
+# what all the others cost.
+typical = statistics.median(copied) / canvas_px
+print(f"  kopierte Fläche beim Laufen: {typical * 100:.0f}% des Bildes "
+      f"(Median über {len(copied)} Bilder)")
+assert typical < 0.6, (
+    f"a walking frame copies {typical * 100:.0f}% of the canvas - the "
+    f"point of this was to copy the dungeon view, not the whole screen")
+
 print(f"  Bildraten-Anzeige: {len(seen)} verschiedene Stände, jeder auf dem Schirm")
 
 print("\nALL PARTIAL-PRESENT CHECKS PASSED")

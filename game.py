@@ -114,6 +114,18 @@ class Game:
         # Android every pixel becomes an unaligned 3-byte access with no
         # SIMD fast path - which fits the measured ~20M px/s fill rate.
         self.screen = pygame.Surface((C.SCREEN_WIDTH, C.SCREEN_HEIGHT), 0, 32)
+        # The one copy per frame from here onto the display is the most
+        # expensive thing in a frame on a phone, and a blit between two
+        # surfaces of the *same* format is a row-by-row memcpy while one
+        # between different formats is a per-pixel shuffle. So take the
+        # display's own channel order when it is also 32-bit - but never
+        # its format outright: a 24-bit display would make every pixel an
+        # unaligned 3-byte access with no SIMD path, which is what the
+        # explicit 32 above is guarding against, and drawing happens far
+        # more often than presenting.
+        if (self.display.get_bitsize() == 32
+                and self.display.get_masks() != self.screen.get_masks()):
+            self.screen = self.screen.convert(self.display)
         if ON_ANDROID:
             # Once, to the log. The copy from canvas to display measured
             # 34-66ms on the phone against a 3ms flip, and whether that is
