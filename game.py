@@ -2605,6 +2605,37 @@ class Game:
         if self._dirty is not None:
             self._dirty.append(pygame.Rect(rect).clip(self.screen.get_rect()))
 
+    def _merge_dirty(self):
+        """Collapses the patches so no pixel is copied twice.
+
+        They overlap by nature: the damage flash covers exactly the
+        dungeon view, a banner lies across it. Left alone that copies the
+        same 1.2M pixels twice onto the slowest surface in the game -
+        which showed up as a fight costing about double what it should.
+        Two patches are merged when their union is no larger than the two
+        of them added up, so joining them always removes work rather than
+        sweeping up the empty space between distant ones.
+        """
+        rects = [r for r in self._dirty if r.width and r.height]
+        merged = True
+        while merged and len(rects) > 1:
+            merged = False
+            for i in range(len(rects)):
+                for j in range(i + 1, len(rects)):
+                    a, b = rects[i], rects[j]
+                    if not a.colliderect(b):
+                        continue
+                    union = a.union(b)
+                    area = union.width * union.height
+                    if area <= a.width * a.height + b.width * b.height:
+                        rects[i] = union
+                        del rects[j]
+                        merged = True
+                        break
+                if merged:
+                    break
+        self._dirty = rects
+
     def _furniture_signature(self):
         """Everything outside the dungeon view, as one comparable value.
 
@@ -2625,12 +2656,21 @@ class Game:
             # Buttons: which ones exist, and which one is held down.
             self.touch_direction, self.settings.get("show_touch_controls", True),
             self.test_room, tuple(sorted(self.scroll_buttons)),
-            # Overlays that sit across the whole screen.
-            self.flash_timer, self.boss_banner_timer,
+            # The overlays over the dungeon view are redrawn on every
+            # frame and mark their own patch, so what they are *showing*
+            # does not belong here - only whether they are there at all,
+            # because the frame one of them leaves is the frame the
+            # gutters underneath have to be painted again. The damage
+            # flash is absent entirely: it covers exactly the view, which
+            # is repainted every frame regardless. Putting its ticking
+            # timer in here made 92% of the frames in a fight full ones.
             self.shake_timer > 0,
-            boss.hp if boss else None, boss.max_hp if boss else None,
-            len(self.banners),
-            tuple(self._banner_alpha(b) for b in self.banners),
+            self.boss_banner_timer > 0,
+            boss is not None,
+            # Their texts, not their fade: the text decides how wide the
+            # panel is, and a narrower one replacing a wider one has to
+            # repaint what the wider one covered.
+            tuple(b["text"] for b in self.banners),
             getattr(self, "_pressed_key", None),
         )
 
@@ -2740,6 +2780,7 @@ class Game:
             # of the whole canvas is most of the way to a playable frame
             # rate. What may be left out is decided in render(); this end
             # only obeys.
+            self._merge_dirty()
             self.display.blits([(self.screen, r, r) for r in self._dirty])
         self._mark("copy")
         pygame.display.flip()
@@ -2866,6 +2907,28 @@ class Game:
         self._notify(text, color)
         return text
 
+    def _clear_outside_view(self, rect):
+        """Blanks the parts of a rect that stick out past the dungeon view.
+
+        The overlays are drawn with alpha, and drawing one over the last
+        frame's copy of itself makes it a little more solid each time.
+        Inside the view that cannot happen, because the map underneath is
+        repainted every frame - but a banner is wider than the view, and
+        the gutters it hangs into are only cleared on a full frame. So
+        those slivers get cleared here, and only those: filling the part
+        over the view would punch a hole in the map.
+        """
+        rect = pygame.Rect(rect)
+        view = pygame.Rect(C.MAP_OFFSET_X, 0, C.VIEW_W, C.VIEW_H)
+        for side in (pygame.Rect(0, rect.y, view.left, rect.h),
+                     pygame.Rect(view.right, rect.y,
+                                 max(0, C.SCREEN_WIDTH - view.right), rect.h),
+                     pygame.Rect(rect.x, view.bottom, rect.w,
+                                 max(0, C.SCREEN_HEIGHT - view.bottom))):
+            part = rect.clip(side)
+            if part.width and part.height:
+                self.screen.fill(C.COLOR_BG, part)
+
     @staticmethod
     def _banner_alpha(banner):
         """How solid a banner is drawn - full, until its last few ticks.
@@ -2914,10 +2977,12 @@ class Game:
             # a banner leaving does not read as a flicker. Only the alpha
             # changes, which is a flag on the cached surface.
             panel.set_alpha(self._banner_alpha(banner))
-            self.screen.blit(panel, (C.SCREEN_WIDTH // 2 - w // 2, y))
+            where = pygame.Rect(C.SCREEN_WIDTH // 2 - w // 2, y, w, h)
+            self._clear_outside_view(where)
+            self.screen.blit(panel, where.topleft)
             # A banner is wider than the dungeon view and hangs into the
             # gutters, which are not copied to the screen unless asked.
-            self._mark_dirty((C.SCREEN_WIDTH // 2 - w // 2, y, w, h))
+            self._mark_dirty(where)
             y += h + self.gap_s
 
     def _spawn_damage_number(self, x, y, text, color):
@@ -4665,6 +4730,25 @@ class Game:
                               C.SCREEN_WIDTH - C.MAP_OFFSET_X - map_w + slack, map_h))
             if slack:
                 self.screen.fill(C.COLOR_BG, (0, 0, C.SCREEN_WIDTH, slack))
+                # The shake moves the map up as readily as down, and the
+                # band it leaves at the bottom of the view had no clear of
+                # its own - the row above the HUD kept whatever had been
+                # there. Harmless while every frame repainted everything;
+                # visible as soon as they stopped.
+                self.screen.fill(C.COLOR_BG,
+                                 (C.MAP_OFFSET_X, map_h - slack, map_w, slack))
+        elif slack:
+            # The shake moves the map inside the viewport, uncovering a
+            # band at whichever edge it moved away from. On a full frame
+            # the clears above take care of that; on a cheap one only
+            # these three bands need it - and they are *inside* the view,
+            # so the buttons and the minimap next to them are left alone
+            # instead of the shake dragging a full repaint along with it.
+            for band in ((C.MAP_OFFSET_X, 0, slack, map_h),
+                         (C.MAP_OFFSET_X + map_w - slack, 0, slack, map_h),
+                         (C.MAP_OFFSET_X, 0, map_w, slack),
+                         (C.MAP_OFFSET_X, map_h - slack, map_w, slack)):
+                self.screen.fill(C.COLOR_BG, band)
         # Everything below is drawn in map coordinates and, zoomed in,
         # reaches past the viewport on every side. Clipping is what makes
         # the view a window rather than a drawing that overflows into the
@@ -5768,6 +5852,7 @@ class Game:
             label += f"  ·  {self.tn(phase['name']).upper()}"
         name_text = self.font.render(label, True, (255, 255, 255))
         where = name_text.get_rect(center=(C.SCREEN_WIDTH // 2, y + bar_h // 2))
+        self._clear_outside_view(pygame.Rect(x, y, bar_w, bar_h).union(where))
         self.screen.blit(name_text, where)
         self._mark_dirty(pygame.Rect(x, y, bar_w, bar_h).union(where))
 
@@ -5778,6 +5863,7 @@ class Game:
         text = self.big_font.render(self.t("boss_appears"), True, C.COLOR_BOSS)
         text.set_alpha(int(255 * ratio))
         where = text.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - 250))
+        self._clear_outside_view(where)
         self.screen.blit(text, where)
         self._mark_dirty(where)
 
@@ -6412,9 +6498,18 @@ class Game:
     def _render_flash(self):
         if self.flash_timer <= 0:
             return
-        overlay = pygame.Surface((C.VIEW_W, C.VIEW_H))
+        # Kept, not built: this is a viewport-sized surface, and it was
+        # being allocated and filled from scratch on every frame of every
+        # hit - 1.2M pixels twice over, measured at 2.4ms here and so
+        # something like 50ms on the phone, which is most of why fights
+        # were the part that still stuttered. Only the alpha changes.
+        size = (C.VIEW_W, C.VIEW_H)
+        overlay = getattr(self, "_flash_overlay", None)
+        if overlay is None or overlay.get_size() != size:
+            overlay = pygame.Surface(size)
+            overlay.fill((200, 30, 30))
+            self._flash_overlay = overlay
         overlay.set_alpha(int(90 * (self.flash_timer / 6)))
-        overlay.fill((200, 30, 30))
         self.screen.blit(overlay, (C.MAP_OFFSET_X, 0))
         self._mark_dirty((C.MAP_OFFSET_X, 0, C.VIEW_W, C.VIEW_H))
 

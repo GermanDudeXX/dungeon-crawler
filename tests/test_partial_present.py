@@ -15,6 +15,7 @@ against the same game drawn the slow way, pixel for pixel.
 """
 import os
 import random
+import statistics
 import sys
 
 sys.path.insert(0, r"C:\Users\budzm\dungeon-crawler")
@@ -112,6 +113,51 @@ for i in range(6):
     check(f"Banner blendet aus, Bild {i}")
 print("  ausblendendes Banner bleibt deckungsgleich")
 
+# --- a fight, which is the part that still stuttered ---------------------
+# The damage flash, damage numbers, sparks and a boss bar all draw over
+# the dungeon view, and none of them force a full frame any more - so if
+# any of them left something behind, this is where it shows.
+def put_monster_next_to_player(boss=False):
+    for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, -1)):
+        x, y = g.player.x + dx, g.player.y + dy
+        if g._tile_is_free(x, y):
+            m = g._make_monster(x, y, "goblin", boss=boss)
+            m.awake = True
+            m.snap()
+            m.max_hp = m.hp = 9999
+            g.monsters.append(m)
+            return m
+    return None
+
+
+g.player.max_hp = g.player.hp = 999999
+foe = put_monster_next_to_player()
+assert foe is not None, "no room next to the player to put a monster"
+for turn in range(6):
+    for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+        if any(m.x == g.player.x + dx and m.y == g.player.y + dy
+               for m in g.monsters if m.is_alive()):
+            g._player_turn(dx, dy)
+            break
+    for f in range(4):
+        g._update_animations()
+        check(f"fighting, turn {turn} frame {f}")
+print("  Kampf mit Trefferblitz und Schadenszahlen bleibt deckungsgleich")
+
+# A boss brings the health bar and the announcement banner with it, both
+# of which reach outside the dungeon view.
+boss = put_monster_next_to_player(boss=True)
+if boss is not None:
+    g.boss_banner_timer = 90
+    for f in range(8):
+        g._update_animations()
+        check(f"boss on screen, frame {f}")
+    boss.hp = 1
+    check("boss nearly dead - the bar is a different width")
+    g.monsters.remove(boss)
+    check("boss gone - the bar has to be cleaned up")
+    print("  Bossbalken und Boss-Banner bleiben deckungsgleich")
+
 # --- in and out of a menu, where the whole screen is a different one -----
 for state in ("paused", "playing", "bag", "playing", "settings", "playing"):
     g.state = state
@@ -152,6 +198,13 @@ def note_changes():
             culprits[FIELDS[i] if i < len(FIELDS) else f"#{i}"] += 1
 
 
+# Nothing left standing next to the player: this half is about walking,
+# and a monster in reach turns every step into an attack, which changes
+# the band and is a full frame by design.
+g.monsters = []
+g._recompute_fov()
+g.render()
+
 copied = []
 canvas_px = g.screen.get_width() * g.screen.get_height()
 frames = turns = 0
@@ -179,6 +232,63 @@ assert painted["n"] <= turns + 1, (
     f"the frames between turns are supposed to be cheap. What kept "
     f"changing: {dict(culprits)}")
 
+# --- and a fight has to be mostly cheap too ------------------------------
+# This is the case the player reported as still stuttering: the flash,
+# the damage numbers and the sparks all draw over the dungeon view, so
+# they cost the view and nothing more. Only the turn itself, which moves
+# the health bar and writes to the log, is a full frame.
+fight_painted = {"n": 0}
+
+
+def counting_fight():
+    fight_painted["n"] += 1
+    return real()
+
+
+# Alive and in play: a dead hero puts the death screen over the whole
+# canvas, which is a full frame every time and by design, and would
+# quietly turn this measurement into a measurement of that.
+g.state = "playing"
+g.player.max_hp = g.player.hp = 999999
+foe = put_monster_next_to_player()
+g._render_touch_controls = counting_fight
+fight_copied = []
+fight_turns = fight_frames = 0
+for _ in range(6):
+    if not any(m.is_alive() for m in g.monsters):
+        put_monster_next_to_player()
+    for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+        if any(m.x == g.player.x + dx and m.y == g.player.y + dy
+               for m in g.monsters if m.is_alive()):
+            g._player_turn(dx, dy)
+            fight_turns += 1
+            break
+    for _ in range(4):
+        g._update_animations()
+        note_changes()
+        g.render()
+        fight_copied.append(sum(r.w * r.h for r in g._dirty)
+                            if g._dirty is not None else canvas_px)
+        fight_frames += 1
+g._render_touch_controls = real
+cheap_frames = [c for c in fight_copied if c < canvas_px]
+share = (statistics.median(cheap_frames) / canvas_px
+         if cheap_frames else 1.0)
+print(f"  Kampf: {fight_frames} Bilder über {fight_turns} Züge, "
+      f"{fight_painted['n']} volle, sparsame kopieren "
+      f"{share * 100:.0f}% (Median)")
+# A blow lands on a turn and moves the health bar and the log, and
+# that is a full frame by design. What must not happen is the frames
+# in between - the flash fading, the numbers rising, the sparks -
+# costing the whole screen as well.
+assert len(cheap_frames) >= fight_frames // 2, (
+    f"only {len(cheap_frames)} of {fight_frames} fight frames were "
+    f"cheap; the ones between the blows are supposed to cost the "
+    f"dungeon view and nothing else. What kept changing: "
+    f"{dict(culprits)}")
+assert share < 0.6, (
+    f"even a cheap fight frame copies {share * 100:.0f}% of the canvas")
+
 # --- the frame-rate overlay has to reach the screen too ------------------
 # It sits in the gutter, which is no longer cleared or copied every frame,
 # so if it did not ask for its own patch it would be drawn on the canvas
@@ -186,7 +296,12 @@ assert painted["n"] <= turns + 1, (
 # whether any of this worked.
 g.settings["show_fps"] = True
 seen = set()
-for _ in range(200):
+# Refreshed on a wall clock, twice a second - and the frames are now
+# cheap enough that a fixed count of them can pass in less time than
+# that, which used to make this check pass without proving anything.
+import time
+deadline = time.monotonic() + 2.0
+while time.monotonic() < deadline and len(seen) < 2:
     g.needs_redraw = True
     g.render()
     rect = getattr(g, "_fps_rect", None)
@@ -203,8 +318,6 @@ assert len(seen) > 1, (
 # whole thing is for: the copy lands in memory the phone writes to
 # slowly, so it costs in proportion to this area. Asserted as work
 # rather than as milliseconds, which would only measure this desktop.
-import statistics
-
 # The median, not the worst: a turn that changes the band is a full
 # frame by design, and one of those in the run would otherwise hide
 # what all the others cost.
