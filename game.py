@@ -177,6 +177,7 @@ class Game:
         self._touch_btn_cache = {}
         self._text_cache = {}
         self._scaled_sprite_cache = {}
+        self._touch_states = {}
         self._hud_cache = None
         self.bag_page = 0
         self.shop_stock = None
@@ -2747,8 +2748,10 @@ class Game:
             # The minimap is deliberately absent: it draws itself on
             # every frame and asks for its own corner, because the player
             # marker on it moves on every step.
-            # Buttons: which ones exist, and which one is held down.
-            self.touch_direction, self.settings.get("show_touch_controls", True),
+            # Which buttons exist - not which one is held down, which
+            # only changes one button's colour and is handled where
+            # they are drawn.
+            self.settings.get("show_touch_controls", True),
             self.test_room, tuple(sorted(self.scroll_buttons)),
             # The overlays over the dungeon view are redrawn on every
             # frame and mark their own patch, so what they are *showing*
@@ -2767,7 +2770,6 @@ class Game:
             # a banner arriving no longer costs a whole screen. They come
             # up constantly in play (a coin picked up, a trap sprung),
             # and each one was a 150-215ms frame on the phone.
-            getattr(self, "_pressed_key", None),
         )
 
     def _begin_frame(self):
@@ -4900,9 +4902,9 @@ class Game:
         self._mark("mini")
         self._render_hud(force=redraw_all)
         self._mark("hud")
+        self._render_touch_controls(only_changed=not redraw_all)
+        self._mark("touch")
         if redraw_all:
-            self._render_touch_controls()
-            self._mark("touch")
             self._dirty = None                  # the whole canvas moved
         else:
             self._mark_dirty(region)
@@ -7077,23 +7079,43 @@ class Game:
         self.screen.blit(self._touch_button_surface(rect.size, label, active),
                          rect.topleft)
 
-    def _render_touch_controls(self):
+    def _render_touch_controls(self, only_changed=False):
+        """Draws the on-screen buttons; with only_changed, just the ones
+        that look different than last frame.
+
+        Which button is held down used to be part of the comparison that
+        rebuilds the whole screen, so every press of every button cost a
+        full frame - on the phone, 150-215ms, on every single input. Only
+        the one button changes colour, so only that one is repainted, and
+        the one that was held before it.
+        """
+        states = {}
+
+        def button(rect, label, active=False):
+            key = (rect.x, rect.y, rect.width, rect.height)
+            states[key] = (label, active)
+            if only_changed and self._touch_states.get(key) == (label, active):
+                return
+            self._draw_touch_button(rect, label, active)
+            if only_changed:
+                self._mark_dirty(rect)
+
         # The menu button is the only touch path to the pause menu (and
         # from there, to re-enabling everything else), so it always draws
         # regardless of show_touch_controls - only the movement/action
         # buttons are optional.
-        self._draw_touch_button(self.save_button, self._touch_label("touch_menu", "ESC"))
-        if not self.settings.get("show_touch_controls", True):
-            return
-        for name, (rect, vector, label) in self.dpad_buttons.items():
-            self._draw_touch_button(rect, label, active=(self.touch_direction == vector))
-        self._draw_touch_button(self.potion_button, self._touch_label("touch_heal", "G"))
-        self._draw_touch_button(self.bag_button, self._touch_label("btn_bag", "I"))
-        if self.test_room:
-            self._draw_touch_button(self.tools_button, self._touch_label("btn_tools", "K"))
-        scroll_labels = {"fireball": "F", "teleport": "T", "reveal": "V"}
-        for name, rect in self.scroll_buttons.items():
-            self._draw_touch_button(rect, scroll_labels[name])
+        button(self.save_button, self._touch_label("touch_menu", "ESC"))
+        if self.settings.get("show_touch_controls", True):
+            for name, (rect, vector, label) in self.dpad_buttons.items():
+                button(rect, label, active=(self.touch_direction == vector))
+            button(self.potion_button, self._touch_label("touch_heal", "G"))
+            button(self.bag_button, self._touch_label("btn_bag", "I"))
+            if self.test_room:
+                button(self.tools_button, self._touch_label("btn_tools", "K"))
+            scroll_labels = {"fireball": "F", "teleport": "T", "reveal": "V"}
+            for name, rect in self.scroll_buttons.items():
+                button(rect, scroll_labels[name])
+        self._touch_states = states
 
     def _touch_label(self, key, shortcut):
         """The button's name, with its keyboard shortcut on desktop.

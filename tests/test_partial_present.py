@@ -167,26 +167,28 @@ print("  Wechsel in Menüs und zurück bleibt deckungsgleich")
 # --- and it must actually be skipping work -------------------------------
 # Without this the whole thing could be redrawing everything every frame
 # and every check above would still pass.
-painted = {"n": 0}
-real = g._render_touch_controls
+# Counting frames in which a button was actually repainted, not calls
+# to the function: it runs every frame now and usually draws nothing,
+# which is the whole point of it.
+painted = {"n": 0, "this": False}
+real = g._draw_touch_button
 
 
-def counting():
-    painted["n"] += 1
-    return real()
+def counting(*a, **kw):
+    painted["this"] = True
+    return real(*a, **kw)
 
 
 g.state = "playing"
-g._render_touch_controls = counting
+g._draw_touch_button = counting
 # Which part of the furniture keeps changing, so a failure here names the
 # culprit instead of leaving the next person to bisect a tuple.
 from collections import Counter
 culprits = Counter()
 # In the order _furniture_signature builds them, so a failure names
 # the field instead of an index.
-FIELDS = ["state", "touch_dir", "show_touch", "test_room", "scrolls",
-          "shake", "boss_banner", "boss_present",
-          "pressed_key"]
+FIELDS = ["state", "show_touch", "test_room", "scrolls",
+          "shake", "boss_banner", "boss_present"]
 assert len(FIELDS) == len(g._furniture_signature()), (
     "the labels have drifted from the signature - a failure below "
     "would blame the wrong field")
@@ -224,11 +226,13 @@ for _ in range(8):
     for _ in range(3):
         g._update_animations()
         note_changes()
+        painted["this"] = False
         g.render()
+        painted["n"] += 1 if painted["this"] else 0
         copied.append(sum(r.w * r.h for r in g._dirty)
                       if g._dirty is not None else canvas_px)
         frames += 1
-g._render_touch_controls = real
+g._draw_touch_button = real
 print(f"  {frames} Bilder über {turns} Züge -> die Tasten wurden "
       f"{painted['n']}x neu gemalt")
 assert painted["n"] <= turns + 1, (
@@ -241,12 +245,12 @@ assert painted["n"] <= turns + 1, (
 # the damage numbers and the sparks all draw over the dungeon view, so
 # they cost the view and nothing more. Only the turn itself, which moves
 # the health bar and writes to the log, is a full frame.
-fight_painted = {"n": 0}
+fight_painted = {"n": 0, "this": False}
 
 
-def counting_fight():
-    fight_painted["n"] += 1
-    return real()
+def counting_fight(*a, **kw):
+    fight_painted["this"] = True
+    return real(*a, **kw)
 
 
 # Alive and in play: a dead hero puts the death screen over the whole
@@ -255,7 +259,7 @@ def counting_fight():
 g.state = "playing"
 g.player.max_hp = g.player.hp = 999999
 foe = put_monster_next_to_player()
-g._render_touch_controls = counting_fight
+g._draw_touch_button = counting_fight
 fight_copied = []
 fight_turns = fight_frames = 0
 for _ in range(6):
@@ -274,11 +278,13 @@ for _ in range(6):
         # measured here.
         g.state = "playing"
         note_changes()
+        fight_painted["this"] = False
         g.render()
+        fight_painted["n"] += 1 if fight_painted["this"] else 0
         fight_copied.append(sum(r.w * r.h for r in g._dirty)
                             if g._dirty is not None else canvas_px)
         fight_frames += 1
-g._render_touch_controls = real
+g._draw_touch_button = real
 cheap_frames = [c for c in fight_copied if c < canvas_px]
 share = (statistics.median(cheap_frames) / canvas_px
          if cheap_frames else 1.0)
