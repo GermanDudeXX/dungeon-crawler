@@ -96,6 +96,8 @@ STRINGS = {
     "settings_music_label": {"en": "Music: {state}", "de": "Musik: {state}"},
     "settings_zoom_label": {"en": "Zoom: {state}", "de": "Zoom: {state}"},
     "settings_render_label": {"en": "Graphics: {state}", "de": "Grafik: {state}"},
+    "settings_flash_label": {"en": "Red flash when hit: {state}",
+                             "de": "Roter Blitz bei Treffer: {state}"},
     "settings_fps_label": {"en": "Show frame rate: {state}", "de": "Bildrate anzeigen: {state}"},
     # Short on purpose: the settings row puts the state next to a button,
     # and a longer one ran underneath it on a phone. The exact factor is
@@ -118,8 +120,8 @@ STRINGS = {
     "settings_shortcut_fail": {"en": "Desktop shortcut: failed", "de": "Desktop-Verknüpfung: fehlgeschlagen"},
     "btn_create": {"en": "CREATE", "de": "ERSTELLEN"},
     "settings_hint": {
-        "en": "Tap TOGGLE or press C (controls) / L (language) / V (volume) / Z (zoom) / R (graphics) / P (fps)      ESC: back",
-        "de": "Tippe UMSCHALTEN oder drücke C (Tasten) / L (Sprache) / V (Lautstärke) / Z (Zoom) / R (Grafik) / P (Bildrate)      ESC: zurück",
+        "en": "Tap TOGGLE or press C (controls) / L (language) / V (volume) / Z (zoom) / R (graphics) / H (hit flash) / P (fps)      ESC: back",
+        "de": "Tippe UMSCHALTEN oder drücke C (Tasten) / L (Sprache) / V (Lautstärke) / Z (Zoom) / R (Grafik) / H (Trefferblitz) / P (Bildrate)      ESC: zurück",
     },
     "btn_toggle": {"en": "TOGGLE", "de": "UMSCHALTEN"},
     "on": {"en": "ON", "de": "AN"},

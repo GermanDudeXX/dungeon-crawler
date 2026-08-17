@@ -2301,6 +2301,12 @@ class Game:
         self._notify(self.t("log_render_scale_restart"), C.COLOR_ACCENT)
         self.sounds.play("equip")
 
+    def _toggle_hit_flash(self):
+        self.settings["hit_flash"] = not self.settings.get("hit_flash", False)
+        persistence.save_settings(self.settings)
+        self.needs_redraw = True
+        self.sounds.play("equip")
+
     def _toggle_fps(self):
         self.settings["show_fps"] = not self.settings.get("show_fps")
         persistence.save_settings(self.settings)
@@ -3254,6 +3260,8 @@ class Game:
                 self._cycle_zoom()
             elif key == pygame.K_r:
                 self._cycle_render_scale()
+            elif key == pygame.K_h:
+                self._toggle_hit_flash()
             elif key == pygame.K_p:
                 self._toggle_fps()
             elif key == pygame.K_m:
@@ -5705,6 +5713,9 @@ class Game:
              self.t("btn_toggle"), pygame.K_z),
             (self.t("settings_render_label", state=self._render_scale_name()),
              self.t("btn_toggle"), pygame.K_r),
+            (self.t("settings_flash_label",
+                    state=self.t("on" if self.settings.get("hit_flash") else "off")),
+             self.t("btn_toggle"), pygame.K_h),
             (self.t("settings_fps_label",
                     state=self.t("on" if self.settings.get("show_fps") else "off")),
              self.t("btn_toggle"), pygame.K_p),
@@ -6801,13 +6812,18 @@ class Game:
         every hit was a full one; three coarse ones over the same fifth
         of a second look the same and halve that.
         """
-        if self.flash_timer <= 0:
+        if self.flash_timer <= 0 or not self.settings.get("hit_flash", False):
             return 0
         step = max(1, C.FLASH_ALPHA_STEP)
         return max(step, int(90 * (self.flash_timer / 6) / step) * step)
 
     def _render_flash(self):
-        if self.flash_timer <= 0:
+        # Switchable, and off by default: this is a wash over the whole
+        # dungeon view, which on the phone costs about 150ms to blend
+        # and forces the same area to be copied to the screen again,
+        # roughly doubling the cost of every frame of every hit taken.
+        # It is the single most expensive thing the game draws.
+        if self.flash_timer <= 0 or not self.settings.get("hit_flash", False):
             return
         # Kept, not built: this is a viewport-sized surface, and it was
         # being allocated and filled from scratch on every frame of every

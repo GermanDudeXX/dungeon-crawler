@@ -79,6 +79,11 @@ DEFAULT_SETTINGS = {
     "zoom": 1.5,
     "render_scale": "auto",
     "show_fps": False,
+    # The red wash after a hit covers the whole dungeon view, and
+    # covering it costs more on a phone than everything else in a
+    # frame put together. Off by default for that reason, not
+    # because it is bad - see Game._render_flash.
+    "hit_flash": False,
 }
 
 DEFAULT_STATS = {
