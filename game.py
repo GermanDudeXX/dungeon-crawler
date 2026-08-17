@@ -176,6 +176,7 @@ class Game:
         self._wash_cache = {}
         self._touch_btn_cache = {}
         self._text_cache = {}
+        self._scaled_sprite_cache = {}
         self._hud_cache = None
         self.bag_page = 0
         self.shop_stock = None
@@ -6318,6 +6319,29 @@ class Game:
             self._draw_tile_at("doors_leaf_closed", *self.boss_door_pos, ox, oy,
                                dim=self.boss_door_pos not in self.visible)
 
+    def _scaled_sprite(self, sprite, scale):
+        """A resized sprite, kept.
+
+        Bosses and split children are drawn at a different size than the
+        sprite they come from, and that resize was being done on every
+        frame, for every one of them on screen - measured on the phone as
+        the largest item in a frame of a crowded fight, well past 200ms.
+        Nothing about it changes between frames.
+
+        scale, not smoothscale, for the same reason the tiles use it:
+        this is 16px art blown up, and smoothing turns hard pixels into
+        mush. It was smoothscale before only because nobody had looked at
+        it since it was written.
+        """
+        key = (id(sprite), round(scale, 3))
+        out = self._scaled_sprite_cache.get(key)
+        if out is None:
+            w, h = sprite.get_size()
+            out = pygame.transform.scale(
+                sprite, (max(1, int(w * scale)), max(1, int(h * scale))))
+            self._scaled_sprite_cache[key] = out
+        return out
+
     def _glow(self, color, size, alpha=70):
         """A soft elliptical halo, cached.
 
@@ -6601,8 +6625,7 @@ class Game:
         elif monster.is_split_child:
             scale = C.SPLIT_CHILD_SPRITE_SCALE
         if scale != 1.0:
-            w, h = sprite.get_size()
-            sprite = pygame.transform.smoothscale(sprite, (max(1, int(w * scale)), max(1, int(h * scale))))
+            sprite = self._scaled_sprite(sprite, scale)
 
         tile_center_x = monster.render_x * C.TILE_SIZE + C.TILE_SIZE // 2 + ox
         tile_bottom_y = monster.render_y * C.TILE_SIZE + C.TILE_SIZE + oy
@@ -6637,8 +6660,11 @@ class Game:
         rect = sprite.get_rect(center=center)
 
         if item.kind in self._HALO_ITEM_KINDS:
-            glow = pygame.Surface((int(sprite.get_width() * 1.3), int(sprite.get_height() * 1.3)), pygame.SRCALPHA)
-            pygame.draw.ellipse(glow, (*item.color, 100), glow.get_rect())
+            # Through the cache, like the elites' halo: this was building
+            # a fresh per-pixel-alpha surface and drawing an ellipse into
+            # it for every glowing item on the floor, on every frame.
+            glow = self._glow(item.color, int(max(sprite.get_size()) * 1.3),
+                              alpha=100)
             self.screen.blit(glow, glow.get_rect(center=center))
 
         self.screen.blit(sprite, rect)
