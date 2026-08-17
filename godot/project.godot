@@ -1,0 +1,48 @@
+; Dungeon Crawler - Godot port.
+;
+; The Python/pygame build stays the PC version. This exists because the
+; phone one is limited by software rendering: every frame is composed by
+; the CPU and copied to the display, measured at about 8-9 million pixels
+; a second on the target device, which puts a full 2448x1098 frame at
+; roughly 300ms no matter how little of it changed. A GPU does that same
+; work in about a millisecond, and the whole point of an engine here is
+; that it uses one.
+;
+; Format 3 = Godot 4.x.
+
+config_version=5
+
+[application]
+
+config/name="Dungeon Crawler"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.4", "GL Compatibility")
+config/icon="res://assets/classes/knight_m_idle_anim_f0.png"
+
+[display]
+
+; Landscape, matching the pygame build, and the whole screen - the
+; letterboxing that plagued the phone build came from a fixed logical
+; size that SDL would not stretch. "canvas_items" scales the 2D content
+; to whatever the device gives us, on the GPU, for free.
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/handheld/orientation=1
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[rendering]
+
+; The mobile renderer, and no smoothing anywhere: this is 16x16 pixel
+; art and any filtering turns it to mush - the same rule the pygame
+; build follows with scale-never-smoothscale.
+renderer/rendering_method="mobile"
+renderer/rendering_method.mobile="mobile"
+textures/canvas_textures/default_texture_filter=0
+2d/snap/snap_2d_transforms_to_pixel=true
+2d/snap/snap_2d_vertices_to_pixel=true
+
+; Android wants its textures in a format its GPUs decode in hardware.
+; The art is a few dozen 16x16 PNGs, so this costs nothing here - it
+; is simply required for the export to be allowed at all.
+textures/vram_compression/import_etc2_astc=true

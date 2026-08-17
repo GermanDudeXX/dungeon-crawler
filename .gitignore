@@ -13,3 +13,7 @@ dist/
 # committed - see constants.BUILD_VERSION_PATH / updater.py.
 assets/build_version.txt
 _update.bat
+
+# Godot: import cache and the 1.3GB export templates are not source
+godot/.godot/
+godot/android/
