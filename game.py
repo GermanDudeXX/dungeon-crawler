@@ -6094,6 +6094,12 @@ class Game:
         y0 = max(0, cam_y // ts - 1)
         cols = min(C.MAP_WIDTH - x0, C.VIEW_W // ts + 3)
         rows_n = min(C.MAP_HEIGHT - y0, C.VIEW_H // ts + 3)
+        # A fresh surface every time, deliberately: the scroll below
+        # copies the old cache into this one, and reusing a single
+        # surface makes that a blit of a surface onto itself, which
+        # corrupts it where the two overlap. Keeping two and swapping
+        # would save the allocation at the cost of another 7MB at
+        # zoom 2, which is not what the allocation is worth.
         surf = pygame.Surface((cols * ts, rows_n * ts))
         surf.fill(C.COLOR_BG)
 
@@ -6118,9 +6124,18 @@ class Game:
                            (kx1 - kx0) * ts, (ky1 - ky0) * ts))
                 keep = (kx0, ky0, kx1, ky1)
 
+        explored = self.explored
         for y in range(y0, y0 + rows_n):
             for x in range(x0, x0 + cols):
                 if keep and keep[0] <= x < keep[2] and keep[1] <= y < keep[3]:
+                    continue
+                if (x, y) not in explored:
+                    # The whole surface was just filled with the background,
+                    # and an unexplored cell is exactly that - so painting
+                    # one is filling the same pixels twice. It costs nothing
+                    # on a floor that has been walked over, and it was 14ms
+                    # of the first frame on a new one, where almost every
+                    # cell in the window is still dark.
                     continue
                 self._paint_map_cell(surf, x, y, x0, y0, tier)
         if keep and keep[1] > y0:
