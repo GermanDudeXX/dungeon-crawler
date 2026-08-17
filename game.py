@@ -2657,8 +2657,14 @@ class Game:
         before = getattr(self, "_live_prev", None)
         self._live_prev = live
 
+        # The wash needs the whole view only on the frames where it
+        # actually changes; while it holds still the rest of the view
+        # already carries it.
+        alpha = self._flash_alpha()
+        washed = alpha != getattr(self, "_flash_alpha_prev", 0)
+        self._flash_alpha_prev = alpha
         if (redraw_all or slack or map_changed or moved
-                or self.flash_timer > 0 or live is None):
+                or washed or live is None):
             return view
         # Where things are now and where they were last frame, since the
         # place they left has to be painted over.
@@ -4848,6 +4854,7 @@ class Game:
         # the view to repaint - whether it changed is half the answer.
         map_changed = self._update_map_cache()
         region = self._view_region(ox, oy, redraw_all, slack, map_changed)
+        self._frame_region = region
         self.screen.set_clip(region)
         self._render_map(ox, oy)
         self._mark("map")
@@ -6608,6 +6615,22 @@ class Game:
         rect = surf.get_rect(center=center)
         self.screen.blit(surf, rect)
 
+    def _flash_alpha(self):
+        """How red the hit wash is, in a few coarse steps.
+
+        Coarse on purpose. The wash covers the whole dungeon view, so a
+        frame where it changes has to repaint all of it - but a frame
+        where it is the *same* as last frame only has to re-wash the
+        patch that was repainted underneath, and the rest keeps the wash
+        it already has, exactly. Six smooth steps meant every frame of
+        every hit was a full one; three coarse ones over the same fifth
+        of a second look the same and halve that.
+        """
+        if self.flash_timer <= 0:
+            return 0
+        step = max(1, C.FLASH_ALPHA_STEP)
+        return max(step, int(90 * (self.flash_timer / 6) / step) * step)
+
     def _render_flash(self):
         if self.flash_timer <= 0:
             return
@@ -6622,9 +6645,22 @@ class Game:
             overlay = pygame.Surface(size)
             overlay.fill((200, 30, 30))
             self._flash_overlay = overlay
-        overlay.set_alpha(int(90 * (self.flash_timer / 6)))
+        overlay.set_alpha(self._flash_alpha())
+        # Only over what was repainted this frame. Everywhere else the
+        # wash from the last frame is still on the canvas and is still
+        # right, because the region was only allowed to be small when
+        # the alpha had not changed (see _view_region).
+        where = pygame.Rect(C.MAP_OFFSET_X, 0, C.VIEW_W, C.VIEW_H)
+        region = getattr(self, "_frame_region", None)
+        if region is not None:
+            where = where.clip(region)
+        if not where.width or not where.height:
+            return
+        previous = self.screen.get_clip()
+        self.screen.set_clip(where)
         self.screen.blit(overlay, (C.MAP_OFFSET_X, 0))
-        self._mark_dirty((C.MAP_OFFSET_X, 0, C.VIEW_W, C.VIEW_H))
+        self.screen.set_clip(previous)
+        self._mark_dirty(where)
 
     def _hud_chip(self, x, y, h, icon, text, text_color=None, icon_color=None,
                   min_w=0):

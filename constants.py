@@ -84,6 +84,13 @@ DEFAULT_RENDER_SCALE = "auto"
 # streak.
 SLOW_FRAME_MS = 60
 SLOW_FRAME_STREAK = 20
+
+# The hit wash fades in steps this size rather than smoothly. It covers
+# the whole dungeon view, so a frame where it changes has to repaint all
+# of it - coarser steps mean fewer such frames, and over a fifth of a
+# second the eye cannot tell three steps from six.
+FLASH_ALPHA_STEP = 30
+
 SCREEN_HEIGHT = VIEW_H + HUD_HEIGHT
 
 # Menu/info screens are laid out from these sizes rather than by zooming a
