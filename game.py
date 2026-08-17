@@ -743,9 +743,13 @@ class Game:
             diff_hp=d["enemy_hp"], diff_damage=d["enemy_damage"],
         )
 
-    def start_new_run(self, difficulty=None, char_class=None):
-        persistence.delete_save()
-        self.save_data = None
+    def start_new_run(self, difficulty=None, char_class=None, keep_save=False):
+        # keep_save is for the test room, which is a sandbox and has no
+        # business throwing away a run in progress - it used to, because
+        # it starts itself through here.
+        if not keep_save:
+            persistence.delete_save()
+            self.save_data = None
 
         if difficulty is not None:
             self.difficulty = difficulty
@@ -1091,7 +1095,10 @@ class Game:
         self.vault_pos = tuple(vault) if vault else None
 
     def _save_and_quit(self):
-        persistence.save_run(self._build_save_data())
+        # A sandbox floor is not somebody's run: saving it here would
+        # replace the real one just as surely as deleting it did.
+        if not self.test_room:
+            persistence.save_run(self._build_save_data())
         pygame.quit()
         sys.exit()
 
@@ -1565,7 +1572,8 @@ class Game:
         hoping the right thing spawns.
         """
         self.start_new_run(self.settings.get("difficulty", C.DEFAULT_DIFFICULTY),
-                           self.settings.get("char_class", C.DEFAULT_CLASS))
+                           self.settings.get("char_class", C.DEFAULT_CLASS),
+                           keep_save=True)
         self.dungeon_level = 12
         self.test_room = True
         self._build_test_room()
@@ -2498,7 +2506,7 @@ class Game:
                 sys.exit()
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
-                    if self.state == "playing":
+                    if self.state == "playing" and not self.test_room:
                         persistence.save_run(self._build_save_data())
                     pygame.quit()
                     sys.exit()
