@@ -186,6 +186,37 @@ mit gehaltener Richtungstaste messen
 Oberfläche und Python startet gar nicht (schwarzes Bild, keine Log-Ausgabe).
 Nach jedem Update entpackt p4a erst das Python-Bündel (~30 s schwarz).
 
+### Teilweises Zeichnen und Kopieren (Ziel: 30 fps bei x1)
+Ein Bild bei x1 sind 2,69 Mio. Pixel und darf 33 ms kosten. Nach den drei
+Fixes oben blieb die **Kopie auf die Display-Surface** übrig — sie kostet
+proportional zur Fläche und landet in langsamem Speicher. Deshalb:
+
+- `render()` vergleicht `_furniture_signature()` — alles **außerhalb** des
+  Spielfelds (Gutter, Tasten, HUD-Band). Unverändert → weder neu malen noch
+  kopieren; nur das Spielfeld.
+- `_present()` kopiert `self._dirty` (Liste von Rechtecken) statt allem.
+  `self._dirty = None` heißt „alles" (Menüs, Zustandswechsel, Todesbildschirm).
+- Gemessen am Handy-Canvas: 8,41 ms → **2,95 ms**, 46 % der Fläche kopiert.
+
+**Vier Fallen, alle von `test_partial_present.py` gefunden** (vergleicht nach
+*jedem* Bild die echte Display-Surface gegen einen vollen Neuaufbau):
+1. Banner, Bossbalken und Trefferblitz liegen **über** dem Spielfeld → müssen
+   jedes Bild mitgezeichnet werden und ihre Fläche selbst per `_mark_dirty()`
+   anmelden (ein Banner ragt in die Gutter).
+2. Die Minikarte wird **immer** gezeichnet und meldet nur ihre Ecke an — der
+   Spielerpunkt wandert jeden Schritt, dafür das ganze Bild neu zu bauen war
+   der teuerste Einzelposten.
+3. Minikarte **und** Bildraten-Anzeige sind halbtransparent bzw. Text, und die
+   Gutter werden nicht mehr geleert → beide müssen ihre eigene Fläche vorher
+   mit `COLOR_BG` freiräumen, sonst wird es Bild für Bild dunkler.
+4. Der Banner-Zähler läuft jeden Tick weiter, das Bild ändert sich aber nicht →
+   in die Signatur gehört `_banner_alpha()`, nicht der Zähler.
+
+**Regel für neue Anzeigen:** Alles, was außerhalb des Spielfelds gezeichnet
+wird, muss entweder in `_furniture_signature()` stehen ODER jedes Bild
+gezeichnet werden und `_mark_dirty()` aufrufen. Sonst friert es auf dem
+Schirm ein.
+
 **x1 ist kein Bug.** Voller Canvas = 2,69 Mio. Pixel/Frame gegen 1,50 Mio. bei
 Auto; der Frame skaliert sauber mit, nichts Pathologisches drin. Falsch war
 die *Beschriftung*: „1x" direkt unter „Zoom: 1.5x" liest sich wie die normale
@@ -214,7 +245,7 @@ auf dem Gerät, siehe Kommentar in `game.py`) — der Canvas-Umweg bleibt.
 ### Test/Release-Ritual (bei JEDEM Abschluss)
 ```
 cd C:/Users/budzm/dungeon-crawler
-python tests/run_all.py            # alle 24
+python tests/run_all.py            # alle 26
 python tests/run_all.py potions    # nur passende
 ```
 **Die Tests liegen jetzt im Repo unter `tests/`.** Sie lagen vorher im
@@ -227,7 +258,7 @@ SDL gibt nur einen Renderer pro Prozess her.
 Danach: `assets/build_version.txt` = Commit-Anzahl, PC-exe bauen,
 **erst der Nutzer testet am PC**, dann Push (löst den Android-Build aus)
 und exe ins `windows-latest`-Release hochladen.
-Veröffentlicht: **PC Build 82 · Android Build 75** (16.08.2026).
+Veröffentlicht: **PC Build 82 · Android Build 79** (16.08.2026).
 
 ### Umgangsregeln mit dem Nutzer
 - Deutsch, kein Quellcode, keine technischen Erklärungen — nur kurzes Wiki/Changelog.
