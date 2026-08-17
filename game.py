@@ -2601,6 +2601,79 @@ class Game:
                            C.VIEW_W + 2 * slack, C.VIEW_H + slack
                            ).clip(self.screen.get_rect())
 
+    def _live_rect(self, ox, oy):
+        """One box around everything inside the view that can move.
+
+        Sprites, the nameplates and badges stacked above them, the YOU
+        marker, sparks and rising damage numbers. Deliberately generous:
+        it is a bound, and a tile too large costs a few thousand pixels
+        while a tile too small leaves a smear on the screen. The hero and
+        the monsters are drawn nearly twice as tall as their cell and
+        hang upwards out of it, with the plates above that, hence the
+        room left overhead.
+        """
+        ts = C.TILE_SIZE
+        up, pad = 4 * ts, ts
+        rects = []
+
+        def at_cell(cx, cy):
+            rects.append(pygame.Rect(int(cx * ts + ox) - pad, int(cy * ts + oy) - up,
+                                     ts + 2 * pad, ts + up + pad))
+
+        at_cell(self.player.render_x, self.player.render_y)
+        for monster in self.monsters:
+            if monster.is_alive() and (monster.x, monster.y) in self.visible:
+                at_cell(monster.render_x, monster.render_y)
+        for dn in self.damage_numbers:
+            at_cell(dn["x"], dn["y"])
+        for particle in self.particles:
+            size = particle["size"] + 2 * pad
+            rects.append(pygame.Rect(int(particle["x"] + ox) - pad,
+                                     int(particle["y"] + oy) - pad, size, size))
+        if not rects:
+            return None
+        return rects[0].unionall(rects[1:])
+
+    def _view_region(self, ox, oy, redraw_all, slack, map_changed):
+        """How much of the dungeon view this frame has to repaint.
+
+        Standing still - which is what fighting is - the stonework does
+        not move and neither does the camera: the only pixels that differ
+        from last frame are the ones around the hero, whatever it is
+        hitting, and the sparks. Repainting and recopying the whole view
+        for that is what made fights cost what they cost.
+
+        Anything that can change the view as a whole hands back the whole
+        view: the camera sliding along with a step, the shake, the map
+        itself changing, and the damage flash, which is a wash over all
+        of it.
+        """
+        view = pygame.Rect(C.MAP_OFFSET_X, 0, C.VIEW_W, C.VIEW_H)
+        camera = self._camera()
+        moved = camera != getattr(self, "_last_camera", None)
+        self._last_camera = camera
+
+        live = self._live_rect(ox, oy)
+        before = getattr(self, "_live_prev", None)
+        self._live_prev = live
+
+        if (redraw_all or slack or map_changed or moved
+                or self.flash_timer > 0 or live is None):
+            return view
+        # Where things are now and where they were last frame, since the
+        # place they left has to be painted over.
+        region = live if before is None else live.union(before)
+        for patch in getattr(self, "_overlay_rects_prev", ()):
+            region = region.union(patch)
+        region = region.clip(view)
+        if not region.width or not region.height:
+            return view
+        # Past a certain size the bookkeeping stops paying for itself and
+        # the whole view is the simpler thing to do.
+        if region.width * region.height > 0.4 * view.width * view.height:
+            return view
+        return region
+
     def _mark_dirty(self, rect):
         if self._dirty is not None:
             self._dirty.append(pygame.Rect(rect).clip(self.screen.get_rect()))
@@ -2909,6 +2982,20 @@ class Game:
         self._notify(text, color)
         return text
 
+    def _overlay_drew(self, rect):
+        """Records a patch an overlay painted over the dungeon view.
+
+        These are drawn with alpha, so they need fresh map underneath or
+        they stack on their own last copy and darken. When only a small
+        region of the view is being repainted, the region has to include
+        wherever they were - which is what this remembers for the next
+        frame, since they draw after the region is chosen and they do not
+        move between frames without changing their text first.
+        """
+        rect = pygame.Rect(rect)
+        self._overlay_rects.append(rect)
+        self._mark_dirty(rect)
+
     def _clear_outside_view(self, rect):
         """Blanks the parts of a rect that stick out past the dungeon view.
 
@@ -2984,7 +3071,7 @@ class Game:
             self.screen.blit(panel, where.topleft)
             # A banner is wider than the dungeon view and hangs into the
             # gutters, which are not copied to the screen unless asked.
-            self._mark_dirty(where)
+            self._overlay_drew(where)
             y += h + self.gap_s
 
     def _spawn_damage_number(self, x, y, text, color):
@@ -4718,6 +4805,7 @@ class Game:
         # nothing in it moved; see _furniture_signature for what counts
         # as moved, and _present for the other half of this.
         self._dirty = []
+        self._overlay_rects = []
         furniture = self._furniture_signature()
         # The death screen lays a translucent sheet over the whole canvas
         # every frame, so it needs the canvas painted fresh underneath -
@@ -4756,7 +4844,11 @@ class Game:
         # the view a window rather than a drawing that overflows into the
         # gutters and the HUD.
         self._mark("clear")
-        self.screen.set_clip((C.MAP_OFFSET_X, 0, C.VIEW_W, C.VIEW_H))
+        # Bring the stonework up to date before deciding how much of
+        # the view to repaint - whether it changed is half the answer.
+        map_changed = self._update_map_cache()
+        region = self._view_region(ox, oy, redraw_all, slack, map_changed)
+        self.screen.set_clip(region)
         self._render_map(ox, oy)
         self._mark("map")
         self._render_entities(ox, oy)
@@ -4783,8 +4875,9 @@ class Game:
             self._mark("touch")
             self._dirty = None                  # the whole canvas moved
         else:
-            self._mark_dirty(self._viewport_rect())
+            self._mark_dirty(region)
         self._furniture_sig = furniture
+        self._overlay_rects_prev = self._overlay_rects
 
         if self.state == "dead":
             self._render_game_over()
@@ -5856,7 +5949,7 @@ class Game:
         where = name_text.get_rect(center=(C.SCREEN_WIDTH // 2, y + bar_h // 2))
         self._clear_outside_view(pygame.Rect(x, y, bar_w, bar_h).union(where))
         self.screen.blit(name_text, where)
-        self._mark_dirty(pygame.Rect(x, y, bar_w, bar_h).union(where))
+        self._overlay_drew(pygame.Rect(x, y, bar_w, bar_h).union(where))
 
     def _render_boss_banner(self):
         if self.boss_banner_timer <= 0:
@@ -5867,7 +5960,7 @@ class Game:
         where = text.get_rect(center=(C.SCREEN_WIDTH // 2, C.SCREEN_HEIGHT // 2 - 250))
         self._clear_outside_view(where)
         self.screen.blit(text, where)
-        self._mark_dirty(where)
+        self._overlay_drew(where)
 
     def _render_damage_numbers(self, ox=0, oy=0):
         for dn in self.damage_numbers:
@@ -6021,7 +6114,7 @@ class Game:
         # difference costs exactly the same to compute.
         changed = (self._cache_lit ^ self.visible) | (self.explored ^ self._cache_explored)
         if not changed:
-            return
+            return False
         x0, y0, cols, rows_n = self._map_cache_origin
         tier = getattr(self, "tier", None) or C.DUNGEON_TIERS[0]
         for (x, y) in self._with_overhangs(changed):
@@ -6029,6 +6122,7 @@ class Game:
                 self._paint_map_cell(self._map_cache, x, y, x0, y0, tier)
         self._cache_lit = set(self.visible)
         self._cache_explored = set(self.explored)
+        return True
 
     def _overhang_rows(self):
         """How many cells above its own a tile can reach into.
@@ -6084,25 +6178,42 @@ class Game:
                     and (x0 + cols) * ts >= cam_x + C.VIEW_W
                     and (y0 + rows_n) * ts >= cam_y + C.VIEW_H)
 
-    def _render_map(self, ox=0, oy=0):
-        # Lighting first, then the window - in that order, because the
-        # rebuild reuses whatever the cache already holds and would
-        # otherwise carry last turn's lighting into the new window.
-        #
-        # A different grid object means a different level: a new floor, a
-        # loaded save, the test room. That used to be caught by
-        # _recompute_fov throwing the cache away, which it no longer
-        # does, and descending then showed the previous floor's stonework
-        # under the new one's layout. Checked here rather than by
-        # invalidating at each of the four places that build a map,
-        # because the fifth one would forget.
+    def _update_map_cache(self):
+        """Brings the cached tile surface up to date; True if it changed.
+
+        Split from the drawing because the answer decides how much of the
+        screen has to be repainted at all: if the stonework is the same
+        as last frame, only the handful of pixels the monsters moved
+        across need touching.
+
+        Lighting first, then the window - in that order, because the
+        rebuild reuses whatever the cache already holds and would
+        otherwise carry last turn's lighting into the new window.
+
+        A different grid object means a different level: a new floor, a
+        loaded save, the test room. That used to be caught by
+        _recompute_fov throwing the cache away, which it no longer does,
+        and descending then showed the previous floor's stonework under
+        the new one's layout. Checked here rather than by invalidating at
+        each of the four places that build a map, because the fifth one
+        would forget.
+        """
         if (getattr(self, "_map_cache", None) is None
                 or getattr(self, "_cache_grid", None) is not self.grid):
             self._rebuild_map_cache()
-        else:
-            self._patch_map_cache()
-            if self._map_window_stale():
-                self._rebuild_map_cache()
+            return True
+        changed = self._patch_map_cache()
+        if self._map_window_stale():
+            self._rebuild_map_cache()
+            return True
+        return changed
+
+    def _render_map(self, ox=0, oy=0):
+        # render() has already done this, to work out how much of the
+        # view needs repainting - but this stays self-contained, because
+        # it is called on its own too and a second call costs a set
+        # comparison and returns.
+        self._update_map_cache()
         x0, y0, _cols, _rows = self._map_cache_origin
         self.screen.blit(self._map_cache,
                          (ox + x0 * C.TILE_SIZE, oy + y0 * C.TILE_SIZE))

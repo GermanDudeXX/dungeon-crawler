@@ -182,10 +182,14 @@ g._render_touch_controls = counting
 # culprit instead of leaving the next person to bisect a tuple.
 from collections import Counter
 culprits = Counter()
-FIELDS = ["state", "hud", "explored", "player.x", "player.y", "stairs",
-          "touch_dir", "show_touch", "test_room", "scrolls", "flash",
-          "boss_banner", "shake", "boss.hp", "boss.max", "banners",
-          "banner_timers", "pressed_key"]
+# In the order _furniture_signature builds them, so a failure names
+# the field instead of an index.
+FIELDS = ["state", "touch_dir", "show_touch", "test_room", "scrolls",
+          "shake", "boss_banner", "boss_present", "banner_texts",
+          "pressed_key"]
+assert len(FIELDS) == len(g._furniture_signature()), (
+    "the labels have drifted from the signature - a failure below "
+    "would blame the wrong field")
 
 
 def note_changes():
