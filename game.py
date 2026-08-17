@@ -2615,8 +2615,35 @@ class Game:
                            C.VIEW_W + 2 * slack, C.VIEW_H + slack
                            ).clip(self.screen.get_rect())
 
-    def _live_rect(self, ox, oy):
-        """One box around everything inside the view that can move.
+    def _entity_reach_up(self):
+        """How far above its own cell the tallest thing on the map draws.
+
+        Measured from the art and the fonts rather than guessed at: the
+        guess was four tiles, which at zoom 2 is 280px of margin around
+        every figure, and that margin is copied to the screen on every
+        frame. The pieces are the sprite hanging up out of its cell (a
+        boss is the tallest), then the health bar, the name and the
+        status pips stacked above that, and a tile of slack on top so
+        this can only ever be too generous.
+        """
+        ts = C.TILE_SIZE
+        cached = getattr(self, "_reach_up", None)
+        if cached is not None and self._reach_up_ts == ts:
+            return cached
+        sprites = [s[0].get_height() for s in self.monster_sprites.values() if s]
+        tallest = max(sprites) * C.BOSS_SPRITE_SCALE if sprites else ts
+        if self.player_sprite_right is not None:
+            tallest = max(tallest, self.player_sprite_right.get_height())
+        stack = (max(1, ts // 10)                      # gap over the head
+                 + self.f_tiny.get_height() + 2        # the name
+                 + max(2, ts // 8) + 2                 # the health bar
+                 + self.f_tiny.get_height() + 4)       # a row of status pips
+        self._reach_up = int(max(0, tallest - ts) + stack + ts)
+        self._reach_up_ts = ts
+        return self._reach_up
+
+    def _live_rects(self, ox, oy):
+        """A box around each thing inside the view that can move.
 
         Sprites, the nameplates and badges stacked above them, the YOU
         marker, sparks and rising damage numbers. Deliberately generous:
@@ -2625,9 +2652,15 @@ class Game:
         the monsters are drawn nearly twice as tall as their cell and
         hang upwards out of it, with the plates above that, hence the
         room left overhead.
+
+        One box each rather than one around the lot: the drawing
+        is clipped to all of them together, which is cheap, but the
+        copy to the screen is not - and two monsters at opposite
+        ends of a room would otherwise have everything between them
+        copied along with them.
         """
         ts = C.TILE_SIZE
-        up, pad = 4 * ts, ts
+        up, pad = self._entity_reach_up(), ts
         rects = []
 
         def at_cell(cx, cy):
@@ -2644,9 +2677,7 @@ class Game:
             size = particle["size"] + 2 * pad
             rects.append(pygame.Rect(int(particle["x"] + ox) - pad,
                                      int(particle["y"] + oy) - pad, size, size))
-        if not rects:
-            return None
-        return rects[0].unionall(rects[1:])
+        return rects
 
     def _view_region(self, ox, oy, redraw_all, slack, map_changed):
         """How much of the dungeon view this frame has to repaint.
@@ -2667,9 +2698,12 @@ class Game:
         moved = camera != getattr(self, "_last_camera", None)
         self._last_camera = camera
 
-        live = self._live_rect(ox, oy)
-        before = getattr(self, "_live_prev", None)
+        live = self._live_rects(ox, oy)
+        before = getattr(self, "_live_prev", [])
         self._live_prev = live
+        # Where things are now and where they were last frame, since
+        # the place they left has to be painted over as well.
+        self._frame_patches = live + before
 
         # The wash needs the whole view only on the frames where it
         # actually changes; while it holds still the rest of the view
@@ -2678,11 +2712,9 @@ class Game:
         washed = alpha != getattr(self, "_flash_alpha_prev", 0)
         self._flash_alpha_prev = alpha
         if (redraw_all or slack or map_changed or moved
-                or washed or live is None):
+                or washed or not live):
             return view
-        # Where things are now and where they were last frame, since the
-        # place they left has to be painted over.
-        region = live if before is None else live.union(before)
+        region = self._frame_patches[0].unionall(self._frame_patches[1:])
         for patch in getattr(self, "_overlay_rects_prev", ()):
             region = region.union(patch)
         region = region.clip(view)
@@ -4907,6 +4939,11 @@ class Game:
         if redraw_all:
             self._dirty = None                  # the whole canvas moved
         else:
+            # The whole region, not the individual boxes inside it:
+            # copying only those was tried and left a stale strip on
+            # screen, so something else inside the clip is being
+            # repainted with different pixels. Worth another look with
+            # a way to find out what, not worth guessing at.
             self._mark_dirty(region)
         self._furniture_sig = furniture
         self._overlay_rects_prev = self._overlay_rects
