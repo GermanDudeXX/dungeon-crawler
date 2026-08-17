@@ -2649,7 +2649,9 @@ class Game:
                      if m.is_boss and m.awake and m.is_alive()), None)
         return (
             self.state,
-            self._hud_signature(),
+            # The band is deliberately absent: it owns its own patch
+            # and repaints itself when a number in it moves, so a
+            # turn costs the view plus the band and not the screen.
             # The minimap is deliberately absent: it draws itself on
             # every frame and asks for its own corner, because the player
             # marker on it moves on every step.
@@ -4774,9 +4776,9 @@ class Game:
         self._render_banners()
         self._render_minimap()
         self._mark("mini")
+        self._render_hud(force=redraw_all)
+        self._mark("hud")
         if redraw_all:
-            self._render_hud()
-            self._mark("hud")
             self._render_touch_controls()
             self._mark("touch")
             self._dirty = None                  # the whole canvas moved
@@ -6571,25 +6573,38 @@ class Game:
             C.SCREEN_WIDTH, C.HUD_HEIGHT, self._lang(),
         )
 
-    def _render_hud(self):
-        """Draws the HUD band, reusing the last one whenever it still fits.
+    def _render_hud(self, force=False):
+        """Draws the HUD band, and only when what it says has changed.
 
         The band is a few dozen text renders and rounded chips - measured
         on the phone at 25ms, and up to 131ms once the log has lines to
         wrap. It used to repaint whenever needs_redraw was set, which is
-        every key and every tap: walking across a room repainted the same
-        numbers on every step. Comparing what it would say instead means
-        it only rasterises when a number in it actually moved.
+        every key and every tap.
+
+        It is also the reason a *turn* used to cost a full frame: taking
+        a hit or picking up gold changes a number here, and the band was
+        part of the all-or-nothing comparison that decides whether the
+        whole screen is rebuilt. It is not any more - it owns its patch.
+        A turn now costs the dungeon view plus this band instead of
+        everything, which is what took the jolt out of every step.
+
+        Nothing else draws over the band, so when it has not changed the
+        copy already on the canvas is left exactly where it is; `force`
+        is for the frames that repaint the canvas underneath it.
         """
         hud_y = C.VIEW_H
         band = (0, hud_y, C.SCREEN_WIDTH, C.HUD_HEIGHT)
         sig = self._hud_signature()
         if self._hud_cache is not None and sig == getattr(self, "_hud_sig", None):
+            if not force:
+                return
             self.screen.blit(self._hud_cache, (0, hud_y))
+            self._mark_dirty(band)
             return
         self._paint_hud(hud_y)
         self._hud_cache = self.screen.subsurface(band).copy()
         self._hud_sig = sig
+        self._mark_dirty(band)
 
     def _paint_hud(self, hud_y):
         # Uses the full width: the touch controls now sit above the band
