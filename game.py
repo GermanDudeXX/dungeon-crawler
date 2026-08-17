@@ -175,6 +175,7 @@ class Game:
         self._glow_cache = {}
         self._wash_cache = {}
         self._touch_btn_cache = {}
+        self._text_cache = {}
         self._hud_cache = None
         self.bag_page = 0
         self.shop_stock = None
@@ -1952,7 +1953,10 @@ class Game:
         # the difference. Discarding it was costing a full ~1000-cell
         # repaint on every step. Everything that changes the map itself
         # rather than the view of it still sets _map_cache = None.
-        self._minimap_cache = None
+        # The minimap is NOT thrown away here: it shows explored-or-not,
+        # which only ever grows, so _update_minimap_cache adds the few
+        # cells that just came into view instead of repainting a
+        # thousand rectangles on every step.
         self.needs_redraw = True
 
     def add_log(self, message):
@@ -5873,6 +5877,13 @@ class Game:
     MINIMAP_POS = (8, 8)
     MINIMAP_SCALE = 3
 
+    def _paint_minimap_cells(self, cells):
+        scale = self.MINIMAP_SCALE
+        surf = self._minimap_cache
+        for (x, y) in cells:
+            color = (90, 90, 100) if self.grid[y][x] == dungeon.WALL else (55, 55, 65)
+            pygame.draw.rect(surf, color, (2 + x * scale, 2 + y * scale, scale, scale))
+
     def _rebuild_minimap_cache(self):
         """Paints the explored tiles into a surface, once per change.
 
@@ -5880,21 +5891,44 @@ class Game:
         a thousand of them on a fully explored floor, plus a fresh
         translucent panel surface each time. It was the single largest
         item in a frame, and "many small draws" is exactly the pattern
-        that is slow on the device (see Game.__init__). Invalidated
-        alongside the map cache, which has the same trigger.
+        that is slow on the device (see Game.__init__).
         """
         scale = self.MINIMAP_SCALE
         w, h = C.MAP_WIDTH * scale, C.MAP_HEIGHT * scale
         surf = pygame.Surface((w + 4, h + 4), pygame.SRCALPHA)
         surf.fill((10, 10, 16, 170))
-        for (x, y) in self.explored:
-            color = (90, 90, 100) if self.grid[y][x] == dungeon.WALL else (55, 55, 65)
-            pygame.draw.rect(surf, color, (2 + x * scale, 2 + y * scale, scale, scale))
         self._minimap_cache = surf
+        self._paint_minimap_cells(self.explored)
+        self._minimap_drawn = set(self.explored)
 
-    def _render_minimap(self):
+    def _update_minimap_cache(self):
+        """Adds the cells explored since the last time, and nothing else.
+
+        The whole thing was repainted on every step - a thousand
+        rectangles into a translucent surface, measured at 75-83ms on the
+        phone, once per turn. Nothing in it depends on the field of view;
+        it is explored-or-not and the layout, so a step only ever adds
+        the handful of cells that just came into view. The paths that
+        change the map itself, or hand over a fully revealed one, still
+        throw the surface away and get a full repaint.
+        """
         if getattr(self, "_minimap_cache", None) is None:
             self._rebuild_minimap_cache()
+            return
+        if self._minimap_drawn - self.explored:
+            # Explored only grows in play, and the paths that hand over a
+            # different set drop the surface - but a cache that can only
+            # be corrected in one direction is a trap for whatever comes
+            # next, and noticing costs one set difference.
+            self._rebuild_minimap_cache()
+            return
+        fresh = self.explored - self._minimap_drawn
+        if fresh:
+            self._paint_minimap_cells(fresh)
+            self._minimap_drawn |= fresh
+
+    def _render_minimap(self):
+        self._update_minimap_cache()
         mini_x, mini_y = self.MINIMAP_POS
         scale = self.MINIMAP_SCALE
         area = pygame.Rect(mini_x, mini_y, *self._minimap_cache.get_size())
@@ -5973,7 +6007,9 @@ class Game:
         for dn in self.damage_numbers:
             ratio = dn["timer"] / dn["max_timer"]
             rise = (1 - ratio) * 22
-            surf = self.font.render(dn["text"], True, dn["color"])
+            # Shared surface, so the alpha is set every time rather
+            # than assumed - see _text.
+            surf = self._text(self.font, dn["text"], dn["color"])
             surf.set_alpha(int(255 * ratio))
             center = (
                 int(dn["x"] * C.TILE_SIZE + C.TILE_SIZE // 2 + ox),
@@ -6450,6 +6486,33 @@ class Game:
             self._name_cache[key] = cached
         return cached
 
+    def _text(self, font, text, color):
+        """A rasterised string, kept.
+
+        Turning a string into pixels is one of the more expensive things
+        in a frame on the phone - the HUD band alone is a couple of dozen
+        of them, measured at 46-60ms a repaint - and almost all of them
+        are the same strings as last time: the weapon's name, "Lv 3", the
+        line in the log that has not changed. Only a handful actually
+        differ, so they are cached by what they are.
+
+        The surface is shared, so a caller that changes its alpha must
+        set it every time rather than assume it starts opaque.
+        """
+        key = (id(font), text, color)
+        surface = self._text_cache.get(key)
+        if surface is None:
+            # Bounded: health and gold produce a new string every time
+            # they change, so this would otherwise grow all run. Cleared
+            # rather than evicted one by one - it refills in a frame or
+            # two and nothing here is expensive enough to be worth an
+            # ordering.
+            if len(self._text_cache) > C.TEXT_CACHE_MAX:
+                self._text_cache.clear()
+            surface = font.render(text, True, color)
+            self._text_cache[key] = surface
+        return surface
+
     def _f_tiny_outlined(self, text, color):
         """Small text with a hard black outline.
 
@@ -6672,8 +6735,8 @@ class Game:
         """
         f = self.f_sm
         art = self.hud_icons.get(icon) if isinstance(icon, str) else None
-        glyph = None if art else f.render(str(icon), True, icon_color or C.COLOR_TEXT)
-        label = f.render(text, True, text_color or C.COLOR_TEXT)
+        glyph = None if art else self._text(f, str(icon), icon_color or C.COLOR_TEXT)
+        label = self._text(f, text, text_color or C.COLOR_TEXT)
         icon_w = art.get_width() if art else glyph.get_width()
         pad = self.gap_s
         w = max(min_w, pad + icon_w + self.gap_s // 2 + label.get_width() + pad)
@@ -6695,7 +6758,7 @@ class Game:
         if ratio > 0:
             pygame.draw.rect(self.screen, fg,
                              (x, y, max(h, int(w * min(1.0, ratio))), h), border_radius=r)
-        label = self.f_sm.render(text, True, C.COLOR_TEXT)
+        label = self._text(self.f_sm, text, C.COLOR_TEXT)
         self.screen.blit(label, label.get_rect(center=(x + w // 2, y + h // 2)))
 
     def _hud_signature(self):
@@ -6868,9 +6931,10 @@ class Game:
 
         # Depth and kills, on their own line under the chips - flavour,
         # so it is the first thing to go when the band is short.
-        stat = self.f_sm.render(
+        stat = self._text(
+            self.f_sm,
             f"{tier_label}  ·  {self.t('hud_kills')} {self.player.kills}",
-            True, C.COLOR_TEXT_DIM)
+            C.COLOR_TEXT_DIM)
         if row_y + stat.get_height() <= band_bottom:
             self.screen.blit(stat, (left, row_y))
 
@@ -6888,7 +6952,7 @@ class Game:
                 wrapped = self._wrap_text(message, log_font, log_w)
                 lines.extend(wrapped or [message])
             for i, line in enumerate(lines[-room:]):
-                self.screen.blit(log_font.render(line, True, C.COLOR_LOG_TEXT),
+                self.screen.blit(self._text(log_font, line, C.COLOR_LOG_TEXT),
                                  (log_x, y + i * pitch))
 
     def _hud_rows(self, equipment, supplies, buffs, fits,

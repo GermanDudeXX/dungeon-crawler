@@ -91,6 +91,12 @@ SLOW_FRAME_STREAK = 20
 # second the eye cannot tell three steps from six.
 FLASH_ALPHA_STEP = 30
 
+# How many rasterised strings to keep before dropping the lot. Every
+# changing number - health, gold, a damage figure - makes a new one, so
+# this has to be bounded; a few hundred covers a screen's worth several
+# times over.
+TEXT_CACHE_MAX = 400
+
 SCREEN_HEIGHT = VIEW_H + HUD_HEIGHT
 
 # Menu/info screens are laid out from these sizes rather than by zooming a

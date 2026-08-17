@@ -167,4 +167,51 @@ print(f"  and it does repaint for each of {len(cases)} values it shows")
 
 g._paint_hud = real_hud
 
+# --- 4. the same for the minimap ------------------------------------------
+# It is explored-or-not, so a step only ever adds the cells that just came
+# into view - but it was repainting a thousand rectangles into a
+# translucent surface on every one of them, 75-83ms of a turn on the phone.
+
+
+def minimap_from_scratch():
+    keep = g._minimap_cache
+    g._minimap_cache = None
+    g._rebuild_minimap_cache()
+    fresh = g._minimap_cache
+    g._minimap_cache = keep
+    return pygame.image.tostring(fresh, "RGBA")
+
+
+walk_a_few_steps(6)
+assert pygame.image.tostring(g._minimap_cache, "RGBA") == minimap_from_scratch(), (
+    "the patched minimap differs from one painted from scratch")
+print("  minimap: patched == fully repainted")
+
+cells_painted = {"n": 0}
+real_cells = g._paint_minimap_cells
+
+
+def counting_cells(cells):
+    cells = list(cells)
+    cells_painted["n"] += len(cells)
+    return real_cells(cells)
+
+
+g._paint_minimap_cells = counting_cells
+walk_a_few_steps(1)
+g._paint_minimap_cells = real_cells
+print(f"  one step paints {cells_painted['n']} minimap cells, "
+      f"not all {len(g.explored)}")
+assert cells_painted["n"] < max(20, len(g.explored) // 4), (
+    f"a step still repaints {cells_painted['n']} of {len(g.explored)} cells")
+
+# A shrinking explored set is not something play does, but the cache must
+# not quietly keep showing the old one if it ever happens.
+g.explored = set(list(g.explored)[:len(g.explored) // 2])
+g.needs_redraw = True
+g.render()
+assert pygame.image.tostring(g._minimap_cache, "RGBA") == minimap_from_scratch(), (
+    "the minimap kept cells that are no longer explored")
+print("  and it notices if explored ever shrinks")
+
 print("\nALL INCREMENTAL-CACHE CHECKS PASSED")
