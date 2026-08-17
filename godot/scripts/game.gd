@@ -74,7 +74,11 @@ func _build_world() -> void:
 	# the opposite reason. There it was to stop the whole screen changing
 	# every frame; here it is only so the pixel art lands on whole pixels.
 	_camera.position_smoothing_enabled = false
-	_camera.zoom = Vector2(3, 3)
+	# Sized so the dungeon fills a phone in landscape rather than
+	# sitting in the middle of it: the viewport is 1280x720 and the
+	# map is 40x25 tiles of 16px, so a little over 2x puts a good
+	# part of the floor on screen at a readable size.
+	_camera.zoom = Vector2(2.2, 2.2)
 	add_child(_camera)
 
 
