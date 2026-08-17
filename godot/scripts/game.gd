@@ -31,6 +31,8 @@ var _hero: Sprite2D
 var _camera: Camera2D
 var _readout: Label
 var _tile_ids := {}       ## tile name -> source id in the shared TileSet
+var _held := Vector2i.ZERO      ## direction a thumb is holding
+var _step_cooldown := 0.0
 
 
 func _ready() -> void:
@@ -107,10 +109,53 @@ func _tile_names() -> PackedStringArray:
 func _build_hud() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
+
 	_readout = Label.new()
 	_readout.position = Vector2(12, 8)
+	_readout.add_theme_font_size_override("font_size", 22)
 	_readout.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
 	layer.add_child(_readout)
+
+	# A thumb-sized cross in the bottom-left corner, the same shape and
+	# the same corner as the pygame build's. The viewport is 1280x720 and
+	# the display scales it up, so these are bigger on the phone than the
+	# numbers suggest - on a 2448-wide screen a 120px button lands at
+	# about 230 physical pixels, well over Android's 48dp minimum.
+	var pad := 28.0
+	var size := 120.0
+	var origin := Vector2(pad + size, -pad - size * 2.0)
+	_dpad_button(layer, "^", origin + Vector2(0, -size), Vector2i(0, -1), size)
+	_dpad_button(layer, "v", origin, Vector2i(0, 1), size)
+	_dpad_button(layer, "<", origin + Vector2(-size, -size * 0.5), Vector2i(-1, 0), size)
+	_dpad_button(layer, ">", origin + Vector2(size, -size * 0.5), Vector2i(1, 0), size)
+
+	# One more floor, for looking at a different layout without leaving
+	# the app - the slice has no stairs yet.
+	var again := Button.new()
+	again.text = "NEU"
+	again.custom_minimum_size = Vector2(size * 1.4, size * 0.7)
+	again.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	again.position = Vector2(-pad - size * 1.4, -pad - size * 0.7)
+	again.add_theme_font_size_override("font_size", 28)
+	again.pressed.connect(_new_level)
+	layer.add_child(again)
+
+
+func _dpad_button(layer: CanvasLayer, label: String, where: Vector2,
+		step: Vector2i, size: float) -> void:
+	var button := Button.new()
+	button.text = label
+	button.custom_minimum_size = Vector2(size, size)
+	button.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	button.position = where
+	button.add_theme_font_size_override("font_size", 40)
+	# Held, not tapped: walking is what the frame rate has to be measured
+	# on, and tapping once per step measures nothing.
+	button.button_down.connect(func() -> void: _held = step)
+	button.button_up.connect(func() -> void:
+		if _held == step:
+			_held = Vector2i.ZERO)
+	layer.add_child(button)
 
 
 # --- the level ------------------------------------------------------------
@@ -209,22 +254,6 @@ func _place_hero() -> void:
 
 # --- playing --------------------------------------------------------------
 
-func _unhandled_input(event: InputEvent) -> void:
-	if not event.is_pressed():
-		return
-	var step := Vector2i.ZERO
-	if event.is_action("ui_right") or Input.is_key_pressed(KEY_D):
-		step = Vector2i(1, 0)
-	elif event.is_action("ui_left") or Input.is_key_pressed(KEY_A):
-		step = Vector2i(-1, 0)
-	elif event.is_action("ui_down") or Input.is_key_pressed(KEY_S):
-		step = Vector2i(0, 1)
-	elif event.is_action("ui_up") or Input.is_key_pressed(KEY_W):
-		step = Vector2i(0, -1)
-	if step != Vector2i.ZERO:
-		move(step)
-
-
 func move(step: Vector2i) -> void:
 	var target := _player + step
 	if not Dungeon.is_walkable(_grid, target.x, target.y):
@@ -234,7 +263,26 @@ func move(step: Vector2i) -> void:
 	_paint()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	# Held keys and held thumbs both walk at a steady rate rather than
+	# as fast as frames happen - otherwise the hero's speed would
+	# depend on the frame rate, which is the very thing being measured.
+	_step_cooldown -= delta
+	if _held == Vector2i.ZERO:
+		if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
+			_held = Vector2i(1, 0)
+		elif Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
+			_held = Vector2i(-1, 0)
+		elif Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
+			_held = Vector2i(0, 1)
+		elif Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
+			_held = Vector2i(0, -1)
+	if _held != Vector2i.ZERO and _step_cooldown <= 0.0:
+		move(_held)
+		_step_cooldown = 0.14
+		if not Input.is_anything_pressed():
+			_held = Vector2i.ZERO
+
 	# Frame time, not frame rate: the pygame build's readout measured the
 	# gap between draws, which on a turn-based game that only redraws on
 	# change reads 500ms while standing still and means nothing. This is
