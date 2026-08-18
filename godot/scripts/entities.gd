@@ -38,6 +38,12 @@ class Player extends Actor:
 	var kills := 0
 	var facing := 1
 	var poison_turns := 0
+	var bonus_crit := 0.0
+	var damage_reduction := 0.0
+	var gold_mult := 1.0
+	var regen_interval := 0        ## 0 means no regeneration at all
+	var regen_counter := 0
+	var pending_perks := 0         ## levels gained but not yet spent
 
 	var hero_class := "warrior"
 
@@ -58,6 +64,12 @@ class Player extends Actor:
 	func power() -> int:
 		return base_power + Data.WEAPONS[weapon]["bonus"]
 
+	## Rises with level and caps where the Python build caps it, so a
+	## late hero crits often but never always.
+	func crit_chance() -> float:
+		return minf(0.5, 0.05 + level * 0.02 + bonus_crit)
+
+
 	func defense() -> int:
 		return base_defense + Data.ARMOURS[armour]["bonus"]
 
@@ -75,6 +87,7 @@ class Player extends Actor:
 			base_power += 1
 			hp = min(max_hp, hp + 5)
 			gained += 1
+			pending_perks += 1
 		return gained
 
 

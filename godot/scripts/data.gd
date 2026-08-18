@@ -178,3 +178,34 @@ static func class_by_id(id: String) -> Dictionary:
 			return entry
 	return CLASSES[0]
 
+
+# --- Stufenaufstieg -------------------------------------------------------
+# One perk per level, picked from three of these. The same list as
+# constants.py PERKS, minus the elemental one - this build has no
+# elements for it to raise, and a perk that does nothing is worse than
+# one fewer choice.
+const PERKS := [
+	{"id": "power", "name": "Rohe Kraft", "desc": "+2 Angriff", "power": 2},
+	{"id": "defense", "name": "Eisenhaut", "desc": "+2 Verteidigung", "defense": 2},
+	{"id": "vitality", "name": "Lebenskraft", "desc": "+10 max. Leben", "hp": 10},
+	{"id": "precision", "name": "Präzision", "desc": "+5% kritische Treffer", "crit": 0.05},
+	{"id": "toughness", "name": "Zähigkeit", "desc": "-10% erlittener Schaden",
+		"reduction": 0.10},
+	{"id": "regeneration", "name": "Regeneration", "desc": "1 Leben alle 5 Züge",
+		"regen": 5},
+	{"id": "greed", "name": "Gier", "desc": "+25% Gold", "gold": 0.25},
+]
+const PERK_CHOICES := 3
+const CRIT_MULT := 2
+
+
+## Three different perks, or fewer if the list ever gets shorter than
+## three. Drawn without replacement: offering the same perk twice is a
+## choice that is not one.
+static func perk_choices(rng: RandomNumberGenerator) -> Array:
+	var pool := PERKS.duplicate()
+	var out: Array = []
+	for _i in mini(PERK_CHOICES, pool.size()):
+		out.append(pool.pop_at(rng.randi_range(0, pool.size() - 1)))
+	return out
+

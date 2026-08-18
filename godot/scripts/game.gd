@@ -71,6 +71,9 @@ var _continue_button: Button
 var _dead_panel: PanelContainer
 var _dead_text: Label
 var _sound_button: Button
+var _perk_panel: PanelContainer
+var _perk_buttons: Array = []
+var perk_choices: Array = []      ## the three on offer right now
 var _music_button: Button
 var _held := Vector2i.ZERO
 var _step_cooldown := 0.0
@@ -194,6 +197,12 @@ func load_run() -> bool:
 	player.kills = int(p["kills"])
 	player.facing = int(p["facing"])
 	player.poison_turns = int(p["poison_turns"])
+	player.bonus_crit = float(p.get("bonus_crit", 0.0))
+	player.damage_reduction = float(p.get("damage_reduction", 0.0))
+	player.gold_mult = float(p.get("gold_mult", 1.0))
+	player.regen_interval = int(p.get("regen_interval", 0))
+	player.regen_counter = int(p.get("regen_counter", 0))
+	player.pending_perks = int(p.get("pending_perks", 0))
 	player.snap()
 
 	depth = int(save["depth"])
@@ -418,7 +427,7 @@ func _free_cell(where: Array) -> Variant:
 			continue
 		if cell == Vector2i(player.x, player.y) or cell == stairs:
 			continue
-		if occupied(cell) or item_at(cell) != null:
+		if occupied(cell) or taken(cell):
 			continue
 		return cell
 	return null
@@ -451,6 +460,21 @@ func _shopkeeper_spot(where: Array) -> Variant:
 		if reachable_from(Vector2i(player.x, player.y), {cell: true}).has(stairs):
 			return cell
 	return null            ## rather no shop than a floor nobody can finish
+
+
+## Anything already standing on this cell that is not a monster.
+##
+## Without this a shopkeeper could be placed on top of the chest, and
+## then the chest could never be opened at all: walking into that cell
+## opens the shop and returns before the chest is ever looked at. That
+## is not theory - playing the port turned up a floor where the merchant
+## and the chest shared (20, 9) and the chest stayed shut forever.
+func taken(cell: Vector2i) -> bool:
+	if item_at(cell) != null or traps.has(cell):
+		return true
+	if chest != null and chest["cell"] == cell:
+		return true
+	return shop_at(cell) != null
 
 
 func occupied(cell: Vector2i) -> bool:
@@ -518,6 +542,8 @@ func _line_clear(from: Vector2i, to: Vector2i) -> bool:
 func try_move(step: Vector2i) -> void:
 	if dead or choosing or step == Vector2i.ZERO or shop_open != null:
 		return
+	if player.pending_perks > 0 and _perk_panel != null and _perk_panel.visible:
+		return
 	var target := Vector2i(player.x + step.x, player.y + step.y)
 	if step.x != 0:
 		player.facing = 1 if step.x > 0 else -1
@@ -552,6 +578,7 @@ func try_move(step: Vector2i) -> void:
 		return
 
 	_tick_poison()
+	_tick_regen()
 	enemy_turn()
 	recompute_fov()
 	paint()
@@ -559,16 +586,21 @@ func try_move(step: Vector2i) -> void:
 
 func _attack_monster(monster) -> void:
 	var damage: int = maxi(1, player.power() - monster.defense)
+	var crit := rng.randf() < player.crit_chance()
+	if crit:
+		damage *= Data.CRIT_MULT
 	audio.play("boss" if monster.is_boss else "hit")
 	monster.hp -= damage
 	if monster.is_alive():
-		say("Du triffst %s für %d." % [monster.display_name, damage])
+		say("Kritisch! %s nimmt %d." % [monster.display_name, damage] if crit
+			else "Du triffst %s für %d." % [monster.display_name, damage])
 		return
 	audio.play("monster_death")
 	say("%s stirbt." % monster.display_name)
 	player.kills += 1
 	if player.gain_xp(monster.xp_reward) > 0:
 		audio.play("levelup")
+		_offer_perk()
 		say("Level auf! Du bist jetzt Stufe %d." % player.level)
 	if _actor_nodes.has(monster):
 		_actor_nodes[monster].queue_free()
@@ -621,6 +653,7 @@ func _step_monster(monster, step: Vector2i) -> void:
 
 func _monster_attacks(monster) -> void:
 	var damage: int = maxi(1, monster.power - player.defense())
+	damage = maxi(1, int(round(damage * (1.0 - player.damage_reduction))))
 	player.hp -= damage
 	audio.play("player_hurt")
 	say("%s trifft dich für %d." % [monster.display_name, damage])
@@ -640,9 +673,10 @@ func _pick_up(cell: Vector2i) -> void:
 	var loot: Dictionary = item
 	match loot["kind"]:
 		"gold":
-			player.gold += loot["amount"]
+			var found: int = int(round(loot["amount"] * player.gold_mult))
+			player.gold += found
 			audio.play("coin")
-			say("%d Gold." % loot["amount"])
+			say("%d Gold." % found)
 		"potion":
 			player.potions += 1
 			audio.play("pickup")
@@ -669,6 +703,18 @@ func _pick_up(cell: Vector2i) -> void:
 	if _item_nodes.has(cell):
 		_item_nodes[cell].queue_free()
 		_item_nodes.erase(cell)
+
+
+## Regeneration ticks on the turn, not the frame - a hero who heals
+## faster on a faster phone is a different game.
+func _tick_regen() -> void:
+	if player.regen_interval <= 0 or dead or player.hp >= player.max_hp:
+		return
+	player.regen_counter += 1
+	if player.regen_counter < player.regen_interval:
+		return
+	player.regen_counter = 0
+	player.hp = mini(player.max_hp, player.hp + 1)
 
 
 func _tick_poison() -> void:
@@ -1008,6 +1054,7 @@ func _build_hud() -> void:
 	_play_ui.add_child(again)
 
 	_build_shop_panel()
+	_build_perk_panel()
 	_build_dead_panel()
 	_build_title_panel()
 
@@ -1023,6 +1070,81 @@ func _solid_panel(panel: PanelContainer) -> void:
 	style.set_corner_radius_all(10)
 	style.set_content_margin_all(22)
 	panel.add_theme_stylebox_override("panel", style)
+
+
+## The level-up choice: three perks, pick one. It blocks movement the
+## same way a shop does, and it is the reason pending_perks exists -
+## two levels in one kill hand out two choices, one after the other,
+## instead of quietly throwing the second away.
+func _build_perk_panel() -> void:
+	_perk_panel = PanelContainer.new()
+	_perk_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_perk_panel.position = Vector2(-340, -180)
+	_perk_panel.custom_minimum_size = Vector2(680, 360)
+	_perk_panel.visible = false
+	_solid_panel(_perk_panel)
+	_hud.add_child(_perk_panel)
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 14)
+	_perk_panel.add_child(column)
+
+	var heading := Label.new()
+	heading.text = "Stufenaufstieg - wähle eine Gabe"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 32)
+	heading.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
+	column.add_child(heading)
+
+	_perk_buttons.clear()
+	for i in Data.PERK_CHOICES:
+		var button := Button.new()
+		button.custom_minimum_size = Vector2(0, 78)
+		button.add_theme_font_size_override("font_size", 26)
+		button.pressed.connect(take_perk.bind(i))
+		column.add_child(button)
+		_perk_buttons.append(button)
+
+
+func _offer_perk() -> void:
+	if _perk_panel == null or player.pending_perks <= 0:
+		return
+	perk_choices = Data.perk_choices(rng)
+	for i in _perk_buttons.size():
+		var button: Button = _perk_buttons[i]
+		var shown: bool = i < perk_choices.size()
+		button.visible = shown
+		if shown:
+			button.text = "%s - %s" % [perk_choices[i]["name"], perk_choices[i]["desc"]]
+	_perk_panel.visible = true
+
+
+func take_perk(index: int) -> void:
+	if index < 0 or index >= perk_choices.size() or player.pending_perks <= 0:
+		return
+	var perk: Dictionary = perk_choices[index]
+	player.base_power += int(perk.get("power", 0))
+	player.base_defense += int(perk.get("defense", 0))
+	var extra: int = int(perk.get("hp", 0))
+	player.max_hp += extra
+	player.hp += extra
+	player.bonus_crit += float(perk.get("crit", 0.0))
+	player.damage_reduction = minf(0.8, player.damage_reduction + float(perk.get("reduction", 0.0)))
+	player.gold_mult += float(perk.get("gold", 0.0))
+	if perk.has("regen"):
+		# Taking it twice makes it faster rather than doing nothing.
+		player.regen_interval = (int(perk["regen"]) if player.regen_interval == 0
+			else maxi(1, player.regen_interval - 1))
+	player.pending_perks -= 1
+	audio.play("levelup")
+	say("Gabe erhalten: %s." % perk["name"])
+	_perk_panel.visible = false
+	perk_choices.clear()
+	# A second level from the same kill gets its own choice.
+	if player.pending_perks > 0:
+		_offer_perk()
+	else:
+		save_run()
 
 
 ## What is left of a run when it ends. The pygame build shows the same
@@ -1213,6 +1335,8 @@ func _build_title_panel() -> void:
 ## the choice is never made against the corpse of the last run.
 func show_title() -> void:
 	choosing = true
+	if _perk_panel != null:
+		_perk_panel.visible = false
 	if _dead_panel != null:
 		_dead_panel.visible = false
 	close_shop()
@@ -1238,6 +1362,8 @@ func continue_run() -> void:
 
 func choose_class(id: String) -> void:
 	hero_class = id
+	if _perk_panel != null:
+		_perk_panel.visible = false
 	if _dead_panel != null:
 		_dead_panel.visible = false
 	choosing = false

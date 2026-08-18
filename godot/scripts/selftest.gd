@@ -45,6 +45,8 @@ func _process(_delta: float) -> bool:
 	# like a broken invariant does.
 	var seen := {"Bosse": 0, "Laeden": 0, "Truhen": 0, "Fallen": 0, "Mimics": 0}
 	var played := {}
+	var perks := 0
+	var shopped := false
 	var next_class := 0
 	var depth_at: int = _game.depth
 	var started := Time.get_ticks_msec()
@@ -70,6 +72,7 @@ func _process(_delta: float) -> bool:
 			played[_game.player.hero_class] = true
 			depth_at = _game.depth
 			on_this_floor = 0
+			shopped = false
 			continue
 
 		# A good run can outlive the test, and then only one class ever
@@ -80,15 +83,33 @@ func _process(_delta: float) -> bool:
 			played[_game.player.hero_class] = true
 			depth_at = _game.depth
 			on_this_floor = 0
+			shopped = false
 			continue
 
 		if _game.player.hp < _game.player.max_hp * 0.4 and _game.player.potions > 0:
 			_game.drink()
 
+		# A level-up asks for a perk before anything else can happen.
+		if _game.player.pending_perks > 0:
+			var offered: int = _game.perk_choices.size()
+			if offered == 0:
+				_complain("Stufenaufstieg ohne Auswahl")
+				_game.player.pending_perks = 0
+				continue
+			perks += 1
+			_game.take_perk(turn % offered)
+			continue
+
 		# A shop opens when you walk into its keeper; a player leaves it.
 		if _game.shop_open != null:
 			seen["Laeden"] += 1
+			# Buy the round, then leave and stay left: without this the
+			# bot walks back into the same merchant every turn for the
+			# rest of the floor and never sees the stairs again.
+			shopped = true
 			_game.buy("potion")
+			_game.buy("weapon")
+			_game.buy("armour")
 			_game.close_shop()
 			if _game.shop_open != null:
 				_complain("Laden lässt sich nicht verlassen")
@@ -105,7 +126,7 @@ func _process(_delta: float) -> bool:
 		if _game.chest != null and not _game.chest["opened"]:
 			target = _game.chest["cell"]
 			what = "Truhe"
-		elif _game.player.gold >= Data.POTION_COST:
+		elif not shopped and _game.player.gold >= Data.POTION_COST:
 			for shop in _game.shops:
 				target = shop["cell"]
 				what = "Laden"
@@ -133,6 +154,7 @@ func _process(_delta: float) -> bool:
 			_next_floor()
 			depth_at = _game.depth
 			on_this_floor = 0
+			shopped = false
 			continue
 
 		if turn > 0 and turn % 250 == 0:
@@ -171,8 +193,11 @@ func _process(_delta: float) -> bool:
 		if _game.depth != depth_at:
 			descents += 1
 			deepest = maxi(deepest, _game.depth)
+			_check_placement()
+			shopped = false
 			depth_at = _game.depth
 			on_this_floor = 0
+			shopped = false
 		else:
 			on_this_floor += 1
 			if on_this_floor > 600:
@@ -189,7 +214,10 @@ func _process(_delta: float) -> bool:
 	for what in seen:
 		parts.append("%d %s" % [seen[what], what])
 	print("  angefasst: " + ", ".join(parts))
-	print("  gespielt: " + ", ".join(played.keys()))
+	print("  gespielt: %s, %d Gaben gewählt" % [", ".join(played.keys()), perks])
+
+	if perks == 0:
+		print("  nie eine Gabe gewählt - der Stufenaufstieg ist ungetestet")
 
 	var failed := false
 	if played.size() < Data.CLASSES.size():
@@ -294,6 +322,9 @@ func _fingerprint() -> String:
 		"Held=(%d,%d) %d/%d HP, Stufe %d, %d Gold, %d Traenke, Gift %d" % [
 			p.x, p.y, p.hp, p.max_hp, p.level, p.gold, p.potions, p.poison_turns],
 		"Waffe=%d Ruestung=%d" % [p.weapon, p.armour],
+		"Angriff=%d Verteidigung=%d Krit=%.3f Minderung=%.3f Gold x%.2f" % [
+			p.base_power, p.base_defense, p.bonus_crit, p.damage_reduction, p.gold_mult],
+		"Regen=%d/%d offen=%d" % [p.regen_counter, p.regen_interval, p.pending_perks],
 		"Treppe=%s verriegelt=%s" % [str(_game.stairs), str(_game.stairs_locked)],
 		"erkundet=%d" % _game.explored.size(),
 		"Fallen=%d Laeden=%d Beute=%d" % [
@@ -365,4 +396,31 @@ func _check_audio() -> void:
 		var file: String = tier.get("music", "")
 		if file == "" or not ResourceLoader.exists(Audio.MUSIC_DIR + file):
 			_complain("Musikstück fehlt", "%s: %s" % [tier["id"], file])
+
+
+## Nothing may share a cell with anything else. A shopkeeper standing on
+## the chest makes the chest unopenable, a second shopkeeper on the first
+## makes one of them unreachable, and neither shows up as a crash - the
+## floor simply quietly holds less than it should.
+func _check_placement() -> void:
+	var seen_here := {}
+	var things: Array = []
+	for shop in _game.shops:
+		things.append([shop["cell"], "Laden (%s)" % shop["kind"]])
+	if _game.chest != null:
+		things.append([_game.chest["cell"], "Truhe"])
+	for cell in _game.traps:
+		things.append([cell, "Falle"])
+	for item in _game.items:
+		things.append([item["cell"], "Beute (%s)" % item["kind"]])
+	for entry in things:
+		var cell: Vector2i = entry[0]
+		if seen_here.has(cell):
+			_complain("zwei Dinge auf einem Feld",
+				"Ebene %d, %s auf %s bei %s" % [
+				_game.depth, entry[1], seen_here[cell], str(cell)])
+		seen_here[cell] = entry[1]
+		if cell == _game.stairs:
+			_complain("etwas steht auf der Treppe",
+				"Ebene %d, %s" % [_game.depth, entry[1]])
 
