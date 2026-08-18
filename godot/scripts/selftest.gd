@@ -48,6 +48,7 @@ func _process(_delta: float) -> bool:
 	var next_class := 0
 	var depth_at: int = _game.depth
 	var started := Time.get_ticks_msec()
+	_check_audio()
 
 	# Seeded, so a failure can be looked at again instead of being a
 	# story about a run nobody can reproduce. The game randomises its
@@ -328,4 +329,40 @@ func _check_save() -> void:
 		_complain("Spielstand kommt anders zurueck")
 		_notes.append("  vorher: " + before)
 		_notes.append("  nachher: " + after)
+
+
+## The sounds are generated, and nobody here can hear them. What can be
+## checked is that each one exists, is as long as it claims, and is not
+## silence - a formula slip that produced a quarter second of zeroes
+## would otherwise ship as "the game just has no hit sound".
+func _check_audio() -> void:
+	var audio = _game.audio
+	if audio == null:
+		_complain("kein Ton-Knoten")
+		return
+	for name in Audio.TONES:
+		var stream: AudioStreamWAV = audio._streams.get(name)
+		if stream == null:
+			_complain("Ton fehlt", name)
+			continue
+		var seconds := 0.0
+		for part in Audio.TONES[name]:
+			seconds += float(part[2])
+		var expected := int(Audio.SAMPLE_RATE * seconds) * 2
+		if absi(stream.data.size() - expected) > 8:
+			_complain("Ton hat die falsche Länge",
+				"%s: %d statt %d Bytes" % [name, stream.data.size(), expected])
+		var loudest := 0
+		for i in range(0, stream.data.size() - 1, 2):
+			var value: int = stream.data[i] | (stream.data[i + 1] << 8)
+			if value > 32767:
+				value -= 65536
+			loudest = maxi(loudest, absi(value))
+		if loudest < 3000:
+			_complain("Ton ist zu leise oder stumm", "%s: Spitze %d" % [name, loudest])
+
+	for tier in Data.TIERS:
+		var file: String = tier.get("music", "")
+		if file == "" or not ResourceLoader.exists(Audio.MUSIC_DIR + file):
+			_complain("Musikstück fehlt", "%s: %s" % [tier["id"], file])
 

@@ -73,11 +73,11 @@ const ARMOURS := [
 
 const POTION_HEAL := 12
 const TIERS := [
-	{"id": "crypt", "name": "Krypta", "tint": Color(0.59, 0.60, 0.70)},
-	{"id": "caverns", "name": "Höhlen", "tint": Color(0.70, 0.58, 0.43)},
-	{"id": "iron", "name": "Eisenverlies", "tint": Color(0.53, 0.60, 0.72)},
-	{"id": "flame", "name": "Flammenreich", "tint": Color(0.78, 0.50, 0.44)},
-	{"id": "frost", "name": "Frostgruft", "tint": Color(0.60, 0.74, 0.80)},
+	{"id": "crypt", "name": "Krypta", "tint": Color(0.59, 0.60, 0.70), "music": "crypt.mp3"},
+	{"id": "caverns", "name": "Höhlen", "tint": Color(0.70, 0.58, 0.43), "music": "caverns.mp3"},
+	{"id": "iron", "name": "Eisenverlies", "tint": Color(0.53, 0.60, 0.72), "music": "vault.mp3"},
+	{"id": "flame", "name": "Flammenreich", "tint": Color(0.78, 0.50, 0.44), "music": "caverns.mp3"},
+	{"id": "frost", "name": "Frostgruft", "tint": Color(0.60, 0.74, 0.80), "music": "vault.mp3"},
 ]
 
 

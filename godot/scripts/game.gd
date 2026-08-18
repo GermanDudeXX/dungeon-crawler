@@ -15,6 +15,17 @@ const MAP_H := 25
 const TILE := 16
 const FLOOR_VARIANTS := 8
 
+# Art comes in whatever size it was drawn at - the monster paintings
+# are around 220 pixels tall, a tile is 16. The pygame build scales
+# every sprite to a multiple of the tile before it ever blits one, and
+# these are its numbers: a monster stands one and a half tiles tall, a
+# boss nearly three, a shopkeeper a little over one and a half,
+# and the hero 1.8 - a hair taller than what he fights.
+const HERO_TILES := 1.8
+const MONSTER_TILES := 1.5
+const BOSS_SCALE := 1.8
+const PROP_TILES := 1.6
+
 const TILE_DIR := "res://assets/tiles/"
 const CLASS_DIR := "res://assets/classes/"
 const HERO_SPRITE := "knight_m_idle_anim_f0"
@@ -49,18 +60,29 @@ var _item_nodes := {}
 var _hero_node: Sprite2D
 var _camera: Camera2D
 var _hud: Control
+var audio: Audio
+var settings := Settings.DEFAULTS.duplicate()
 var _play_ui: Control            ## stats, log and the pad - hidden on the title
 var _shop_panel: PanelContainer
 var _shop_title: Label
 var _shop_buttons: Array = []
 var _title_panel: PanelContainer
 var _continue_button: Button
+var _dead_panel: PanelContainer
+var _dead_text: Label
+var _sound_button: Button
+var _music_button: Button
 var _held := Vector2i.ZERO
 var _step_cooldown := 0.0
 
 
 func _ready() -> void:
 	rng.randomize()
+	settings = Settings.read()
+	audio = Audio.new()
+	add_child(audio)
+	audio.enabled = settings["sound"]
+	audio.music_enabled = settings["music"]
 	_build_world()
 	_build_hud()
 	# A run starts behind the title screen, not in front of it: the
@@ -176,6 +198,7 @@ func load_run() -> bool:
 
 	depth = int(save["depth"])
 	tier = Data.tier_for(depth)
+	audio.play_music(tier.get("music", ""))
 	dead = false
 	log_lines.clear()
 	for line in save["log"]:
@@ -238,6 +261,8 @@ func load_run() -> bool:
 	_hero_node.texture = load(CLASS_DIR + Data.class_by_id(hero_class)["sprite"] + ".png")
 	choosing = false
 	close_shop()
+	if _dead_panel != null:
+		_dead_panel.visible = false
 	if _play_ui != null:
 		_play_ui.visible = true
 	if _title_panel != null:
@@ -269,6 +294,7 @@ func _notification(what: int) -> void:
 
 func new_level() -> void:
 	tier = Data.tier_for(depth)
+	audio.play_music(tier.get("music", ""))
 	var made := Dungeon.generate(MAP_W, MAP_H, rng)
 	grid = made["grid"]
 	rooms = made["rooms"]
@@ -518,6 +544,7 @@ func try_move(step: Vector2i) -> void:
 			return
 		if target == stairs:
 			depth += 1
+			audio.play("stairs")
 			say("Du steigst hinab - Ebene %d." % depth)
 			new_level()
 			return
@@ -532,13 +559,16 @@ func try_move(step: Vector2i) -> void:
 
 func _attack_monster(monster) -> void:
 	var damage: int = maxi(1, player.power() - monster.defense)
+	audio.play("boss" if monster.is_boss else "hit")
 	monster.hp -= damage
 	if monster.is_alive():
 		say("Du triffst %s für %d." % [monster.display_name, damage])
 		return
+	audio.play("monster_death")
 	say("%s stirbt." % monster.display_name)
 	player.kills += 1
 	if player.gain_xp(monster.xp_reward) > 0:
+		audio.play("levelup")
 		say("Level auf! Du bist jetzt Stufe %d." % player.level)
 	if _actor_nodes.has(monster):
 		_actor_nodes[monster].queue_free()
@@ -592,11 +622,14 @@ func _step_monster(monster, step: Vector2i) -> void:
 func _monster_attacks(monster) -> void:
 	var damage: int = maxi(1, monster.power - player.defense())
 	player.hp -= damage
+	audio.play("player_hurt")
 	say("%s trifft dich für %d." % [monster.display_name, damage])
 	if player.hp <= 0:
 		player.hp = 0
 		dead = true
 		Save.wipe()
+		audio.play("death")
+		_show_death()
 		say("Du stirbst auf Ebene %d. Tippe NEU." % depth)
 
 
@@ -608,14 +641,17 @@ func _pick_up(cell: Vector2i) -> void:
 	match loot["kind"]:
 		"gold":
 			player.gold += loot["amount"]
+			audio.play("coin")
 			say("%d Gold." % loot["amount"])
 		"potion":
 			player.potions += 1
+			audio.play("pickup")
 			say("Ein Heiltrank.")
 		"weapon":
 			var best: int = mini(Data.WEAPONS.size() - 1, 1 + depth / 2)
 			if best > player.weapon:
 				player.weapon = best
+				audio.play("equip")
 				say("Neue Waffe: %s." % Data.WEAPONS[best]["name"])
 			else:
 				player.gold += 10
@@ -624,6 +660,7 @@ func _pick_up(cell: Vector2i) -> void:
 			var best: int = mini(Data.ARMOURS.size() - 1, 1 + depth / 3)
 			if best > player.armour:
 				player.armour = best
+				audio.play("equip")
 				say("Neue Rüstung: %s." % Data.ARMOURS[best]["name"])
 			else:
 				player.gold += 10
@@ -644,6 +681,8 @@ func _tick_poison() -> void:
 		player.hp = 0
 		dead = true
 		Save.wipe()
+		audio.play("death")
+		_show_death()
 		say("Das Gift bringt dich um. Tippe NEU.")
 
 
@@ -657,6 +696,7 @@ func _spring_trap(cell: Vector2i) -> void:
 	if trap.get("one_shot", false):
 		traps.erase(cell)
 	player.hp -= trap["damage"]
+	audio.play("trap")
 	say("%s! Du nimmst %d Schaden." % [trap["name"], trap["damage"]])
 	if trap.has("poison"):
 		player.poison_turns = maxi(player.poison_turns, trap["poison"])
@@ -665,6 +705,8 @@ func _spring_trap(cell: Vector2i) -> void:
 		player.hp = 0
 		dead = true
 		Save.wipe()
+		audio.play("death")
+		_show_death()
 		say("Die Falle bringt dich um. Tippe NEU.")
 
 
@@ -704,6 +746,7 @@ func _open_chest(cell: Vector2i) -> void:
 	mimic.display_name = "Mimik (%s)" % mimic.display_name
 	mimic.snap()
 	monsters.append(mimic)
+	audio.play("boss")
 	say("Die Truhe schnappt zu - es war eine Mimik!")
 
 
@@ -756,6 +799,7 @@ func buy(what: String) -> void:
 
 func _spend(cost: int) -> bool:
 	if player.gold < cost:
+		audio.play("denied")
 		say("Zu wenig Gold - %d fehlen." % (cost - player.gold))
 		return false
 	player.gold -= cost
@@ -767,6 +811,7 @@ func drink() -> void:
 		return
 	player.potions -= 1
 	player.hp = mini(player.max_hp, player.hp + Data.POTION_HEAL)
+	audio.play("pickup")
 	say("Du trinkst einen Heiltrank.")
 	enemy_turn()
 	paint()
@@ -808,8 +853,7 @@ func paint() -> void:
 	for monster in monsters:
 		_place_monster(monster)
 
-	_hero_node.position = Vector2(player.x, player.y) * TILE + Vector2(
-		0, TILE - _hero_node.texture.get_height())
+	_stand_on(_hero_node, Vector2i(player.x, player.y), HERO_TILES)
 	_hero_node.flip_h = player.facing < 0
 	_camera.position = Vector2(player.x, player.y) * TILE + Vector2(TILE, TILE) * 0.5
 
@@ -868,9 +912,25 @@ func _place_prop(cell: Vector2i, art: String) -> void:
 		_item_nodes[key] = node
 	var sprite: Sprite2D = _item_nodes[key]
 	sprite.texture = _sprite_for(art)
-	sprite.position = Vector2(cell) * TILE + Vector2(
-		0, TILE - sprite.texture.get_height())
+	_stand_on(sprite, cell, PROP_TILES if art in ["merchant", "blacksmith"] else 1.0)
 	sprite.visible = explored.has(cell)
+
+
+## Puts a sprite on a cell at a given height in tiles: scaled to that
+## height, centred left to right, and standing on the floor of the cell
+## rather than hanging from its top. Everything taller than one tile -
+## monsters, shopkeepers, the hero - overlaps the wall behind it, which
+## is exactly how the pygame build looks.
+func _stand_on(sprite: Sprite2D, cell: Vector2i, tiles: float) -> void:
+	var texture := sprite.texture
+	if texture == null:
+		return
+	var height := float(texture.get_height())
+	var factor := (TILE * tiles) / height if height > 0.0 else 1.0
+	sprite.scale = Vector2(factor, factor)
+	var width := float(texture.get_width()) * factor
+	sprite.position = Vector2(cell) * TILE + Vector2(
+		(TILE - width) * 0.5, TILE - height * factor)
 
 
 func _place_monster(monster) -> void:
@@ -882,8 +942,9 @@ func _place_monster(monster) -> void:
 		add_child(node)
 		_actor_nodes[monster] = node
 	var sprite: Sprite2D = _actor_nodes[monster]
-	sprite.position = Vector2(monster.x, monster.y) * TILE + Vector2(
-		0, TILE - sprite.texture.get_height())
+	_stand_on(sprite, monster.cell(),
+		MONSTER_TILES * (BOSS_SCALE if monster.is_boss else 1.0))
+	sprite.flip_h = monster.x > player.x
 	sprite.visible = lit.has(monster.cell())
 
 
@@ -947,7 +1008,121 @@ func _build_hud() -> void:
 	_play_ui.add_child(again)
 
 	_build_shop_panel()
+	_build_dead_panel()
 	_build_title_panel()
+
+
+## A panel you cannot see through. The default theme panel is nearly
+## transparent, which over a dungeon means the map runs straight through
+## the buttons and the text sits on rubble.
+func _solid_panel(panel: PanelContainer) -> void:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.07, 0.06, 0.09, 0.98)
+	style.border_color = Color(0.91, 0.71, 0.29, 0.75)
+	style.set_border_width_all(3)
+	style.set_corner_radius_all(10)
+	style.set_content_margin_all(22)
+	panel.add_theme_stylebox_override("panel", style)
+
+
+## What is left of a run when it ends. The pygame build shows the same
+## four numbers; without them a death is just the word "gestorben" and
+## the player has no idea whether it went well.
+func _build_dead_panel() -> void:
+	_dead_panel = PanelContainer.new()
+	_dead_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_dead_panel.position = Vector2(-320, -200)
+	_dead_panel.custom_minimum_size = Vector2(640, 400)
+	_dead_panel.visible = false
+	_solid_panel(_dead_panel)
+	_hud.add_child(_dead_panel)
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 16)
+	_dead_panel.add_child(column)
+
+	var heading := Label.new()
+	heading.text = "Du bist gestorben"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 40)
+	heading.add_theme_color_override("font_color", Color(0.85, 0.32, 0.30))
+	column.add_child(heading)
+
+	_dead_text = Label.new()
+	_dead_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_dead_text.add_theme_font_size_override("font_size", 26)
+	column.add_child(_dead_text)
+
+	var again := Button.new()
+	again.text = "NOCH EINMAL"
+	again.custom_minimum_size = Vector2(0, 76)
+	again.add_theme_font_size_override("font_size", 30)
+	again.pressed.connect(func() -> void: choose_class(hero_class))
+	column.add_child(again)
+
+	var menu := Button.new()
+	menu.text = "ANDERER HELD"
+	menu.custom_minimum_size = Vector2(0, 70)
+	menu.add_theme_font_size_override("font_size", 28)
+	menu.pressed.connect(show_title)
+	column.add_child(menu)
+
+
+## Called the moment the hero dies, from wherever killed them.
+func _show_death() -> void:
+	if _dead_panel == null:
+		return
+	_dead_text.text = "Ebene %d     Stufe %d     %d Kills     %d Gold" % [
+		depth, player.level, player.kills, player.gold]
+	_dead_panel.visible = true
+
+
+## Two switches, because those are the two things a player on a bus
+## actually needs. They sit on the title screen rather than behind a
+## pause button: that is where you already are before a run starts, and
+## the sound is the first thing anyone turns off.
+func _build_settings(column: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 20)
+	column.add_child(row)
+
+	_sound_button = Button.new()
+	_sound_button.custom_minimum_size = Vector2(280, 62)
+	_sound_button.add_theme_font_size_override("font_size", 24)
+	_sound_button.pressed.connect(toggle_sound)
+	row.add_child(_sound_button)
+
+	_music_button = Button.new()
+	_music_button.custom_minimum_size = Vector2(280, 62)
+	_music_button.add_theme_font_size_override("font_size", 24)
+	_music_button.pressed.connect(toggle_music)
+	row.add_child(_music_button)
+	_refresh_settings()
+
+
+func _refresh_settings() -> void:
+	if _sound_button == null:
+		return
+	_sound_button.text = "Ton: %s" % ("AN" if settings["sound"] else "AUS")
+	_music_button.text = "Musik: %s" % ("AN" if settings["music"] else "AUS")
+
+
+func toggle_sound() -> void:
+	settings["sound"] = not settings["sound"]
+	audio.enabled = settings["sound"]
+	Settings.write(settings)
+	_refresh_settings()
+	audio.play("pickup")
+
+
+func toggle_music() -> void:
+	settings["music"] = not settings["music"]
+	audio.set_music_enabled(settings["music"])
+	if settings["music"]:
+		audio.play_music(tier.get("music", ""))
+	Settings.write(settings)
+	_refresh_settings()
 
 
 ## The title screen: three heroes, one tap each. It sits on the HUD
@@ -1031,11 +1206,15 @@ func _build_title_panel() -> void:
 		pick.pressed.connect(choose_class.bind(info["id"]))
 		card.add_child(pick)
 
+	_build_settings(column)
+
 
 ## Puts the title screen back up and rolls a fresh floor behind it, so
 ## the choice is never made against the corpse of the last run.
 func show_title() -> void:
 	choosing = true
+	if _dead_panel != null:
+		_dead_panel.visible = false
 	close_shop()
 	if _continue_button != null:
 		_continue_button.visible = Save.exists()
@@ -1059,6 +1238,8 @@ func continue_run() -> void:
 
 func choose_class(id: String) -> void:
 	hero_class = id
+	if _dead_panel != null:
+		_dead_panel.visible = false
 	choosing = false
 	if _play_ui != null:
 		_play_ui.visible = true
@@ -1074,6 +1255,7 @@ func _build_shop_panel() -> void:
 	_shop_panel.position = Vector2(-330, -190)
 	_shop_panel.custom_minimum_size = Vector2(660, 380)
 	_shop_panel.visible = false
+	_solid_panel(_shop_panel)
 	_hud.add_child(_shop_panel)
 
 	var column := VBoxContainer.new()
