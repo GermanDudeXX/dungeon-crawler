@@ -71,11 +71,13 @@ var _continue_button: Button
 var _dead_panel: PanelContainer
 var _dead_text: Label
 var _sound_button: Button
+var _drink_button: Button
 var _perk_panel: PanelContainer
 var _perk_buttons: Array = []
 var perk_choices: Array = []      ## the three on offer right now
 var _music_button: Button
 var _held := Vector2i.ZERO
+var _haste_flip := false
 var _step_cooldown := 0.0
 
 
@@ -148,7 +150,7 @@ func _tile_names() -> PackedStringArray:
 
 func _sprite_for(name: String) -> Texture2D:
 	if not _sprites.has(name):
-		for dir in [CLASS_DIR, "res://assets/monsters/", TILE_DIR]:
+		for dir in [CLASS_DIR, "res://assets/monsters/", "res://assets/items/", TILE_DIR]:
 			var path: String = dir + name + ".png"
 			if ResourceLoader.exists(path):
 				_sprites[name] = load(path)
@@ -203,6 +205,19 @@ func load_run() -> bool:
 	player.regen_interval = int(p.get("regen_interval", 0))
 	player.regen_counter = int(p.get("regen_counter", 0))
 	player.pending_perks = int(p.get("pending_perks", 0))
+	player.selected_potion = str(p.get("selected_potion", Data.DEFAULT_POTION))
+	player.shield = int(p.get("shield", 0))
+	player.bleed_turns = int(p.get("bleed_turns", 0))
+	player.potion_counts.clear()
+	for id in p.get("potion_counts", {}):
+		player.potion_counts[str(id)] = int(p["potion_counts"][id])
+	player.potions = 0
+	for id in player.potion_counts:
+		player.potions += int(player.potion_counts[id])
+	player.buffs.clear()
+	for id in p.get("buffs", {}):
+		if Data.BUFFS.has(id):
+			player.buffs[str(id)] = int(p["buffs"][id])
 	player.snap()
 
 	depth = int(save["depth"])
@@ -235,11 +250,15 @@ func load_run() -> bool:
 	items.clear()
 	for entry in save["items"]:
 		items.append({"cell": Vector2i(int(entry["x"]), int(entry["y"])),
-			"kind": str(entry["kind"]), "amount": int(entry["amount"])})
+			"kind": str(entry["kind"]), "amount": int(entry["amount"]),
+			"potion": str(entry.get("potion", ""))})
 	shops.clear()
 	for entry in save["shops"]:
+		var stock: Array = []
+		for id in entry.get("stock", []):
+			stock.append(str(id))
 		shops.append({"cell": Vector2i(int(entry["x"]), int(entry["y"])),
-			"kind": str(entry["kind"])})
+			"kind": str(entry["kind"]), "stock": stock})
 	chest = null
 	if save["chest"] != null:
 		var c: Dictionary = save["chest"]
@@ -264,6 +283,9 @@ func load_run() -> bool:
 		monster.awake = bool(entry["awake"])
 		monster.is_boss = bool(entry["boss"])
 		monster.is_mimic = bool(entry["mimic"])
+		monster.burn_turns = int(entry.get("burn", 0))
+		monster.slow_turns = int(entry.get("slow", 0))
+		monster.stun_turns = int(entry.get("stun", 0))
 		monster.snap()
 		monsters.append(monster)
 
@@ -394,11 +416,19 @@ func _populate() -> void:
 	if depth >= 2 and rng.randf() < 0.4:
 		var spot = _shopkeeper_spot(spawn_rooms)
 		if spot != null:
-			shops.append({"cell": spot, "kind": "merchant"})
+			# Three flasks, rolled per floor and never cursed: a merchant
+			# who sold you a Murky Flask would be a merchant nobody visits
+			# twice. What he stocks is what the depth has unlocked.
+			var stock: Array = []
+			for _s in 3:
+				var id: String = Data.pick_potion(depth, rng, false)
+				if not stock.has(id):
+					stock.append(id)
+			shops.append({"cell": spot, "kind": "merchant", "stock": stock})
 	if depth >= 4 and rng.randf() < 0.3:
 		var spot = _shopkeeper_spot(spawn_rooms)
 		if spot != null:
-			shops.append({"cell": spot, "kind": "smith"})
+			shops.append({"cell": spot, "kind": "smith", "stock": []})
 
 	for _i in range(2 + depth / 3):
 		var cell: Variant = _free_cell(spawn_rooms)
@@ -412,8 +442,11 @@ func _populate() -> void:
 			kind = "weapon"
 		elif roll < 0.62:
 			kind = "armour"
-		items.append({"cell": cell, "kind": kind,
-			"amount": rng.randi_range(5, 15 + depth * 3)})
+		var loot := {"cell": cell, "kind": kind,
+			"amount": rng.randi_range(5, 15 + depth * 3)}
+		if kind == "potion":
+			loot["potion"] = Data.pick_potion(depth, rng)
+		items.append(loot)
 
 
 func _free_cell(where: Array) -> Variant:
@@ -457,8 +490,19 @@ func _shopkeeper_spot(where: Array) -> Variant:
 		var cell = _free_cell(where)
 		if cell == null:
 			return null
-		if reachable_from(Vector2i(player.x, player.y), {cell: true}).has(stairs):
-			return cell
+		# Blocked by every keeper already standing, and by this
+		# candidate. Checking only the stairs was not enough: a keeper
+		# can seal the chest into a dead-end just as easily, and then
+		# the floor is finishable but the chest is gone for good.
+		var blocked := {cell: true}
+		for shop in shops:
+			blocked[shop["cell"]] = true
+		var open_cells := reachable_from(Vector2i(player.x, player.y), blocked)
+		if not open_cells.has(stairs):
+			continue
+		if chest != null and not open_cells.has(chest["cell"]):
+			continue
+		return cell
 	return null            ## rather no shop than a floor nobody can finish
 
 
@@ -579,6 +623,7 @@ func try_move(step: Vector2i) -> void:
 
 	_tick_poison()
 	_tick_regen()
+	_tick_buffs()
 	enemy_turn()
 	recompute_fov()
 	paint()
@@ -591,10 +636,21 @@ func _attack_monster(monster) -> void:
 		damage *= Data.CRIT_MULT
 	audio.play("boss" if monster.is_boss else "hit")
 	monster.hp -= damage
+	var leech := player.buff_total("lifesteal")
+	if leech > 0.0 and player.hp < player.max_hp:
+		var back: int = maxi(1, int(round(damage * leech)))
+		player.hp = mini(player.max_hp, player.hp + back)
 	if monster.is_alive():
 		say("Kritisch! %s nimmt %d." % [monster.display_name, damage] if crit
 			else "Du triffst %s für %d." % [monster.display_name, damage])
 		return
+	_kill(monster)
+
+
+## A monster dies: experience, the level-up that may follow, and the
+## sprite. Anything that can kill goes through here - a thrown flask
+## that skipped this step handed out no experience at all.
+func _kill(monster) -> void:
 	audio.play("monster_death")
 	say("%s stirbt." % monster.display_name)
 	player.kills += 1
@@ -607,11 +663,38 @@ func _attack_monster(monster) -> void:
 		_actor_nodes.erase(monster)
 	monsters.erase(monster)
 
-
 func enemy_turn() -> void:
+	# Haste is the hero acting twice, expressed the other way round:
+	# every second enemy turn is skipped. Doing it as a free extra
+	# player move would mean two attacks per tap, which is a different
+	# and much stronger thing than the Python build gives.
+	if player.has_buff("haste"):
+		_haste_flip = not _haste_flip
+		if _haste_flip:
+			return
 	var here := Vector2i(player.x, player.y)
 	for monster in monsters.duplicate():
 		if not monster.is_alive():
+			continue
+		# Fire keeps burning whether the thing acts or not.
+		if monster.burn_turns > 0:
+			monster.burn_turns -= 1
+			monster.hp -= Data.BURN_DAMAGE
+			if not monster.is_alive():
+				_kill(monster)
+				continue
+		if monster.stun_turns > 0:
+			monster.stun_turns -= 1
+			continue
+		if monster.slow_turns > 0:
+			monster.slow_turns -= 1
+			# Slowed things move every other turn, which is what the
+			# odd turn count is counting.
+			if monster.slow_turns % 2 == 1:
+				continue
+		# An unseen hero is not chased. They still get hit if they
+		# stand next to something already awake and swinging.
+		if player.has_buff("invisible") and monster.cell().distance_squared_to(here) > 2:
 			continue
 		if not monster.awake:
 			# They wake when the light reaches them, not when they reach
@@ -654,9 +737,21 @@ func _step_monster(monster, step: Vector2i) -> void:
 func _monster_attacks(monster) -> void:
 	var damage: int = maxi(1, monster.power - player.defense())
 	damage = maxi(1, int(round(damage * (1.0 - player.damage_reduction))))
-	player.hp -= damage
 	audio.play("player_hurt")
+	# A ward soaks the blow before hit points do, and what it cannot
+	# hold spills through - a shield that blocked everything or
+	# nothing would make the number on it meaningless.
+	if player.shield > 0:
+		var soaked: int = mini(player.shield, damage)
+		player.shield -= soaked
+		damage -= soaked
+		if damage <= 0:
+			say("Der Schild hält den Schlag von %s." % monster.display_name)
+			_retaliate(monster)
+			return
+	player.hp -= damage
 	say("%s trifft dich für %d." % [monster.display_name, damage])
+	_retaliate(monster)
 	if player.hp <= 0:
 		player.hp = 0
 		dead = true
@@ -666,6 +761,21 @@ func _monster_attacks(monster) -> void:
 		say("Du stirbst auf Ebene %d. Tippe NEU." % depth)
 
 
+## What an attacker gets back for hitting you: thorns cut, an ember aura
+## sets them alight. Both fire whether or not the blow got through the
+## shield - they answer the attack, not the damage.
+func _retaliate(monster) -> void:
+	var thorns := int(player.buff_total("thorns"))
+	if thorns > 0 and monster.is_alive():
+		monster.hp -= thorns
+		say("Dornen reißen %s für %d." % [monster.display_name, thorns])
+		if not monster.is_alive():
+			_kill(monster)
+			return
+	var burn := int(player.buff_total("burn_attackers"))
+	if burn > 0 and monster.is_alive():
+		monster.burn_turns = maxi(monster.burn_turns, burn)
+
 func _pick_up(cell: Vector2i) -> void:
 	var item: Variant = item_at(cell)
 	if item == null:
@@ -673,14 +783,16 @@ func _pick_up(cell: Vector2i) -> void:
 	var loot: Dictionary = item
 	match loot["kind"]:
 		"gold":
-			var found: int = int(round(loot["amount"] * player.gold_mult))
+			var luck := 1.5 if player.has_buff("luck") else 1.0
+			var found: int = int(round(loot["amount"] * player.gold_mult * luck))
 			player.gold += found
 			audio.play("coin")
 			say("%d Gold." % found)
 		"potion":
-			player.potions += 1
+			var id: String = loot.get("potion", Data.DEFAULT_POTION)
+			player.add_potion(id)
 			audio.play("pickup")
-			say("Ein Heiltrank.")
+			say("Aufgehoben: %s." % Data.potion_by_id(id)["name"])
 		"weapon":
 			var best: int = mini(Data.WEAPONS.size() - 1, 1 + depth / 2)
 			if best > player.weapon:
@@ -704,6 +816,31 @@ func _pick_up(cell: Vector2i) -> void:
 		_item_nodes[cell].queue_free()
 		_item_nodes.erase(cell)
 
+
+## One turn of everything that runs on a clock: buffs expiring, the
+## regeneration they grant, and bleeding. Called once per player turn,
+## never per frame.
+func _tick_buffs() -> void:
+	var regen := int(player.buff_total("regen"))
+	for id in player.buffs.keys():
+		var left: int = int(player.buffs[id]) - 1
+		if left <= 0:
+			player.buffs.erase(id)
+			say("%s lässt nach." % Data.BUFFS[id]["name"])
+		else:
+			player.buffs[id] = left
+	if regen > 0 and player.hp < player.max_hp and not dead:
+		player.hp = mini(player.max_hp, player.hp + regen)
+	if player.bleed_turns > 0 and not dead:
+		player.bleed_turns -= 1
+		player.hp -= 1
+		say("Du blutest.")
+		if player.hp <= 0:
+			player.hp = 0
+			dead = true
+			Save.wipe()
+			audio.play("death")
+			_show_death()
 
 ## Regeneration ticks on the turn, not the frame - a hero who heals
 ## faster on a faster phone is a different game.
@@ -763,7 +900,10 @@ func _open_chest(cell: Vector2i) -> void:
 	if not chest["mimic"]:
 		var gold: int = 25 + depth * 8
 		player.gold += gold
-		player.potions += 1
+		# Through add_potion, not the raw counter: potions and
+		# potion_counts have to agree, and a chest that bumped only the
+		# total left the hero holding a flask that was not any kind.
+		player.add_potion(Data.pick_potion(depth, rng))
 		say("Die Truhe enthält %d Gold und einen Trank." % gold)
 		return
 	# Beside the chest, never on it: a chest is opened by walking
@@ -814,11 +954,13 @@ func close_shop() -> void:
 func buy(what: String) -> void:
 	if shop_open == null:
 		return
-	match what:
+	match ("potion" if what.begins_with("potion:") else what):
 		"potion":
-			if _spend(Data.POTION_COST):
-				player.potions += 1
-				say("Trank gekauft.")
+			var id: String = what.substr(7) if what.begins_with("potion:") else Data.DEFAULT_POTION
+			var potion := Data.potion_by_id(id)
+			if _spend(int(potion["price"])):
+				player.add_potion(id)
+				say("Gekauft: %s." % potion["name"])
 		"weapon":
 			var next: int = player.weapon + 1
 			if next >= Data.WEAPONS.size():
@@ -852,16 +994,157 @@ func _spend(cost: int) -> bool:
 	return true
 
 
+## Drinks the selected flask. Every effect in the table is handled here;
+## an effect nobody handles would be a potion that costs a turn and does
+## nothing, which is worse than not having it.
 func drink() -> void:
-	if dead or choosing or player.potions <= 0 or player.hp >= player.max_hp:
+	if dead or choosing or player.potions <= 0:
 		return
-	player.potions -= 1
-	player.hp = mini(player.max_hp, player.hp + Data.POTION_HEAL)
+	var id: String = player.selected_potion
+	if not player.potion_counts.has(id):
+		id = player.next_potion()
+	var potion := Data.potion_by_id(id)
+	var effect: Dictionary = potion["effect"]
+
+	# A plain heal on full health is a wasted flask, so it is refused -
+	# but only a plain one: a Panacea also cures, and refusing that would
+	# strand a poisoned hero at full health.
+	if effect.size() == 1 and effect.has("heal") and player.hp >= player.max_hp:
+		audio.play("denied")
+		say("Du bist bei voller Gesundheit.")
+		return
+
+	player.add_potion(id, -1)
 	audio.play("pickup")
-	say("Du trinkst einen Heiltrank.")
+	say("Du trinkst: %s." % potion["name"])
+	_apply_effect(effect)
+	if dead:
+		return
+	_tick_buffs()
 	enemy_turn()
+	recompute_fov()
 	paint()
 
+
+## One potion effect, whatever it is made of. Kept in a single place so
+## a scroll or a shrine can hand the same table over later.
+func _apply_effect(effect: Dictionary) -> void:
+	if effect.has("heal"):
+		var healed: int = mini(player.max_hp - player.hp, int(effect["heal"]))
+		player.hp += healed
+		say("%d Leben zurück." % healed)
+	if effect.has("heal_pct"):
+		player.hp = player.max_hp
+		say("Vollständig geheilt.")
+	if effect.has("max_hp"):
+		player.max_hp += int(effect["max_hp"])
+		player.hp += int(effect["max_hp"])
+		say("+%d maximales Leben, dauerhaft." % int(effect["max_hp"]))
+	if effect.has("base_power"):
+		player.base_power += int(effect["base_power"])
+		say("+%d Angriff, dauerhaft." % int(effect["base_power"]))
+	if effect.has("base_defense"):
+		player.base_defense += int(effect["base_defense"])
+		say("+%d Verteidigung, dauerhaft." % int(effect["base_defense"]))
+	if effect.has("xp_levels"):
+		# Half a level, measured against what the next one costs.
+		var gained: int = player.gain_xp(int(player.xp_to_next * float(effect["xp_levels"])))
+		if gained > 0:
+			audio.play("levelup")
+			_offer_perk()
+		say("Erfahrung strömt dir zu.")
+	if effect.has("buff"):
+		var id: String = effect["buff"]
+		var turns: int = int(effect.get("turns", 10))
+		# Drinking the same buff again extends it rather than replacing it.
+		player.buffs[id] = int(player.buffs.get(id, 0)) + turns
+		say("%s für %d Züge." % [Data.BUFFS[id]["name"], turns])
+	if effect.has("shield"):
+		player.shield += int(effect["shield"])
+		say("Ein Schild von %d." % int(effect["shield"]))
+	if effect.has("reveal"):
+		_reveal_level()
+		say("Die Ebene liegt offen vor dir.")
+	if effect.has("blink"):
+		_blink()
+	if effect.has("gold"):
+		var range_: Array = effect["gold"]
+		var amount: int = rng.randi_range(int(range_[0]), int(range_[1]))
+		player.gold += amount
+		audio.play("coin")
+		say("%d Gold aus dem Nichts." % amount)
+	if effect.has("cure"):
+		for what in effect["cure"]:
+			if what == "poison_turns":
+				player.poison_turns = 0
+			elif what == "bleed_turns":
+				player.bleed_turns = 0
+		say("Das Übel weicht.")
+	if effect.get("cure_debuffs", false):
+		for id in player.buffs.keys():
+			if Data.BUFFS[id].get("power", 0) < 0 or Data.BUFFS[id].get("defense", 0) < 0:
+				player.buffs.erase(id)
+	if effect.has("self_poison"):
+		player.poison_turns += int(effect["self_poison"])
+		say("Es brennt in der Kehle - vergiftet.")
+	if effect.has("burst_damage"):
+		_burst(effect)
+
+
+## A thrown flask: everything within BURST_RADIUS takes the hit, and the
+## hero does not - the Python build throws it, it does not drink it.
+func _burst(effect: Dictionary) -> void:
+	var here := Vector2i(player.x, player.y)
+	var hit := 0
+	for monster in monsters.duplicate():
+		if not monster.is_alive():
+			continue
+		var away: Vector2i = monster.cell() - here
+		if absi(away.x) > Data.BURST_RADIUS or absi(away.y) > Data.BURST_RADIUS:
+			continue
+		hit += 1
+		monster.hp -= int(effect["burst_damage"])
+		monster.awake = true
+		if effect.has("burst_burn"):
+			monster.burn_turns = maxi(monster.burn_turns, int(effect["burst_burn"]))
+		if effect.has("burst_slow"):
+			monster.slow_turns = maxi(monster.slow_turns, int(effect["burst_slow"]))
+		if effect.has("burst_stun"):
+			monster.stun_turns = maxi(monster.stun_turns, int(effect["burst_stun"]))
+		if not monster.is_alive():
+			_kill(monster)
+	audio.play("boss")
+	say("Die Phiole zerplatzt - %d getroffen." % hit)
+
+
+## Every walkable cell on the floor becomes explored. Not lit: the map
+## is known, but you still cannot see what is standing in the dark.
+func _reveal_level() -> void:
+	for y in MAP_H:
+		for x in MAP_W:
+			if Dungeon.is_walkable(grid, x, y):
+				explored[Vector2i(x, y)] = true
+
+
+## A short hop to a free cell somewhere else on the floor.
+func _blink() -> void:
+	var spot: Variant = _free_cell(rooms)
+	if spot == null:
+		say("Nichts geschieht.")
+		return
+	player.x = spot.x
+	player.y = spot.y
+	player.snap()
+	say("Ein Blinzeln - und du stehst woanders.")
+
+
+## Walks to the next kind of flask carried. Costs no turn: choosing what
+## to drink is not an action, drinking it is.
+func cycle_potion() -> void:
+	if player.potions <= 0:
+		return
+	player.selected_potion = player.next_potion()
+	audio.play("equip")
 
 func say(line: String) -> void:
 	log_lines.append(line)
@@ -934,15 +1217,29 @@ func _place_item(item: Dictionary) -> void:
 	var cell: Vector2i = item["cell"]
 	if not _item_nodes.has(cell):
 		var node := Sprite2D.new()
-		node.texture = _sprite_for("flask_red" if item["kind"] == "potion" else "coin_anim_f0")
+		node.texture = _sprite_for(_item_art(item))
 		node.centered = false
 		node.z_index = 1
 		add_child(node)
 		_item_nodes[cell] = node
 	var sprite: Sprite2D = _item_nodes[cell]
+	sprite.texture = _sprite_for(_item_art(item))
 	sprite.position = Vector2(cell) * TILE
 	sprite.visible = explored.has(cell)
 
+
+## The sprite a piece of loot shows on the floor. A potion wears the
+## flask of its own kind, so what you pick up is what you saw lying
+## there rather than a red bottle that turns out to be something else.
+func _item_art(item: Dictionary) -> String:
+	match item["kind"]:
+		"potion":
+			return Data.potion_by_id(item.get("potion", Data.DEFAULT_POTION))["flask"]
+		"weapon":
+			return "weapon"
+		"armour":
+			return "armor"
+	return "coin_anim_f0"
 
 ## One standing thing on the map - a chest, a shopkeeper. Kept in the
 ## same node cache as everything else so a repaint moves sprites
@@ -1035,14 +1332,24 @@ func _build_hud() -> void:
 	_button("<", origin + Vector2(-size, -size * 0.5), size, Vector2i(-1, 0))
 	_button(">", origin + Vector2(size, -size * 0.5), size, Vector2i(1, 0))
 
-	var heal := Button.new()
-	heal.text = "HEILEN"
-	heal.custom_minimum_size = Vector2(size * 1.6, size * 0.8)
-	heal.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	heal.position = Vector2(-pad - size * 1.6, -pad - size * 0.8)
-	heal.add_theme_font_size_override("font_size", 28)
-	heal.pressed.connect(drink)
-	_play_ui.add_child(heal)
+	# Two buttons, because there are thirty kinds of flask now: one
+	# drinks what is selected, the other walks through what is carried.
+	_drink_button = Button.new()
+	_drink_button.custom_minimum_size = Vector2(size * 2.4, size * 0.8)
+	_drink_button.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_drink_button.position = Vector2(-pad - size * 2.4, -pad - size * 0.8)
+	_drink_button.add_theme_font_size_override("font_size", 24)
+	_drink_button.pressed.connect(drink)
+	_play_ui.add_child(_drink_button)
+
+	var swap := Button.new()
+	swap.text = "▶"
+	swap.custom_minimum_size = Vector2(size * 0.7, size * 0.8)
+	swap.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	swap.position = Vector2(-pad - size * 3.2, -pad - size * 0.8)
+	swap.add_theme_font_size_override("font_size", 26)
+	swap.pressed.connect(cycle_potion)
+	_play_ui.add_child(swap)
 
 	var again := Button.new()
 	again.text = "NEU"
@@ -1378,14 +1685,14 @@ func choose_class(id: String) -> void:
 func _build_shop_panel() -> void:
 	_shop_panel = PanelContainer.new()
 	_shop_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_shop_panel.position = Vector2(-330, -190)
-	_shop_panel.custom_minimum_size = Vector2(660, 380)
+	_shop_panel.position = Vector2(-360, -220)
+	_shop_panel.custom_minimum_size = Vector2(720, 440)
 	_shop_panel.visible = false
 	_solid_panel(_shop_panel)
 	_hud.add_child(_shop_panel)
 
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 14)
+	column.add_theme_constant_override("separation", 12)
 	_shop_panel.add_child(column)
 
 	_shop_title = Label.new()
@@ -1393,53 +1700,62 @@ func _build_shop_panel() -> void:
 	_shop_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	column.add_child(_shop_title)
 
+	# Five slots, filled at opening time rather than fixed: a merchant
+	# carries three flasks rolled for this floor, a smith carries none.
 	_shop_buttons.clear()
-	for entry in [["potion", "Heiltrank"], ["weapon", "Bessere Waffe"],
-			["armour", "Bessere Rüstung"], ["heal", "Voll heilen"]]:
+	for _i in 5:
 		var button := Button.new()
-		button.custom_minimum_size = Vector2(0, 62)
-		button.add_theme_font_size_override("font_size", 26)
-		button.pressed.connect(buy.bind(entry[0]))
+		button.custom_minimum_size = Vector2(0, 58)
+		button.add_theme_font_size_override("font_size", 24)
 		column.add_child(button)
-		_shop_buttons.append({"node": button, "what": entry[0], "label": entry[1]})
+		_shop_buttons.append(button)
 
 	var leave := Button.new()
 	leave.text = "VERLASSEN"
-	leave.custom_minimum_size = Vector2(0, 70)
+	leave.custom_minimum_size = Vector2(0, 66)
 	leave.add_theme_font_size_override("font_size", 28)
 	leave.pressed.connect(close_shop)
 	column.add_child(leave)
 
 
+## What this shopkeeper has today, priced and greyed out where the purse
+## is too light. Rebuilt on every purchase, because buying the sword
+## changes what the next one costs.
 func _refresh_shop() -> void:
 	if _shop_panel == null or shop_open == null:
 		return
 	var smith: bool = shop_open["kind"] == "smith"
 	_shop_title.text = "%s     Dein Gold: %d" % [
 		"Schmied" if smith else "Händler", player.gold]
-	for entry in _shop_buttons:
-		var node: Button = entry["node"]
-		var what: String = entry["what"]
-		var cost := 0
-		var available := true
-		match what:
-			"potion":
-				cost = Data.POTION_COST
-				available = not smith
-			"weapon":
-				var next: int = player.weapon + 1
-				available = next < Data.WEAPONS.size()
-				cost = Data.WEAPONS[next]["cost"] if available else 0
-			"armour":
-				var next: int = player.armour + 1
-				available = next < Data.ARMOURS.size()
-				cost = Data.ARMOURS[next]["cost"] if available else 0
-			"heal":
-				cost = Data.UPGRADE_COST
-				available = smith
-		node.visible = available
-		node.disabled = player.gold < cost
-		node.text = "%s - %d Gold" % [entry["label"], cost]
+
+	var offers: Array = []
+	if smith:
+		var next_weapon: int = player.weapon + 1
+		if next_weapon < Data.WEAPONS.size():
+			offers.append(["weapon", "Waffe: %s" % Data.WEAPONS[next_weapon]["name"],
+				int(Data.WEAPONS[next_weapon]["cost"])])
+		var next_armour: int = player.armour + 1
+		if next_armour < Data.ARMOURS.size():
+			offers.append(["armour", "Rüstung: %s" % Data.ARMOURS[next_armour]["name"],
+				int(Data.ARMOURS[next_armour]["cost"])])
+		offers.append(["heal", "Voll heilen", Data.UPGRADE_COST])
+	else:
+		for id in shop_open.get("stock", []):
+			var potion := Data.potion_by_id(id)
+			offers.append(["potion:" + id, potion["name"], int(potion["price"])])
+
+	for i in _shop_buttons.size():
+		var button: Button = _shop_buttons[i]
+		if i >= offers.size():
+			button.visible = false
+			continue
+		var offer: Array = offers[i]
+		button.visible = true
+		button.text = "%s - %d Gold" % [offer[1], offer[2]]
+		button.disabled = player.gold < int(offer[2])
+		for old in button.pressed.get_connections():
+			button.pressed.disconnect(old["callable"])
+		button.pressed.connect(buy.bind(offer[0]))
 
 
 func _button(label: String, where: Vector2, size: float, step: Vector2i) -> void:
@@ -1476,9 +1792,33 @@ func _process(delta: float) -> void:
 		if not Input.is_anything_pressed():
 			_held = Vector2i.ZERO
 
-	_play_ui.get_node("stats").text = "%s  Ebene %d     HP %d/%d     Stufe %d (%d/%d XP)     %d Gold     %d Tränke" % [
-		tier.get("name", ""), depth, player.hp, player.max_hp,
+	var line := "%s  Ebene %d     HP %d/%d" % [
+		tier.get("name", ""), depth, player.hp, player.max_hp]
+	if player.shield > 0:
+		line += " +%d Schild" % player.shield
+	line += "     Stufe %d (%d/%d XP)     %d Gold     %d Tränke" % [
 		player.level, player.xp, player.xp_to_next, player.gold, player.potions]
+	# The running buffs, newest numbers first. The pygame build shows
+	# five and counts the rest; there are only thirteen in total, and
+	# a row that wraps over the map is worse than a truncated one.
+	var chips: Array[String] = []
+	for id in player.buffs:
+		if chips.size() >= 5:
+			chips.append("+%d" % (player.buffs.size() - 5))
+			break
+		chips.append("%s %d" % [Data.BUFFS[id]["name"], player.buffs[id]])
+	if player.poison_turns > 0:
+		chips.append("Gift %d" % player.poison_turns)
+	if not chips.is_empty():
+		line += "     [%s]" % ", ".join(chips)
+	_play_ui.get_node("stats").text = line
+	if _drink_button != null:
+		if player.potions <= 0:
+			_drink_button.text = "KEINE TRÄNKE"
+		else:
+			_drink_button.text = "%s (%d)" % [
+				Data.potion_by_id(player.selected_potion)["name"],
+				int(player.potion_counts.get(player.selected_potion, 0))]
 	_play_ui.get_node("log").text = "\n".join(log_lines)
 	_play_ui.get_node("fps").text = "%d fps   %.1f ms   %d draw calls" % [
 		Engine.get_frames_per_second(),

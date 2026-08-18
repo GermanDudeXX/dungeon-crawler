@@ -47,6 +47,7 @@ func _process(_delta: float) -> bool:
 	var played := {}
 	var perks := 0
 	var shopped := false
+	var drunk := {}
 	var next_class := 0
 	var depth_at: int = _game.depth
 	var started := Time.get_ticks_msec()
@@ -63,6 +64,9 @@ func _process(_delta: float) -> bool:
 	_game.choose_class(Data.CLASSES[0]["id"])
 	played[_game.player.hero_class] = true
 	depth_at = _game.depth
+	# After the hero exists and the title screen is gone: drinking is
+	# refused while the game is still asking who you are.
+	_check_potions()
 
 	for turn in _turns:
 		if _game.dead:
@@ -86,8 +90,18 @@ func _process(_delta: float) -> bool:
 			shopped = false
 			continue
 
-		if _game.player.hp < _game.player.max_hp * 0.4 and _game.player.potions > 0:
-			_game.drink()
+		# A player drinks when hurt - and a test has to drink everything
+		# else too, or twenty-nine of the thirty flasks are never opened.
+		# Every tenth turn the bot works through its stock in order.
+		if _game.player.potions > 0:
+			var hurt: bool = _game.player.hp < _game.player.max_hp * 0.4
+			if hurt or turn % 10 == 0:
+				if not hurt:
+					_game.cycle_potion()
+				else:
+					_game.player.selected_potion = "healing" if _game.player.potion_counts.has("healing") else _game.player.selected_potion
+				drunk[_game.player.selected_potion] = true
+				_game.drink()
 
 		# A level-up asks for a perk before anything else can happen.
 		if _game.player.pending_perks > 0:
@@ -215,6 +229,7 @@ func _process(_delta: float) -> bool:
 		parts.append("%d %s" % [seen[what], what])
 	print("  angefasst: " + ", ".join(parts))
 	print("  gespielt: %s, %d Gaben gewählt" % [", ".join(played.keys()), perks])
+	print("  getrunken: %d von %d Trankarten" % [drunk.size(), Data.POTIONS.size()])
 
 	if perks == 0:
 		print("  nie eine Gabe gewählt - der Stufenaufstieg ist ungetestet")
@@ -321,7 +336,10 @@ func _fingerprint() -> String:
 		"Ebene=%d" % _game.depth,
 		"Held=(%d,%d) %d/%d HP, Stufe %d, %d Gold, %d Traenke, Gift %d" % [
 			p.x, p.y, p.hp, p.max_hp, p.level, p.gold, p.potions, p.poison_turns],
-		"Waffe=%d Ruestung=%d" % [p.weapon, p.armour],
+		"Waffe=%d Ruestung=%d Schild=%d Bluten=%d" % [
+			p.weapon, p.armour, p.shield, p.bleed_turns],
+		"Traenke=%s gewaehlt=%s" % [str(p.potion_counts), p.selected_potion],
+		"Buffs=%s" % str(p.buffs),
 		"Angriff=%d Verteidigung=%d Krit=%.3f Minderung=%.3f Gold x%.2f" % [
 			p.base_power, p.base_defense, p.bonus_crit, p.damage_reduction, p.gold_mult],
 		"Regen=%d/%d offen=%d" % [p.regen_counter, p.regen_interval, p.pending_perks],
@@ -423,4 +441,85 @@ func _check_placement() -> void:
 		if cell == _game.stairs:
 			_complain("etwas steht auf der Treppe",
 				"Ebene %d, %s" % [_game.depth, entry[1]])
+
+
+## Drinks every single potion in the game once and insists it did what
+## its own table says it does.
+##
+## The playthrough alone only ever opens the handful of flasks the first
+## few floors hand out - the deep ones are gated behind depth and would
+## ship untested. This does not care about depth: it puts one of each in
+## the hero's hands and checks the effect landed.
+func _check_potions() -> void:
+	for potion in Data.POTIONS:
+		var id: String = potion["id"]
+		var effect: Dictionary = potion["effect"]
+		var p = _game.player
+
+		# A clean slate, and hurt enough that a heal has room to work.
+		p.buffs.clear()
+		p.shield = 0
+		# Poisoned and bleeding only where the flask claims to cure it.
+		# Drinking costs a turn, and a turn of bleeding takes a hit point
+		# right back off - which read as "the Elixir does not heal fully"
+		# when the fault was the setup, not the potion.
+		var cures: bool = effect.has("cure")
+		p.poison_turns = 3 if cures else 0
+		p.bleed_turns = 3 if cures else 0
+		p.max_hp = 60
+		p.hp = 20
+		p.gold = 100
+		p.add_potion(id)
+		p.selected_potion = id
+
+		var hp_before: int = p.hp
+		var max_before: int = p.max_hp
+		var power_before: int = p.base_power
+		var defense_before: int = p.base_defense
+		var gold_before: int = p.gold
+		var carried: int = p.potions
+		var explored_before: int = _game.explored.size()
+
+		_game.drink()
+
+		if p.potions != carried - 1:
+			_complain("Trank wurde nicht verbraucht", id)
+		if p.hp > p.max_hp:
+			_complain("Trank heilt über das Maximum", "%s: %d/%d" % [id, p.hp, p.max_hp])
+		if effect.has("heal") and p.hp <= hp_before:
+			_complain("Heiltrank heilt nicht", id)
+		if effect.has("heal_pct") and p.hp != p.max_hp:
+			_complain("Elixier heilt nicht voll", id)
+		if effect.has("max_hp") and p.max_hp != max_before + int(effect["max_hp"]):
+			_complain("maximales Leben unverändert", id)
+		if effect.has("base_power") and p.base_power != power_before + int(effect["base_power"]):
+			_complain("Angriff unverändert", id)
+		if effect.has("base_defense") and p.base_defense != defense_before + int(effect["base_defense"]):
+			_complain("Verteidigung unverändert", id)
+		if effect.has("buff"):
+			var buff: String = effect["buff"]
+			if not Data.BUFFS.has(buff):
+				_complain("Trank verweist auf einen unbekannten Buff", "%s -> %s" % [id, buff])
+			elif not p.buffs.has(buff):
+				_complain("Buff wirkt nicht", "%s -> %s" % [id, buff])
+		if effect.has("shield") and p.shield <= 0:
+			_complain("Schild bleibt aus", id)
+		if effect.has("gold") and p.gold <= gold_before:
+			_complain("Gold kommt nicht an", id)
+		if effect.has("reveal") and _game.explored.size() <= explored_before:
+			_complain("Klarheit deckt nichts auf", id)
+		if effect.has("cure"):
+			for what in effect["cure"]:
+				if what == "poison_turns" and p.poison_turns != 0:
+					_complain("Gift wird nicht geheilt", id)
+				if what == "bleed_turns" and p.bleed_turns != 0:
+					_complain("Bluten wird nicht gestillt", id)
+		if effect.has("self_poison") and p.poison_turns <= 0:
+			_complain("verfluchter Trank vergiftet nicht", id)
+		if not Dungeon.is_walkable(_game.grid, p.x, p.y):
+			_complain("Trank setzt den Helden in eine Wand", id)
+		if _game.dead:
+			_complain("Trank tötet den Helden", id)
+			_game.dead = false
+			p.hp = p.max_hp
 

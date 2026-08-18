@@ -33,7 +33,12 @@ class Player extends Actor:
 	var level := 1
 	var xp := 0
 	var xp_to_next := 15
-	var potions := 0
+	var potions := 0                ## kept in step with the sum of potion_counts
+	var potion_counts := {}         ## id -> how many are carried
+	var selected_potion := Data.DEFAULT_POTION
+	var buffs := {}                 ## id -> turns left
+	var shield := 0                 ## soaks damage before hit points do
+	var bleed_turns := 0
 	var gold := 0
 	var kills := 0
 	var facing := 1
@@ -60,22 +65,69 @@ class Player extends Actor:
 		weapon = int(info["weapon"])
 		armour = int(info["armour"])
 		potions = int(info["potions"])
+		potion_counts = {Data.DEFAULT_POTION: potions}
+
+	## What a buff adds up to across everything currently running. Two
+	## buffs that both raise power stack rather than one winning.
+	func buff_total(key: String) -> float:
+		var total := 0.0
+		for id in buffs:
+			total += float(Data.BUFFS[id].get(key, 0))
+		return total
+
+
+	func has_buff(key: String) -> bool:
+		for id in buffs:
+			if Data.BUFFS[id].get(key, false):
+				return true
+		return false
+
 
 	func power() -> int:
-		return base_power + Data.WEAPONS[weapon]["bonus"]
+		return base_power + Data.WEAPONS[weapon]["bonus"] + int(buff_total("power"))
 
 	## Rises with level and caps where the Python build caps it, so a
 	## late hero crits often but never always.
 	func crit_chance() -> float:
-		return minf(0.5, 0.05 + level * 0.02 + bonus_crit)
+		# The natural cap stays where it was; a Precision potion adds on
+		# top of it rather than being swallowed by it, which is the whole
+		# reason to drink one at high level.
+		var natural := minf(0.5, 0.05 + level * 0.02 + bonus_crit)
+		return minf(0.95, natural + buff_total("crit"))
 
 
 	func defense() -> int:
-		return base_defense + Data.ARMOURS[armour]["bonus"]
+		return base_defense + Data.ARMOURS[armour]["bonus"] + int(buff_total("defense"))
 
 	## Returns how many levels were gained, so the caller can announce
 	## them - the Python build does the same and the count is used to
 	## hand out one perk per level rather than one per gain.
+	## Adds or removes potions of one kind and keeps the total honest.
+	## Two counters that can disagree is how an inventory ends up
+	## showing three flasks that cannot be drunk.
+	func add_potion(id: String, count := 1) -> void:
+		var now: int = int(potion_counts.get(id, 0)) + count
+		if now <= 0:
+			potion_counts.erase(id)
+		else:
+			potion_counts[id] = now
+		potions = 0
+		for key in potion_counts:
+			potions += int(potion_counts[key])
+		if not potion_counts.has(selected_potion):
+			selected_potion = next_potion()
+
+
+	## The next kind carried after the selected one, wrapping around.
+	func next_potion() -> String:
+		var ids: Array = potion_counts.keys()
+		ids.sort()
+		if ids.is_empty():
+			return Data.DEFAULT_POTION
+		var at: int = ids.find(selected_potion)
+		return ids[(at + 1) % ids.size()]
+
+
 	func gain_xp(amount: int) -> int:
 		xp += amount
 		var gained := 0
@@ -104,6 +156,9 @@ class Monster extends Actor:
 	var flees_below := 0.0
 	var is_boss := false
 	var is_mimic := false
+	var burn_turns := 0             ## takes damage at the end of its turn
+	var slow_turns := 0             ## moves every other turn
+	var stun_turns := 0             ## does not act at all
 
 	func _init(kind_id: String, tier_mult: float) -> void:
 		kind = kind_id

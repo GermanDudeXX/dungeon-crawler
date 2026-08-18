@@ -127,6 +127,7 @@ const BOSS_EVERY := 3
 const BOSS_HP_MULT := 3.2
 const BOSS_POWER_MULT := 1.6
 const MIMIC_MULT := 1.8
+const BURN_DAMAGE := 3
 const POISON_PER_TURN := 2
 
 ## What a shopkeeper sells, and what a smith charges. Prices rise with
@@ -209,3 +210,124 @@ static func perk_choices(rng: RandomNumberGenerator) -> Array:
 		out.append(pool.pop_at(rng.randi_range(0, pool.size() - 1)))
 	return out
 
+
+# Buffs and their numbers, straight from constants.py BUFFS. A buff is a
+# name, a set of modifiers and a turn count; nothing here knows how it
+# was applied, so a potion, a shrine or a scroll can all hand out the
+# same one.
+const BUFFS := {
+	"strength": {"name": "Stärke", "power": 4},
+	"stone_skin": {"name": "Steinhaut", "defense": 5},
+	"precision": {"name": "Präzision", "crit": 0.3},
+	"haste": {"name": "Eile", "haste": true},
+	"invisible": {"name": "Unsichtbar", "invisible": true},
+	"thorns": {"name": "Dornen", "thorns": 4},
+	"lifesteal": {"name": "Lebensraub", "lifesteal": 0.4},
+	"regen": {"name": "Regeneration", "regen": 3},
+	"luck": {"name": "Glück", "luck": true},
+	"berserk": {"name": "Berserk", "power": 7, "defense": -4},
+	"fire_aura": {"name": "Feueraura", "burn_attackers": 3},
+	"clumsy": {"name": "Ungeschick", "power": -3},
+	"frailty": {"name": "Gebrechlich", "defense": -3},
+}
+
+
+# Every potion in the game, with the prices, weights and depth gates from
+# constants.py POTION_TYPES. "flask" names the sprite, so the colour on
+# the floor matches the one in the inventory; "cursed" ones are only ever
+# found, never sold.
+const POTIONS := [
+	{"id": "healing", "name": "Heiltrank", "flask": "flask_red", "price": 12, "weight": 10,
+		"min_level": 1, "effect": {"heal": 15}},
+	{"id": "greater_healing", "name": "Großer Heiltrank", "flask": "flask_big_red", "price": 30, "weight": 5,
+		"min_level": 4, "effect": {"heal": 45}},
+	{"id": "full_healing", "name": "Elixier des Lebens", "flask": "flask_big_red", "price": 65, "weight": 2,
+		"min_level": 8, "effect": {"heal_pct": 1.0}},
+	{"id": "regeneration", "name": "Trank der Regeneration", "flask": "flask_green", "price": 28, "weight": 4,
+		"min_level": 3, "effect": {"buff": "regen", "turns": 15}},
+	{"id": "vitality", "name": "Trank der Lebenskraft", "flask": "flask_big_green", "price": 55, "weight": 2,
+		"min_level": 5, "effect": {"max_hp": 6}},
+	{"id": "might", "name": "Trank der Macht", "flask": "flask_big_yellow", "price": 60, "weight": 2,
+		"min_level": 6, "effect": {"base_power": 1}},
+	{"id": "iron_hide", "name": "Trank der Eisenhaut", "flask": "flask_big_blue", "price": 60, "weight": 2,
+		"min_level": 6, "effect": {"base_defense": 1}},
+	{"id": "insight", "name": "Trank der Einsicht", "flask": "flask_big_blue", "price": 45, "weight": 3,
+		"min_level": 4, "effect": {"xp_levels": 0.5}},
+	{"id": "strength", "name": "Trank der Stärke", "flask": "flask_yellow", "price": 24, "weight": 6,
+		"min_level": 2, "effect": {"buff": "strength", "turns": 14}},
+	{"id": "stone_skin", "name": "Trank der Steinhaut", "flask": "flask_blue", "price": 24, "weight": 6,
+		"min_level": 2, "effect": {"buff": "stone_skin", "turns": 14}},
+	{"id": "precision", "name": "Trank der Präzision", "flask": "flask_yellow", "price": 26, "weight": 4,
+		"min_level": 3, "effect": {"buff": "precision", "turns": 16}},
+	{"id": "haste", "name": "Trank der Eile", "flask": "flask_blue", "price": 32, "weight": 4,
+		"min_level": 4, "effect": {"buff": "haste", "turns": 10}},
+	{"id": "berserk", "name": "Berserkergebräu", "flask": "flask_big_red", "price": 30, "weight": 3,
+		"min_level": 5, "effect": {"buff": "berserk", "turns": 12}},
+	{"id": "thorns", "name": "Trank der Dornen", "flask": "flask_green", "price": 26, "weight": 3,
+		"min_level": 4, "effect": {"buff": "thorns", "turns": 16}},
+	{"id": "lifesteal", "name": "Vampirtrunk", "flask": "flask_big_red", "price": 38, "weight": 3,
+		"min_level": 6, "effect": {"buff": "lifesteal", "turns": 14}},
+	{"id": "fire_aura", "name": "Trank der Glut", "flask": "flask_yellow", "price": 30, "weight": 3,
+		"min_level": 5, "effect": {"buff": "fire_aura", "turns": 14}},
+	{"id": "shield", "name": "Trank der Abschirmung", "flask": "flask_big_blue", "price": 30, "weight": 4,
+		"min_level": 3, "effect": {"shield": 25}},
+	{"id": "invisibility", "name": "Trank der Unsichtbarkeit", "flask": "flask_blue", "price": 34, "weight": 3,
+		"min_level": 5, "effect": {"buff": "invisible", "turns": 12}},
+	{"id": "luck", "name": "Trank des Glücks", "flask": "flask_big_yellow", "price": 34, "weight": 3,
+		"min_level": 4, "effect": {"buff": "luck", "turns": 25}},
+	{"id": "clarity", "name": "Trank der Klarheit", "flask": "flask_blue", "price": 20, "weight": 4,
+		"min_level": 2, "effect": {"reveal": true}},
+	{"id": "blink", "name": "Trank des Blinzelns", "flask": "flask_green", "price": 22, "weight": 4,
+		"min_level": 3, "effect": {"blink": true}},
+	{"id": "midas", "name": "Trank des Midas", "flask": "flask_big_yellow", "price": 0, "weight": 2,
+		"min_level": 3, "effect": {"gold": [25, 70]}},
+	{"id": "antidote", "name": "Gegengift", "flask": "flask_green", "price": 15, "weight": 5,
+		"min_level": 2, "effect": {"cure": ["poison_turns"]}},
+	{"id": "coagulant", "name": "Blutstiller", "flask": "flask_red", "price": 15, "weight": 4,
+		"min_level": 3, "effect": {"cure": ["bleed_turns"]}},
+	{"id": "panacea", "name": "Allheilmittel", "flask": "flask_big_green", "price": 40, "weight": 2,
+		"min_level": 6, "effect": {"cure": ["poison_turns", "bleed_turns"], "cure_debuffs": true, "heal": 20}},
+	{"id": "firebomb", "name": "Feuerfläschchen", "flask": "flask_big_red", "price": 28, "weight": 4,
+		"min_level": 3, "effect": {"burst_damage": 18, "burst_burn": 3}},
+	{"id": "frostbomb", "name": "Frostfläschchen", "flask": "flask_big_blue", "price": 28, "weight": 3,
+		"min_level": 5, "effect": {"burst_damage": 10, "burst_slow": 4}},
+	{"id": "thunderbomb", "name": "Sturmfläschchen", "flask": "flask_big_yellow", "price": 34, "weight": 3,
+		"min_level": 7, "effect": {"burst_damage": 14, "burst_stun": 2}},
+	{"id": "murky", "name": "Trübe Phiole", "flask": "flask_green", "price": 0, "weight": 2,
+		"min_level": 2, "effect": {"self_poison": 6}, "cursed": true},
+	{"id": "bitter", "name": "Bittere Phiole", "flask": "flask_yellow", "price": 0, "weight": 2,
+		"min_level": 3, "effect": {"buff": "clumsy", "turns": 12}, "cursed": true},
+	{"id": "brittle", "name": "Spröde Phiole", "flask": "flask_blue", "price": 0, "weight": 2,
+		"min_level": 4, "effect": {"buff": "frailty", "turns": 12}, "cursed": true},
+]
+const DEFAULT_POTION := "healing"
+const BURST_RADIUS := 2
+
+
+## The potion this floor hands out: weighted among everything already
+## unlocked at this depth, exactly as the Python build rolls it.
+static func pick_potion(level: int, rng: RandomNumberGenerator, allow_cursed := true) -> String:
+	var pool: Array = []
+	var total := 0.0
+	for potion in POTIONS:
+		if potion["min_level"] > level:
+			continue
+		if potion.get("cursed", false) and not allow_cursed:
+			continue
+		pool.append(potion)
+		total += float(potion["weight"])
+	if pool.is_empty():
+		return DEFAULT_POTION
+	var roll := rng.randf() * total
+	for potion in pool:
+		roll -= float(potion["weight"])
+		if roll <= 0.0:
+			return potion["id"]
+	return pool[-1]["id"]
+
+
+static func potion_by_id(id: String) -> Dictionary:
+	for potion in POTIONS:
+		if potion["id"] == id:
+			return potion
+	return POTIONS[0]

@@ -38,6 +38,7 @@ static func write(game) -> void:
 			"name": m.display_name, "sprite": m.sprite, "speed": m.speed,
 			"poisons": m.poisons, "flees_below": m.flees_below,
 			"awake": m.awake, "boss": m.is_boss, "mimic": m.is_mimic,
+			"burn": m.burn_turns, "slow": m.slow_turns, "stun": m.stun_turns,
 		})
 
 	var explored: Array = []
@@ -51,11 +52,13 @@ static func write(game) -> void:
 	var items: Array = []
 	for item in game.items:
 		items.append({"x": item["cell"].x, "y": item["cell"].y,
-			"kind": item["kind"], "amount": item.get("amount", 0)})
+			"kind": item["kind"], "amount": item.get("amount", 0),
+			"potion": item.get("potion", "")})
 
 	var shops: Array = []
 	for shop in game.shops:
-		shops.append({"x": shop["cell"].x, "y": shop["cell"].y, "kind": shop["kind"]})
+		shops.append({"x": shop["cell"].x, "y": shop["cell"].y, "kind": shop["kind"],
+			"stock": shop.get("stock", [])})
 
 	var p = game.player
 	var data := {
@@ -84,6 +87,8 @@ static func write(game) -> void:
 			"bonus_crit": p.bonus_crit, "damage_reduction": p.damage_reduction,
 			"gold_mult": p.gold_mult, "regen_interval": p.regen_interval,
 			"regen_counter": p.regen_counter, "pending_perks": p.pending_perks,
+			"potion_counts": p.potion_counts, "selected_potion": p.selected_potion,
+			"buffs": p.buffs, "shield": p.shield, "bleed_turns": p.bleed_turns,
 		},
 	}
 
