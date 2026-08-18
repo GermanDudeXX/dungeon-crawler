@@ -30,6 +30,10 @@ class Player extends Actor:
 	var base_defense := 1
 	var weapon := 0                    ## index into Data.WEAPONS
 	var armour := 0
+	var weapon_rarity := "common"      ## multiplies the base bonus
+	var armour_rarity := "common"
+	var weapon_extra := 0              ## what the smith has hammered on
+	var armour_extra := 0
 	var level := 1
 	var xp := 0
 	var xp_to_next := 15
@@ -84,8 +88,44 @@ class Player extends Actor:
 		return false
 
 
+	## The weapon's own contribution: its type's bonus, multiplied by
+	## the rarity it rolled, plus whatever the smith has added since.
+	func weapon_bonus() -> int:
+		var base: float = float(Data.WEAPONS[weapon]["bonus"])
+		var mult: float = float(Data.rarity_by_id(weapon_rarity)["mult"])
+		return int(round(base * mult)) + weapon_extra
+
+
+	func armour_bonus() -> int:
+		var base: float = float(Data.ARMOURS[armour]["bonus"])
+		var mult: float = float(Data.rarity_by_id(armour_rarity)["mult"])
+		return int(round(base * mult)) + armour_extra
+
+
+	## The full name of a piece, the way it reads in the log and the
+	## shop: "Seltene Streitaxt +2".
+	func weapon_name() -> String:
+		return _named(Data.WEAPONS[weapon]["name"], weapon_rarity, weapon_extra)
+
+
+	func armour_name() -> String:
+		return _named(Data.ARMOURS[armour]["name"], armour_rarity, armour_extra)
+
+
+	## The name only - no bonus. The number is printed next to it
+	## everywhere it matters, and a name carrying "+2" beside a total of
+	## "+15" read as two different numbers for the same thing.
+	func _named(base: String, rarity_id: String, _extra: int) -> String:
+		# The rarity goes after the noun, in brackets. German adjectives
+		# agree with gender - "Seltene Kettenhemd" is simply wrong, and
+		# carrying a gender for every weapon name to fix it would be a lot
+		# of table for one word.
+		var prefix: String = Data.rarity_by_id(rarity_id)["name"]
+		return base if prefix == "" else "%s (%s)" % [base, prefix]
+
+
 	func power() -> int:
-		return base_power + Data.WEAPONS[weapon]["bonus"] + int(buff_total("power"))
+		return base_power + weapon_bonus() + int(buff_total("power"))
 
 	## Rises with level and caps where the Python build caps it, so a
 	## late hero crits often but never always.
@@ -98,7 +138,7 @@ class Player extends Actor:
 
 
 	func defense() -> int:
-		return base_defense + Data.ARMOURS[armour]["bonus"] + int(buff_total("defense"))
+		return base_defense + armour_bonus() + int(buff_total("defense"))
 
 	## Returns how many levels were gained, so the caller can announce
 	## them - the Python build does the same and the count is used to

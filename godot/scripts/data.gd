@@ -410,3 +410,59 @@ const VAULT_GUARD_MULT := 1.3
 static func has_mini_boss(level: int) -> bool:
 	return level % MINI_BOSS_EVERY == 0 and not has_boss(level)
 
+
+# --- Seltenheit -----------------------------------------------------------
+# Rolled on every weapon and armour drop, on top of its base type: it
+# multiplies the bonus and puts a word in front of the name, so what a
+# find is worth reads at a glance instead of needing a comparison
+# screen. min_level gates the good tiers behind depth - the first floor
+# never hands out a legendary. Values from constants.py RARITY_TIERS.
+const RARITIES := [
+	{"id": "common", "name": "", "mult": 1.0, "weight": 10.0, "min_level": 1},
+	{"id": "uncommon", "name": "fein", "mult": 1.3, "weight": 5.0, "min_level": 1},
+	{"id": "rare", "name": "selten", "mult": 1.7, "weight": 2.2, "min_level": 3},
+	{"id": "epic", "name": "episch", "mult": 2.1, "weight": 0.9, "min_level": 5},
+	{"id": "legendary", "name": "legendär", "mult": 2.6, "weight": 0.3, "min_level": 8},
+]
+
+
+## The rarity a drop on this floor rolls, weighted among those already
+## unlocked at this depth.
+static func pick_rarity(level: int, rng: RandomNumberGenerator) -> Dictionary:
+	var pool: Array = []
+	var total := 0.0
+	for rarity in RARITIES:
+		if int(rarity["min_level"]) > level:
+			continue
+		pool.append(rarity)
+		total += float(rarity["weight"])
+	var roll := rng.randf() * total
+	for rarity in pool:
+		roll -= float(rarity["weight"])
+		if roll <= 0.0:
+			return rarity
+	return RARITIES[0]
+
+
+static func rarity_by_id(id: String) -> Dictionary:
+	for rarity in RARITIES:
+		if rarity["id"] == id:
+			return rarity
+	return RARITIES[0]
+
+
+# --- der Schmied ----------------------------------------------------------
+# Gold has nothing to buy past the first few floors: a shop stocks what
+# it stocks. The smith is the sink - he improves what you already carry,
+# so the gear you found stays the gear you use. The price climbs with
+# the bonus already on the item, so the first upgrade is cheap and the
+# tenth is a real decision. Numbers from constants.py.
+const SMITH_BASE_PRICE := 25
+const SMITH_PRICE_PER_POINT := 18
+const SMITH_WEAPON_STEP := 2
+const SMITH_ARMOUR_STEP := 1
+
+
+static func smith_price(bonus: int) -> int:
+	return SMITH_BASE_PRICE + SMITH_PRICE_PER_POINT * maxi(0, bonus)
+

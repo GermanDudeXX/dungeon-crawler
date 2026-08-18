@@ -370,8 +370,9 @@ func _fingerprint() -> String:
 		"Ebene=%d" % _game.depth,
 		"Held=(%d,%d) %d/%d HP, Stufe %d, %d Gold, %d Traenke, Gift %d" % [
 			p.x, p.y, p.hp, p.max_hp, p.level, p.gold, p.potions, p.poison_turns],
-		"Waffe=%d Ruestung=%d Schild=%d Bluten=%d" % [
-			p.weapon, p.armour, p.shield, p.bleed_turns],
+		"Waffe=%s(%d) Ruestung=%s(%d) Schild=%d Bluten=%d" % [
+			p.weapon_name(), p.weapon_bonus(), p.armour_name(), p.armour_bonus(),
+			p.shield, p.bleed_turns],
 		"Traenke=%s gewaehlt=%s" % [str(p.potion_counts), p.selected_potion],
 		"Buffs=%s Rollen=%s" % [str(p.buffs), str(p.scrolls)],
 		"Schrein=%s" % str(_game.shrine),

@@ -56,6 +56,10 @@ static func write(game) -> void:
 			"kind": item["kind"], "amount": item.get("amount", 0),
 			"potion": item.get("potion", ""), "scroll": item.get("scroll", "")})
 
+	var decor: Array = []
+	for cell in game.decor:
+		decor.append([cell.x, cell.y, game.decor[cell]])
+
 	var shops: Array = []
 	for shop in game.shops:
 		shops.append({"x": shop["cell"].x, "y": shop["cell"].y, "kind": shop["kind"],
@@ -71,6 +75,7 @@ static func write(game) -> void:
 		"stairs": [game.stairs.x, game.stairs.y],
 		"stairs_locked": game.stairs_locked,
 		"shrine": null if game.shrine == null else [game.shrine.x, game.shrine.y],
+		"decor": decor,
 		"explored": explored,
 		"monsters": monsters,
 		"items": items,
@@ -83,6 +88,8 @@ static func write(game) -> void:
 			"x": p.x, "y": p.y, "hp": p.hp, "max_hp": p.max_hp,
 			"base_power": p.base_power, "base_defense": p.base_defense,
 			"weapon": p.weapon, "armour": p.armour,
+			"weapon_rarity": p.weapon_rarity, "armour_rarity": p.armour_rarity,
+			"weapon_extra": p.weapon_extra, "armour_extra": p.armour_extra,
 			"level": p.level, "xp": p.xp, "xp_to_next": p.xp_to_next,
 			"potions": p.potions, "gold": p.gold, "kills": p.kills,
 			"facing": p.facing, "poison_turns": p.poison_turns,

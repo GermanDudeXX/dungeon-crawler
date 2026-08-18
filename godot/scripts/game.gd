@@ -25,6 +25,11 @@ const HERO_TILES := 1.8
 const MONSTER_TILES := 1.5
 const BOSS_SCALE := 1.8
 const PROP_TILES := 1.6
+const ITEM_TILES := 1.1
+
+# Scenery only, no rules: what a floor is dressed with.
+const DECOR := ["crate", "skull", "wall_banner_red", "wall_banner_blue",
+	"wall_banner_green", "wall_banner_yellow", "column"]
 
 const TILE_DIR := "res://assets/tiles/"
 const CLASS_DIR := "res://assets/classes/"
@@ -45,6 +50,7 @@ var traps := {}                 ## cell -> trap id
 var chest = null                ## {cell, mimic, opened}
 var shops: Array = []           ## {cell, kind}
 var stairs_locked := false
+var decor := {}                  ## cell -> a sprite that is only scenery
 var shrine = null                ## the cell holding this floor's shrine, or null
 var shop_open = null            ## the shop the hero is standing in
 var dead := false
@@ -193,6 +199,10 @@ func load_run() -> bool:
 	player.base_defense = int(p["base_defense"])
 	player.weapon = int(p["weapon"])
 	player.armour = int(p["armour"])
+	player.weapon_rarity = str(p.get("weapon_rarity", "common"))
+	player.armour_rarity = str(p.get("armour_rarity", "common"))
+	player.weapon_extra = int(p.get("weapon_extra", 0))
+	player.armour_extra = int(p.get("armour_extra", 0))
 	player.level = int(p["level"])
 	player.xp = int(p["xp"])
 	player.xp_to_next = int(p["xp_to_next"])
@@ -244,6 +254,9 @@ func load_run() -> bool:
 		grid.append(line)
 	stairs = Vector2i(int(save["stairs"][0]), int(save["stairs"][1]))
 	stairs_locked = bool(save["stairs_locked"])
+	decor.clear()
+	for entry in save.get("decor", []):
+		decor[Vector2i(int(entry[0]), int(entry[1]))] = str(entry[2])
 	shrine = null
 	if save.get("shrine", null) != null:
 		shrine = Vector2i(int(save["shrine"][0]), int(save["shrine"][1]))
@@ -598,6 +611,8 @@ func taken(cell: Vector2i) -> bool:
 		return true
 	if shrine != null and shrine == cell:
 		return true
+	if decor.has(cell):
+		return true
 	return shop_at(cell) != null
 
 
@@ -882,23 +897,37 @@ func _pick_up(cell: Vector2i) -> void:
 			audio.play("pickup")
 			say("Aufgehoben: %s." % Data.scroll_by_id(scroll_id)["name"])
 		"weapon":
-			var best: int = mini(Data.WEAPONS.size() - 1, 1 + depth / 2)
-			if best > player.weapon:
-				player.weapon = best
+			# A find is compared against what is in hand, not against its own
+			# tier: a Fine Dagger can beat a plain Short Sword, and the sale
+			# price is what stops a worse one from being a dead pickup.
+			var w_type: int = mini(Data.WEAPONS.size() - 1, 1 + depth / 2)
+			var w_rarity: Dictionary = Data.pick_rarity(depth, rng)
+			var w_value: int = int(round(float(Data.WEAPONS[w_type]["bonus"])
+				* float(w_rarity["mult"])))
+			if w_value > player.weapon_bonus():
+				player.weapon = w_type
+				player.weapon_rarity = w_rarity["id"]
+				player.weapon_extra = 0
 				audio.play("equip")
-				say("Neue Waffe: %s." % Data.WEAPONS[best]["name"])
+				say("Neue Waffe: %s +%d." % [player.weapon_name(), player.weapon_bonus()])
 			else:
 				player.gold += 10
 				say("Eine schlechtere Waffe - für 10 Gold verkauft.")
 		"armour":
-			var best: int = mini(Data.ARMOURS.size() - 1, 1 + depth / 3)
-			if best > player.armour:
-				player.armour = best
+			var a_type: int = mini(Data.ARMOURS.size() - 1, 1 + depth / 3)
+			var a_rarity: Dictionary = Data.pick_rarity(depth, rng)
+			var a_value: int = int(round(float(Data.ARMOURS[a_type]["bonus"])
+				* float(a_rarity["mult"])))
+			if a_value > player.armour_bonus():
+				player.armour = a_type
+				player.armour_rarity = a_rarity["id"]
+				player.armour_extra = 0
 				audio.play("equip")
-				say("Neue Rüstung: %s." % Data.ARMOURS[best]["name"])
+				say("Neue Rüstung: %s +%d." % [player.armour_name(), player.armour_bonus()])
 			else:
 				player.gold += 10
 				say("Eine schlechtere Rüstung - für 10 Gold verkauft.")
+
 	items.erase(loot)
 	if _item_nodes.has(cell):
 		_item_nodes[cell].queue_free()
@@ -1050,19 +1079,21 @@ func buy(what: String) -> void:
 				player.add_potion(id)
 				say("Gekauft: %s." % potion["name"])
 		"weapon":
-			var next: int = player.weapon + 1
-			if next >= Data.WEAPONS.size():
-				say("Nichts Besseres im Angebot.")
-			elif _spend(Data.WEAPONS[next]["cost"]):
-				player.weapon = next
-				say("Gekauft: %s." % Data.WEAPONS[next]["name"])
+			# The smith hammers on what you carry rather than selling you a
+			# new one: that is the whole reason he exists, and it keeps the
+			# weapon you found in play instead of retiring it.
+			if _spend(Data.smith_price(player.weapon_extra)):
+				player.weapon_extra += Data.SMITH_WEAPON_STEP
+				audio.play("equip")
+				say("Der Schmied schärft %s auf +%d." % [
+					player.weapon_name(), player.weapon_bonus()])
 		"armour":
-			var next: int = player.armour + 1
-			if next >= Data.ARMOURS.size():
-				say("Nichts Besseres im Angebot.")
-			elif _spend(Data.ARMOURS[next]["cost"]):
-				player.armour = next
-				say("Gekauft: %s." % Data.ARMOURS[next]["name"])
+			if _spend(Data.smith_price(player.armour_extra)):
+				player.armour_extra += Data.SMITH_ARMOUR_STEP
+				audio.play("equip")
+				say("Der Schmied verstärkt %s auf +%d." % [
+					player.armour_name(), player.armour_bonus()])
+
 		"heal":
 			if player.hp >= player.max_hp:
 				say("Dir fehlt nichts.")
@@ -1380,6 +1411,8 @@ func paint() -> void:
 	if chest != null:
 		_place_prop(chest["cell"], "chest_empty_open_anim_f2" if chest["opened"]
 			else "chest_full_open_anim_f0")
+	for cell in decor:
+		_place_prop(cell, decor[cell])
 	if shrine != null:
 		# A column: the only thing in the tileset that reads as
 		# something built rather than dropped.
@@ -1431,7 +1464,10 @@ func _place_item(item: Dictionary) -> void:
 		_item_nodes[cell] = node
 	var sprite: Sprite2D = _item_nodes[cell]
 	sprite.texture = _sprite_for(_item_art(item))
-	sprite.position = Vector2(cell) * TILE
+	# Loot art is not all one size either: the flasks are 16x16 tiles,
+	# the scroll and the sword are paintings several hundred pixels
+	# tall. Unscaled, a scroll on the floor covered half the room.
+	_stand_on(sprite, cell, ITEM_TILES)
 	sprite.visible = explored.has(cell)
 
 
@@ -1518,14 +1554,18 @@ func _build_hud() -> void:
 	_play_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud.add_child(_play_ui)
 
-	for name in ["stats", "fps", "log"]:
+	for name in ["stats", "gear", "fps", "log"]:
 		var label := Label.new()
 		label.name = name
 		label.add_theme_font_size_override("font_size", 22)
 		label.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
 		_play_ui.add_child(label)
 	_play_ui.get_node("stats").position = Vector2(14, 8)
-	_play_ui.get_node("fps").position = Vector2(14, 36)
+	# Two lines, because one did not fit: at 1280 wide the gear names
+	# pushed the buff row off the right-hand edge, where a player has no
+	# way to know it exists.
+	_play_ui.get_node("gear").position = Vector2(14, 36)
+	_play_ui.get_node("fps").position = Vector2(14, 64)
 
 	var log_label: Label = _play_ui.get_node("log")
 	log_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
@@ -1957,15 +1997,14 @@ func _refresh_shop() -> void:
 
 	var offers: Array = []
 	if smith:
-		var next_weapon: int = player.weapon + 1
-		if next_weapon < Data.WEAPONS.size():
-			offers.append(["weapon", "Waffe: %s" % Data.WEAPONS[next_weapon]["name"],
-				int(Data.WEAPONS[next_weapon]["cost"])])
-		var next_armour: int = player.armour + 1
-		if next_armour < Data.ARMOURS.size():
-			offers.append(["armour", "Rüstung: %s" % Data.ARMOURS[next_armour]["name"],
-				int(Data.ARMOURS[next_armour]["cost"])])
+		offers.append(["weapon", "Schärfen: %s +%d" % [
+			Data.WEAPONS[player.weapon]["name"], Data.SMITH_WEAPON_STEP],
+			Data.smith_price(player.weapon_extra)])
+		offers.append(["armour", "Verstärken: %s +%d" % [
+			Data.ARMOURS[player.armour]["name"], Data.SMITH_ARMOUR_STEP],
+			Data.smith_price(player.armour_extra)])
 		offers.append(["heal", "Voll heilen", Data.UPGRADE_COST])
+
 	else:
 		for id in shop_open.get("stock", []):
 			var potion := Data.potion_by_id(id)
@@ -2023,8 +2062,13 @@ func _process(delta: float) -> void:
 		tier.get("name", ""), depth, player.hp, player.max_hp]
 	if player.shield > 0:
 		line += " +%d Schild" % player.shield
-	line += "     Stufe %d (%d/%d XP)     %d Gold     %d Tränke" % [
-		player.level, player.xp, player.xp_to_next, player.gold, player.potions]
+	line += "     Stufe %d (%d/%d XP)     %d Gold" % [
+		player.level, player.xp, player.xp_to_next, player.gold]
+	# What is in your hands, by name, on a line of its own: a rarity
+	# that never appears anywhere is a number nobody can notice.
+	var gear := "%s +%d     %s +%d" % [
+		player.weapon_name(), player.weapon_bonus(),
+		player.armour_name(), player.armour_bonus()]
 	# The running buffs, newest numbers first. The pygame build shows
 	# five and counts the rest; there are only thirteen in total, and
 	# a row that wraps over the map is worse than a truncated one.
@@ -2037,8 +2081,9 @@ func _process(delta: float) -> void:
 	if player.poison_turns > 0:
 		chips.append("Gift %d" % player.poison_turns)
 	if not chips.is_empty():
-		line += "     [%s]" % ", ".join(chips)
+		gear += "     [%s]" % ", ".join(chips)
 	_play_ui.get_node("stats").text = line
+	_play_ui.get_node("gear").text = gear
 	if _drink_button != null:
 		if player.potions <= 0:
 			_drink_button.text = "KEINE TRÄNKE"
