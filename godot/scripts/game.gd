@@ -45,6 +45,7 @@ var traps := {}                 ## cell -> trap id
 var chest = null                ## {cell, mimic, opened}
 var shops: Array = []           ## {cell, kind}
 var stairs_locked := false
+var shrine = null                ## the cell holding this floor's shrine, or null
 var shop_open = null            ## the shop the hero is standing in
 var dead := false
 var hero_class := Data.DEFAULT_CLASS
@@ -72,6 +73,7 @@ var _dead_panel: PanelContainer
 var _dead_text: Label
 var _sound_button: Button
 var _drink_button: Button
+var _scroll_buttons: Array = []
 var _perk_panel: PanelContainer
 var _perk_buttons: Array = []
 var perk_choices: Array = []      ## the three on offer right now
@@ -214,6 +216,9 @@ func load_run() -> bool:
 	player.potions = 0
 	for id in player.potion_counts:
 		player.potions += int(player.potion_counts[id])
+	player.scrolls.clear()
+	for id in p.get("scrolls", {}):
+		player.scrolls[str(id)] = int(p["scrolls"][id])
 	player.buffs.clear()
 	for id in p.get("buffs", {}):
 		if Data.BUFFS.has(id):
@@ -239,6 +244,9 @@ func load_run() -> bool:
 		grid.append(line)
 	stairs = Vector2i(int(save["stairs"][0]), int(save["stairs"][1]))
 	stairs_locked = bool(save["stairs_locked"])
+	shrine = null
+	if save.get("shrine", null) != null:
+		shrine = Vector2i(int(save["shrine"][0]), int(save["shrine"][1]))
 
 	_clear_level_nodes()
 	explored.clear()
@@ -251,7 +259,8 @@ func load_run() -> bool:
 	for entry in save["items"]:
 		items.append({"cell": Vector2i(int(entry["x"]), int(entry["y"])),
 			"kind": str(entry["kind"]), "amount": int(entry["amount"]),
-			"potion": str(entry.get("potion", ""))})
+			"potion": str(entry.get("potion", "")),
+			"scroll": str(entry.get("scroll", ""))})
 	shops.clear()
 	for entry in save["shops"]:
 		var stock: Array = []
@@ -286,6 +295,8 @@ func load_run() -> bool:
 		monster.burn_turns = int(entry.get("burn", 0))
 		monster.slow_turns = int(entry.get("slow", 0))
 		monster.stun_turns = int(entry.get("stun", 0))
+		monster.regen = int(entry.get("regen", 0))
+		monster.is_elite = bool(entry.get("elite", false))
 		monster.snap()
 		monsters.append(monster)
 
@@ -371,6 +382,8 @@ func _populate() -> void:
 		var monster := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"])
 		monster.x = cell.x
 		monster.y = cell.y
+		if depth >= 2 and rng.randf() < Data.ELITE_CHANCE:
+			monster.make_elite(Data.ELITES[rng.randi() % Data.ELITES.size()])
 		monster.snap()
 		monsters.append(monster)
 
@@ -394,12 +407,58 @@ func _populate() -> void:
 			monsters.append(boss)
 			stairs_locked = true
 
+	# A mini-boss on the floors between real bosses, so the gap has a
+	# landmark in it. It does not lock the stairs - it is a fight you
+	# may walk around, not one you have to win.
+	if Data.has_mini_boss(depth):
+		var mini_cell = _free_cell(spawn_rooms)
+		if mini_cell != null:
+			var mini := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"])
+			mini.x = mini_cell.x
+			mini.y = mini_cell.y
+			mini.max_hp = int(mini.max_hp * Data.MINI_BOSS_MULT)
+			mini.hp = mini.max_hp
+			mini.power = int(mini.power * Data.MINI_BOSS_MULT)
+			mini.xp_reward = int(mini.xp_reward * Data.MINI_BOSS_XP_MULT)
+			mini.display_name = "Großer %s" % mini.display_name
+			mini.snap()
+			monsters.append(mini)
+
+	# A vault: three to five elites standing together on a pile of
+	# gold. The gold is the point - it is the one place on the floor
+	# where you can see the reward and have to decide whether you
+	# survive collecting it.
+	if depth >= Data.VAULT_MIN_LEVEL and rng.randf() < Data.VAULT_CHANCE:
+		var guards: int = rng.randi_range(Data.VAULT_GUARDS[0], Data.VAULT_GUARDS[1])
+		var room = rooms[rng.randi() % rooms.size()] if not rooms.is_empty() else null
+		for _g in guards:
+			var guard_cell = _free_cell([room] if room != null else spawn_rooms)
+			if guard_cell == null:
+				continue
+			var guard := Entities.Monster.new(Data.pick_kind(depth, rng),
+				tier["mult"] * Data.VAULT_GUARD_MULT)
+			guard.x = guard_cell.x
+			guard.y = guard_cell.y
+			guard.make_elite(Data.ELITES[rng.randi() % Data.ELITES.size()])
+			guard.snap()
+			monsters.append(guard)
+			var hoard = _free_cell([room] if room != null else spawn_rooms)
+			if hoard != null:
+				items.append({"cell": hoard, "kind": "gold",
+					"amount": rng.randi_range(30, 60 + depth * 5)})
+
 	# A chest, which is sometimes not a chest at all.
 	if depth >= 2 and rng.randf() < 0.55:
 		var chest_cell = _free_cell(spawn_rooms)
 		if chest_cell != null:
 			chest = {"cell": chest_cell, "mimic": depth >= 3 and rng.randf() < 0.3,
 				"opened": false}
+
+	# A shrine, at most one, stepped on like a trap - but this one can
+	# be worth stepping on.
+	shrine = null
+	if depth >= 2 and rng.randf() < Data.SHRINE_CHANCE:
+		shrine = _free_cell(spawn_rooms)
 
 	# Traps, hidden until stepped on.
 	var trap_kinds: Array = Data.TRAPS.keys()
@@ -430,14 +489,23 @@ func _populate() -> void:
 		if spot != null:
 			shops.append({"cell": spot, "kind": "smith", "stock": []})
 
+	# Loot goes last, and only where the hero can reach: the
+	# shopkeepers are standing by now, and each of them is a tile that
+	# never opens.
+	var blocked := {}
+	for shop in shops:
+		blocked[shop["cell"]] = true
+	var open_cells := reachable_from(Vector2i(player.x, player.y), blocked)
 	for _i in range(2 + depth / 3):
-		var cell: Variant = _free_cell(spawn_rooms)
+		var cell: Variant = _free_cell(spawn_rooms, open_cells)
 		if cell == null:
 			continue
 		var roll := rng.randf()
 		var kind := "gold"
-		if roll < 0.35:
+		if roll < 0.32:
 			kind = "potion"
+		elif roll < 0.40:
+			kind = "scroll"
 		elif roll < 0.50:
 			kind = "weapon"
 		elif roll < 0.62:
@@ -446,10 +514,16 @@ func _populate() -> void:
 			"amount": rng.randi_range(5, 15 + depth * 3)}
 		if kind == "potion":
 			loot["potion"] = Data.pick_potion(depth, rng)
+		if kind == "scroll":
+			loot["scroll"] = Data.SCROLLS[rng.randi() % Data.SCROLLS.size()]["id"]
 		items.append(loot)
 
 
-func _free_cell(where: Array) -> Variant:
+## A free cell in one of these rooms. `within`, when given, is the set
+## of cells the hero can actually walk to - loot dropped outside it is
+## loot nobody ever picks up, which is how a scroll ended up sealed
+## behind a shopkeeper.
+func _free_cell(where: Array, within := {}) -> Variant:
 	if where.is_empty():
 		return null
 	for _try in 40:
@@ -461,6 +535,8 @@ func _free_cell(where: Array) -> Variant:
 		if cell == Vector2i(player.x, player.y) or cell == stairs:
 			continue
 		if occupied(cell) or taken(cell):
+			continue
+		if not within.is_empty() and not within.has(cell):
 			continue
 		return cell
 	return null
@@ -502,6 +578,8 @@ func _shopkeeper_spot(where: Array) -> Variant:
 			continue
 		if chest != null and not open_cells.has(chest["cell"]):
 			continue
+		if shrine != null and not open_cells.has(shrine):
+			continue
 		return cell
 	return null            ## rather no shop than a floor nobody can finish
 
@@ -517,6 +595,8 @@ func taken(cell: Vector2i) -> bool:
 	if item_at(cell) != null or traps.has(cell):
 		return true
 	if chest != null and chest["cell"] == cell:
+		return true
+	if shrine != null and shrine == cell:
 		return true
 	return shop_at(cell) != null
 
@@ -610,6 +690,7 @@ func try_move(step: Vector2i) -> void:
 		_pick_up(target)
 		_open_chest(target)
 		_spring_trap(target)
+		_touch_shrine(target)
 		if dead:
 			return
 		if target == stairs:
@@ -683,6 +764,8 @@ func enemy_turn() -> void:
 			if not monster.is_alive():
 				_kill(monster)
 				continue
+		if monster.regen > 0 and monster.hp < monster.max_hp:
+			monster.hp = mini(monster.max_hp, monster.hp + monster.regen)
 		if monster.stun_turns > 0:
 			monster.stun_turns -= 1
 			continue
@@ -793,6 +876,11 @@ func _pick_up(cell: Vector2i) -> void:
 			player.add_potion(id)
 			audio.play("pickup")
 			say("Aufgehoben: %s." % Data.potion_by_id(id)["name"])
+		"scroll":
+			var scroll_id: String = loot.get("scroll", "reveal")
+			player.scrolls[scroll_id] = int(player.scrolls.get(scroll_id, 0)) + 1
+			audio.play("pickup")
+			say("Aufgehoben: %s." % Data.scroll_by_id(scroll_id)["name"])
 		"weapon":
 			var best: int = mini(Data.WEAPONS.size() - 1, 1 + depth / 2)
 			if best > player.weapon:
@@ -1091,6 +1179,121 @@ func _apply_effect(effect: Dictionary) -> void:
 		_burst(effect)
 
 
+## The shrine, triggered by walking onto it. Two of the five outcomes
+## are bad, which is the point: a tile you always want to step on is not
+## a decision.
+func _touch_shrine(cell: Vector2i) -> void:
+	if shrine == null or shrine != cell:
+		return
+	shrine = null
+	var id := Data.pick_shrine(rng)
+	match id:
+		"vitality":
+			player.hp = player.max_hp
+			audio.play("levelup")
+			say("Der Schrein heilt dich vollständig.")
+		"power":
+			player.base_power += 2
+			audio.play("levelup")
+			say("Der Schrein schenkt dir Kraft: +2 Angriff.")
+		"fortune":
+			var amount: int = depth * 15
+			player.gold += amount
+			audio.play("coin")
+			say("Der Schrein schüttet %d Gold aus." % amount)
+		"frailty":
+			var loss: int = clampi(player.max_hp / 5, 1, 5)
+			player.max_hp = maxi(5, player.max_hp - loss)
+			player.hp = mini(player.hp, player.max_hp)
+			audio.play("player_hurt")
+			say("Der Schrein zehrt an dir: -%d maximales Leben." % loss)
+		"ambush":
+			audio.play("player_hurt")
+			say("Aus dem Schrein steigen rachsüchtige Geister!")
+			_ambush()
+
+
+## Two monsters, right next to the hero and already awake. Beside them,
+## never on them, for the same reason the mimic is: a monster sharing
+## your tile cannot be attacked at all.
+func _ambush() -> void:
+	var spawned := 0
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		if spawned >= 2:
+			return
+		var cell: Vector2i = Vector2i(player.x, player.y) + offset
+		if not Dungeon.is_walkable(grid, cell.x, cell.y) or occupied(cell):
+			continue
+		var ghost := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"])
+		ghost.x = cell.x
+		ghost.y = cell.y
+		ghost.awake = true
+		ghost.snap()
+		monsters.append(ghost)
+		spawned += 1
+
+
+## Reads the selected scroll. Each one aims itself: there is no cursor
+## on a phone, and asking for a target would mean a targeting mode for
+## three scrolls.
+func read_scroll(id: String) -> void:
+	if dead or choosing or int(player.scrolls.get(id, 0)) <= 0:
+		return
+	var scroll := Data.scroll_by_id(id)
+	player.scrolls[id] = int(player.scrolls[id]) - 1
+	if int(player.scrolls[id]) <= 0:
+		player.scrolls.erase(id)
+	say("Du liest: %s." % scroll["name"])
+	match id:
+		"fireball":
+			_fireball(int(scroll["damage"]))
+		"teleport":
+			_blink()
+		"reveal":
+			_reveal_level()
+			say("Die Ebene liegt offen vor dir.")
+	if dead:
+		return
+	_tick_buffs()
+	enemy_turn()
+	recompute_fov()
+	paint()
+
+
+## The nearest monster you can actually see, and everything beside it.
+func _fireball(damage: int) -> void:
+	var here := Vector2i(player.x, player.y)
+	var target = null
+	var closest := 1 << 30
+	for monster in monsters:
+		if not monster.is_alive() or not lit.has(monster.cell()):
+			continue
+		var away: int = monster.cell().distance_squared_to(here)
+		if away < closest:
+			closest = away
+			target = monster
+	if target == null:
+		audio.play("denied")
+		say("Nichts in Sicht - die Rolle verpufft.")
+		return
+	var centre: Vector2i = target.cell()
+	audio.play("boss")
+	var hit := 0
+	for monster in monsters.duplicate():
+		if not monster.is_alive():
+			continue
+		var away: Vector2i = monster.cell() - centre
+		if absi(away.x) > 1 or absi(away.y) > 1:
+			continue
+		hit += 1
+		monster.hp -= damage
+		monster.awake = true
+		monster.burn_turns = maxi(monster.burn_turns, 2)
+		if not monster.is_alive():
+			_kill(monster)
+	say("Der Feuerball trifft %d." % hit)
+
+
 ## A thrown flask: everything within BURST_RADIUS takes the hit, and the
 ## hero does not - the Python build throws it, it does not drink it.
 func _burst(effect: Dictionary) -> void:
@@ -1177,6 +1380,10 @@ func paint() -> void:
 	if chest != null:
 		_place_prop(chest["cell"], "chest_empty_open_anim_f2" if chest["opened"]
 			else "chest_full_open_anim_f0")
+	if shrine != null:
+		# A column: the only thing in the tileset that reads as
+		# something built rather than dropped.
+		_place_prop(shrine, "column")
 	for shop in shops:
 		_place_prop(shop["cell"], "blacksmith" if shop["kind"] == "smith" else "merchant")
 	for monster in monsters:
@@ -1235,6 +1442,8 @@ func _item_art(item: Dictionary) -> String:
 	match item["kind"]:
 		"potion":
 			return Data.potion_by_id(item.get("potion", Data.DEFAULT_POTION))["flask"]
+		"scroll":
+			return "scroll"
 		"weapon":
 			return "weapon"
 		"armour":
@@ -1350,6 +1559,24 @@ func _build_hud() -> void:
 	swap.add_theme_font_size_override("font_size", 26)
 	swap.pressed.connect(cycle_potion)
 	_play_ui.add_child(swap)
+
+	# One button per scroll, shown only while one is carried. Three of
+	# them, each aiming itself - a targeting mode for that would be more
+	# interface than the scrolls are worth.
+	_scroll_buttons.clear()
+	var at := 0
+	for scroll in Data.SCROLLS:
+		var button := Button.new()
+		button.custom_minimum_size = Vector2(size * 1.5, size * 0.6)
+		button.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+		button.position = Vector2(-pad - size * 1.5,
+			-pad - size * (1.5 + 0.65 * at))
+		button.add_theme_font_size_override("font_size", 20)
+		button.visible = false
+		button.pressed.connect(read_scroll.bind(scroll["id"]))
+		_play_ui.add_child(button)
+		_scroll_buttons.append({"node": button, "id": scroll["id"]})
+		at += 1
 
 	var again := Button.new()
 	again.text = "NEU"

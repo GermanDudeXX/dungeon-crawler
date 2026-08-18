@@ -331,3 +331,82 @@ static func potion_by_id(id: String) -> Dictionary:
 		if potion["id"] == id:
 			return potion
 	return POTIONS[0]
+
+
+# --- Schriftrollen --------------------------------------------------------
+# Three, the same three as constants.py SCROLL_TYPES. A scroll is aimed
+# for you: it finds its own target, which is what makes it usable on a
+# phone without a cursor.
+const SCROLLS := [
+	{"id": "fireball", "name": "Feuerball", "damage": 14, "price": 40,
+		"desc": "Trifft den nächsten Gegner und alles neben ihm."},
+	{"id": "teleport", "name": "Blitzreise", "price": 30,
+		"desc": "Bringt dich an einen zufälligen Ort dieser Ebene."},
+	{"id": "reveal", "name": "Enthüllung", "price": 25,
+		"desc": "Zeigt die ganze Ebene."},
+]
+
+
+static func scroll_by_id(id: String) -> Dictionary:
+	for scroll in SCROLLS:
+		if scroll["id"] == id:
+			return scroll
+	return SCROLLS[0]
+
+
+# --- Schreine -------------------------------------------------------------
+# One per level at most, stepped on rather than opened: risk and reward
+# in a single tile. Weights from constants.py SHRINE_EVENTS.
+const SHRINE_CHANCE := 0.3
+const SHRINES := [
+	{"id": "vitality", "name": "Segen der Lebenskraft", "weight": 3.0},
+	{"id": "power", "name": "Segen der Macht", "weight": 2.0},
+	{"id": "fortune", "name": "Glücksfall", "weight": 3.0},
+	{"id": "frailty", "name": "Fluch der Gebrechlichkeit", "weight": 2.0},
+	{"id": "ambush", "name": "Rachsüchtige Geister", "weight": 1.5},
+]
+
+
+static func pick_shrine(rng: RandomNumberGenerator) -> String:
+	var total := 0.0
+	for shrine in SHRINES:
+		total += float(shrine["weight"])
+	var roll := rng.randf() * total
+	for shrine in SHRINES:
+		roll -= float(shrine["weight"])
+		if roll <= 0.0:
+			return shrine["id"]
+	return SHRINES[0]["id"]
+
+
+# --- Elitegegner ----------------------------------------------------------
+# One monster in ten is one of these: the same kind, wearing a prefix and
+# better numbers. Cheaper than a new monster type and it makes a familiar
+# silhouette worth a second look. Values from constants.py
+# ELITE_MODIFIERS.
+const ELITES := [
+	{"name": "Flinker", "hp": 1.0, "power": 1.1, "defense": 1.0, "speed": 1},
+	{"name": "Bösartiger", "hp": 1.2, "power": 1.6, "defense": 1.0},
+	{"name": "Gepanzerter", "hp": 1.4, "power": 1.0, "defense": 2.2},
+	{"name": "Nachwachsender", "hp": 1.6, "power": 1.1, "defense": 1.0, "regen": 1},
+]
+const ELITE_CHANCE := 0.10
+const ELITE_XP_MULT := 2.5
+
+# A mini-boss on every third floor that has no real boss - so the gap
+# between boss floors has a landmark in it.
+const MINI_BOSS_EVERY := 3
+const MINI_BOSS_MULT := 1.6
+const MINI_BOSS_XP_MULT := 2.5
+
+# A room worth robbing: several elites at once, in sight, guarding gold.
+# A crowd is a different problem from a boss.
+const VAULT_CHANCE := 0.22
+const VAULT_MIN_LEVEL := 5
+const VAULT_GUARDS := [3, 5]
+const VAULT_GUARD_MULT := 1.3
+
+
+static func has_mini_boss(level: int) -> bool:
+	return level % MINI_BOSS_EVERY == 0 and not has_boss(level)
+

@@ -39,6 +39,7 @@ class Player extends Actor:
 	var buffs := {}                 ## id -> turns left
 	var shield := 0                 ## soaks damage before hit points do
 	var bleed_turns := 0
+	var scrolls := {}               ## id -> how many are carried
 	var gold := 0
 	var kills := 0
 	var facing := 1
@@ -159,6 +160,8 @@ class Monster extends Actor:
 	var burn_turns := 0             ## takes damage at the end of its turn
 	var slow_turns := 0             ## moves every other turn
 	var stun_turns := 0             ## does not act at all
+	var regen := 0                  ## heals this much at the end of its turn
+	var is_elite := false
 
 	func _init(kind_id: String, tier_mult: float) -> void:
 		kind = kind_id
@@ -173,6 +176,22 @@ class Monster extends Actor:
 		speed = info.get("speed", 1)
 		poisons = info.get("poisons", false)
 		flees_below = info.get("flees_below", 0.0)
+
+	## Turns this monster into an elite: the same creature with a
+	## prefix and better numbers, worth two and a half times the
+	## experience. Applied after the tier multiplier, so it multiplies
+	## what the floor already made of it.
+	func make_elite(modifier: Dictionary) -> void:
+		is_elite = true
+		max_hp = maxi(1, int(round(max_hp * float(modifier["hp"]))))
+		hp = max_hp
+		power = maxi(1, int(round(power * float(modifier["power"]))))
+		defense = int(round(defense * float(modifier["defense"])))
+		speed += int(modifier.get("speed", 0))
+		regen = int(modifier.get("regen", 0))
+		xp_reward = maxi(1, int(round(xp_reward * Data.ELITE_XP_MULT)))
+		display_name = "%s %s" % [modifier["name"], display_name]
+
 
 	func is_fleeing() -> bool:
 		return flees_below > 0.0 and float(hp) / float(max_hp) <= flees_below

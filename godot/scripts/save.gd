@@ -39,6 +39,7 @@ static func write(game) -> void:
 			"poisons": m.poisons, "flees_below": m.flees_below,
 			"awake": m.awake, "boss": m.is_boss, "mimic": m.is_mimic,
 			"burn": m.burn_turns, "slow": m.slow_turns, "stun": m.stun_turns,
+			"regen": m.regen, "elite": m.is_elite,
 		})
 
 	var explored: Array = []
@@ -53,7 +54,7 @@ static func write(game) -> void:
 	for item in game.items:
 		items.append({"x": item["cell"].x, "y": item["cell"].y,
 			"kind": item["kind"], "amount": item.get("amount", 0),
-			"potion": item.get("potion", "")})
+			"potion": item.get("potion", ""), "scroll": item.get("scroll", "")})
 
 	var shops: Array = []
 	for shop in game.shops:
@@ -69,6 +70,7 @@ static func write(game) -> void:
 		"grid": game.grid,
 		"stairs": [game.stairs.x, game.stairs.y],
 		"stairs_locked": game.stairs_locked,
+		"shrine": null if game.shrine == null else [game.shrine.x, game.shrine.y],
 		"explored": explored,
 		"monsters": monsters,
 		"items": items,
@@ -89,6 +91,7 @@ static func write(game) -> void:
 			"regen_counter": p.regen_counter, "pending_perks": p.pending_perks,
 			"potion_counts": p.potion_counts, "selected_potion": p.selected_potion,
 			"buffs": p.buffs, "shield": p.shield, "bleed_turns": p.bleed_turns,
+			"scrolls": p.scrolls,
 		},
 	}
 

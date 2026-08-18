@@ -43,7 +43,8 @@ func _process(_delta: float) -> bool:
 	# Counters for the new content. A run that never meets a boss or a
 	# shop proves nothing about them, so a zero here fails the test just
 	# like a broken invariant does.
-	var seen := {"Bosse": 0, "Laeden": 0, "Truhen": 0, "Fallen": 0, "Mimics": 0}
+	var seen := {"Bosse": 0, "Laeden": 0, "Truhen": 0, "Fallen": 0, "Mimics": 0,
+		"Schriftrollen": 0, "Schreine": 0}
 	var played := {}
 	var perks := 0
 	var shopped := false
@@ -67,6 +68,7 @@ func _process(_delta: float) -> bool:
 	# After the hero exists and the title screen is gone: drinking is
 	# refused while the game is still asking who you are.
 	_check_potions()
+	_check_mimic()
 
 	for turn in _turns:
 		if _game.dead:
@@ -88,6 +90,15 @@ func _process(_delta: float) -> bool:
 			depth_at = _game.depth
 			on_this_floor = 0
 			shopped = false
+			continue
+
+		# Scrolls are read the moment there is one: they aim themselves,
+		# so there is nothing to decide and no reason to hoard them.
+		if not _game.player.scrolls.is_empty():
+			var ids: Array = _game.player.scrolls.keys()
+			seen["Schriftrollen"] += 1
+			_game.read_scroll(ids[turn % ids.size()])
+			_check("Rolle in Zug %d" % turn)
 			continue
 
 		# A player drinks when hurt - and a test has to drink everything
@@ -136,8 +147,26 @@ func _process(_delta: float) -> bool:
 		# never runs the shop or chest code at all.
 		var target: Vector2i = _game.stairs
 		var what := "Treppe"
+		# Loot lying on the floor gets picked up: a bot that walks past
+		# it never carries a scroll, and scrolls are then untested.
+		var loot_cell: Variant = null
+		var loot_away := 1 << 30
+		for item in _game.items:
+			var away: int = Vector2i(item["cell"]).distance_squared_to(
+				Vector2i(_game.player.x, _game.player.y))
+			if away < loot_away:
+				loot_away = away
+				loot_cell = item["cell"]
+
+		# A shrine is a coin flip worth taking, so a player takes it.
+		if _game.shrine != null:
+			target = _game.shrine
+			what = "Schrein"
 		# Nobody walks past an unopened chest either.
-		if _game.chest != null and not _game.chest["opened"]:
+		elif loot_cell != null:
+			target = loot_cell
+			what = "Beute"
+		elif _game.chest != null and not _game.chest["opened"]:
 			target = _game.chest["cell"]
 			what = "Truhe"
 		elif not shopped and _game.player.gold >= Data.POTION_COST:
@@ -184,6 +213,7 @@ func _process(_delta: float) -> bool:
 				mimic_before = true
 		var chest_before: bool = _game.chest != null and _game.chest["opened"]
 		var traps_before: int = _game.traps.size()
+		var shrine_before = _game.shrine
 		_game.try_move(step)
 		kills += _game.player.kills - before
 		var bosses_now := 0
@@ -202,6 +232,8 @@ func _process(_delta: float) -> bool:
 				seen["Truhen"] += 1
 			if _game.traps.size() < traps_before:
 				seen["Fallen"] += 1
+			if shrine_before != null and _game.shrine == null:
+				seen["Schreine"] += 1
 		_check("Zug %d, Ebene %d" % [turn, _game.depth])
 
 		if _game.depth != depth_at:
@@ -238,8 +270,10 @@ func _process(_delta: float) -> bool:
 	if played.size() < Data.CLASSES.size():
 		print("  nicht jede Klasse gespielt: %d von %d" % [played.size(), Data.CLASSES.size()])
 		failed = true
+	# Mimics have a check of their own now; a run that happens not to
+	# roll one is not a failure.
 	for what in seen:
-		if seen[what] == 0:
+		if seen[what] == 0 and what != "Mimics":
 			print("  nie erreicht: %s - ungetestet" % what)
 			failed = true
 	for what in _problems:
@@ -339,7 +373,8 @@ func _fingerprint() -> String:
 		"Waffe=%d Ruestung=%d Schild=%d Bluten=%d" % [
 			p.weapon, p.armour, p.shield, p.bleed_turns],
 		"Traenke=%s gewaehlt=%s" % [str(p.potion_counts), p.selected_potion],
-		"Buffs=%s" % str(p.buffs),
+		"Buffs=%s Rollen=%s" % [str(p.buffs), str(p.scrolls)],
+		"Schrein=%s" % str(_game.shrine),
 		"Angriff=%d Verteidigung=%d Krit=%.3f Minderung=%.3f Gold x%.2f" % [
 			p.base_power, p.base_defense, p.bonus_crit, p.damage_reduction, p.gold_mult],
 		"Regen=%d/%d offen=%d" % [p.regen_counter, p.regen_interval, p.pending_perks],
@@ -427,6 +462,8 @@ func _check_placement() -> void:
 		things.append([shop["cell"], "Laden (%s)" % shop["kind"]])
 	if _game.chest != null:
 		things.append([_game.chest["cell"], "Truhe"])
+	if _game.shrine != null:
+		things.append([_game.shrine, "Schrein"])
 	for cell in _game.traps:
 		things.append([cell, "Falle"])
 	for item in _game.items:
@@ -522,4 +559,58 @@ func _check_potions() -> void:
 			_complain("Trank tötet den Helden", id)
 			_game.dead = false
 			p.hp = p.max_hp
+
+
+## Opens a chest that is a mimic, on purpose, and checks the one rule
+## that matters: it comes out *beside* the hero, never underneath.
+##
+## A monster sharing your tile cannot be attacked at all, because attacks
+## are aimed at the tile you walk into - the pygame build had exactly
+## that bug. Waiting for the playthrough to roll a mimic tests it only
+## sometimes: it is a 30% branch of a 55% chest, so a whole run can pass
+## without ever opening one.
+func _check_mimic() -> void:
+	var spot: Variant = _open_spot()
+	if spot == null:
+		_notes.append("keine freie Zelle für den Mimik-Test - übersprungen")
+		return
+	var before: int = _game.monsters.size()
+	_game.chest = {"cell": spot, "mimic": true, "opened": false}
+	_game.player.x = spot.x
+	_game.player.y = spot.y
+	_game._open_chest(spot)
+	if _game.monsters.size() != before + 1:
+		_complain("Mimik erscheint nicht")
+		_game.chest = null
+		return
+	var mimic = _game.monsters[-1]
+	if not mimic.is_mimic:
+		_complain("Mimik ist nicht als solche markiert")
+	if mimic.x == _game.player.x and mimic.y == _game.player.y:
+		_complain("Mimik steht auf dem Helden",
+			"(%d, %d) - sie wäre unangreifbar" % [mimic.x, mimic.y])
+	if absi(mimic.x - spot.x) > 1 or absi(mimic.y - spot.y) > 1:
+		_complain("Mimik erscheint zu weit weg",
+			"(%d, %d) statt neben (%d, %d)" % [mimic.x, mimic.y, spot.x, spot.y])
+	if not mimic.awake:
+		_complain("Mimik schläft nach dem Zuschnappen")
+	_game.monsters.erase(mimic)
+	_game.chest = null
+
+
+## A walkable cell with a free neighbour, for tests that need to put
+## something down next to the hero.
+func _open_spot() -> Variant:
+	for y in range(1, 24):
+		for x in range(1, 39):
+			var cell := Vector2i(x, y)
+			if not Dungeon.is_walkable(_game.grid, x, y) or _game.occupied(cell):
+				continue
+			for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var beside: Vector2i = cell + offset
+				var free: bool = Dungeon.is_walkable(_game.grid, beside.x, beside.y) \
+					and not _game.occupied(beside)
+				if free:
+					return cell
+	return null
 
