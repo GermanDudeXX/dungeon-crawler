@@ -110,3 +110,71 @@ static func pick_kind(level: int, rng: RandomNumberGenerator) -> String:
 		if roll <= 0.0:
 			return pool[i]
 	return pool[-1]
+
+## Floor hazards. Same shapes as the Python build: something that hurts,
+## something that poisons, something that drops you a floor.
+const TRAPS := {
+	"spikes": {"name": "Stachelfalle", "damage": 6},
+	"poison": {"name": "Giftgas", "damage": 3, "poison": 4},
+	"collapse": {"name": "Einsturz", "damage": 4, "one_shot": true},
+}
+
+## A boss holds the key to the stairs, so a floor is a place you finish
+## rather than a place you cross. Deep floors only - the first few are
+## for learning that walking into things is how you fight.
+const BOSS_FROM_LEVEL := 4
+const BOSS_EVERY := 3
+const BOSS_HP_MULT := 3.2
+const BOSS_POWER_MULT := 1.6
+const MIMIC_MULT := 1.8
+const POISON_PER_TURN := 2
+
+## What a shopkeeper sells, and what a smith charges. Prices rise with
+## the tier so gold stays worth picking up on floor 20.
+const UPGRADE_COST := 45
+const POTION_COST := 18
+
+
+static func has_boss(level: int) -> bool:
+	return level >= BOSS_FROM_LEVEL and level % BOSS_EVERY == 0
+
+# --- Heldenklassen --------------------------------------------------------
+# Picked once per run, the same three as constants.py CLASSES. Each is a
+# different opening hand rather than a different set of rules: same
+# controls, same systems, different numbers and starting kit. The
+# multipliers apply to the base pool at creation, exactly as they do in
+# the Python build, so every later level-up stacks on the adjusted value
+# instead of quietly rescaling it.
+const CLASSES := [
+	{
+		"id": "warrior", "name": "Krieger", "sprite": "knight_m_idle_anim_f0",
+		"color": Color8(214, 160, 84),
+		"hp_mult": 1.4, "power": 1, "defense": 2,
+		"potions": 2, "weapon": 0, "armour": 0,
+		"blurb": "Zäh und gepanzert. Verzeiht Fehler.",
+	},
+	{
+		"id": "rogue", "name": "Schurke", "sprite": "elf_m_idle_anim_f0",
+		"color": Color8(120, 214, 140),
+		"hp_mult": 0.85, "power": 2, "defense": 0,
+		"potions": 3, "weapon": 1, "armour": 0,
+		"blurb": "Zerbrechlich, schnell, trifft hart.",
+	},
+	{
+		"id": "mage", "name": "Magier", "sprite": "wizzard_m_idle_anim_f0",
+		"color": Color8(150, 170, 255),
+		"hp_mult": 0.8, "power": 0, "defense": 0,
+		"potions": 4, "weapon": 0, "armour": 0,
+		"blurb": "Schwach im Nahkampf, aber reich an Tränken.",
+	},
+]
+const DEFAULT_CLASS := "warrior"
+
+
+## The class with this id, or the warrior when the id means nothing.
+static func class_by_id(id: String) -> Dictionary:
+	for entry in CLASSES:
+		if entry["id"] == id:
+			return entry
+	return CLASSES[0]
+

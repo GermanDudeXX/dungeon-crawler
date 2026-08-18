@@ -30,7 +30,14 @@ var stairs := Vector2i.ZERO
 var depth := 1
 var tier := {}
 var log_lines: Array[String] = []
+var traps := {}                 ## cell -> trap id
+var chest = null                ## {cell, mimic, opened}
+var shops: Array = []           ## {cell, kind}
+var stairs_locked := false
+var shop_open = null            ## the shop the hero is standing in
 var dead := false
+var hero_class := Data.DEFAULT_CLASS
+var choosing := true            ## the title screen is up, nothing moves
 var rng := RandomNumberGenerator.new()
 
 var _floor_layer: TileMapLayer
@@ -42,6 +49,12 @@ var _item_nodes := {}
 var _hero_node: Sprite2D
 var _camera: Camera2D
 var _hud: Control
+var _play_ui: Control            ## stats, log and the pad - hidden on the title
+var _shop_panel: PanelContainer
+var _shop_title: Label
+var _shop_buttons: Array = []
+var _title_panel: PanelContainer
+var _continue_button: Button
 var _held := Vector2i.ZERO
 var _step_cooldown := 0.0
 
@@ -50,7 +63,11 @@ func _ready() -> void:
 	rng.randomize()
 	_build_world()
 	_build_hud()
+	# A run starts behind the title screen, not in front of it: the
+	# class is picked before the first floor exists, so the starting
+	# kit is right from the first turn.
 	new_run()
+	show_title()
 
 
 # --- scene ----------------------------------------------------------------
@@ -119,12 +136,135 @@ func _sprite_for(name: String) -> Texture2D:
 # --- a run ----------------------------------------------------------------
 
 func new_run() -> void:
-	player = Entities.Player.new()
+	player = Entities.Player.new(hero_class)
 	depth = 1
 	dead = false
 	log_lines.clear()
 	say("Du steigst in den Dungeon hinab.")
 	new_level()
+
+
+## Puts a saved run back on its floor. Everything is rebuilt from the
+## file rather than regenerated, so the player carries on standing where
+## they stood, on the map they had uncovered.
+func load_run() -> bool:
+	var data: Variant = Save.read()
+	if data == null:
+		return false
+	var save: Dictionary = data
+
+	hero_class = save["class"]
+	player = Entities.Player.new(hero_class)
+	var p: Dictionary = save["player"]
+	player.x = int(p["x"])
+	player.y = int(p["y"])
+	player.hp = int(p["hp"])
+	player.max_hp = int(p["max_hp"])
+	player.base_power = int(p["base_power"])
+	player.base_defense = int(p["base_defense"])
+	player.weapon = int(p["weapon"])
+	player.armour = int(p["armour"])
+	player.level = int(p["level"])
+	player.xp = int(p["xp"])
+	player.xp_to_next = int(p["xp_to_next"])
+	player.potions = int(p["potions"])
+	player.gold = int(p["gold"])
+	player.kills = int(p["kills"])
+	player.facing = int(p["facing"])
+	player.poison_turns = int(p["poison_turns"])
+	player.snap()
+
+	depth = int(save["depth"])
+	tier = Data.tier_for(depth)
+	dead = false
+	log_lines.clear()
+	for line in save["log"]:
+		log_lines.append(str(line))
+
+	# JSON has no integers, only floats, and no Vector2i at all - every
+	# number and every cell has to be put back into the type the game
+	# expects, or the first comparison against a live value fails.
+	grid.clear()
+	for row in save["grid"]:
+		var line: Array = []
+		for value in row:
+			line.append(int(value))
+		grid.append(line)
+	stairs = Vector2i(int(save["stairs"][0]), int(save["stairs"][1]))
+	stairs_locked = bool(save["stairs_locked"])
+
+	_clear_level_nodes()
+	explored.clear()
+	for cell in save["explored"]:
+		explored[Vector2i(int(cell[0]), int(cell[1]))] = true
+	traps.clear()
+	for entry in save["traps"]:
+		traps[Vector2i(int(entry[0]), int(entry[1]))] = str(entry[2])
+	items.clear()
+	for entry in save["items"]:
+		items.append({"cell": Vector2i(int(entry["x"]), int(entry["y"])),
+			"kind": str(entry["kind"]), "amount": int(entry["amount"])})
+	shops.clear()
+	for entry in save["shops"]:
+		shops.append({"cell": Vector2i(int(entry["x"]), int(entry["y"])),
+			"kind": str(entry["kind"])})
+	chest = null
+	if save["chest"] != null:
+		var c: Dictionary = save["chest"]
+		chest = {"cell": Vector2i(int(c["x"]), int(c["y"])),
+			"mimic": bool(c["mimic"]), "opened": bool(c["opened"])}
+
+	monsters.clear()
+	for entry in save["monsters"]:
+		var monster := Entities.Monster.new(str(entry["kind"]), 1.0)
+		monster.x = int(entry["x"])
+		monster.y = int(entry["y"])
+		monster.max_hp = int(entry["max_hp"])
+		monster.hp = int(entry["hp"])
+		monster.power = int(entry["power"])
+		monster.defense = int(entry["defense"])
+		monster.xp_reward = int(entry["xp"])
+		monster.display_name = str(entry["name"])
+		monster.sprite = str(entry["sprite"])
+		monster.speed = int(entry["speed"])
+		monster.poisons = bool(entry["poisons"])
+		monster.flees_below = float(entry["flees_below"])
+		monster.awake = bool(entry["awake"])
+		monster.is_boss = bool(entry["boss"])
+		monster.is_mimic = bool(entry["mimic"])
+		monster.snap()
+		monsters.append(monster)
+
+	_hero_node.texture = load(CLASS_DIR + Data.class_by_id(hero_class)["sprite"] + ".png")
+	choosing = false
+	close_shop()
+	if _play_ui != null:
+		_play_ui.visible = true
+	if _title_panel != null:
+		_title_panel.visible = false
+	recompute_fov()
+	paint()
+	return true
+
+
+## Called on the way out of a floor, out of the app, and whenever
+## Android puts us in the background - which on a phone is the only
+## shutdown that actually happens. A dead hero has nothing to save, and
+## leaving the file there would offer to continue a finished run.
+func save_run() -> void:
+	if choosing or player == null:
+		return
+	if dead:
+		Save.wipe()
+		return
+	Save.write(self)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST \
+			or what == NOTIFICATION_APPLICATION_PAUSED \
+			or what == NOTIFICATION_WM_GO_BACK_REQUEST:
+		save_run()
 
 
 func new_level() -> void:
@@ -135,13 +275,12 @@ func new_level() -> void:
 	explored.clear()
 	monsters.clear()
 	items.clear()
-	for node in _actor_nodes.values():
-		node.queue_free()
-	_actor_nodes.clear()
-	for node in _item_nodes.values():
-		node.queue_free()
-	_item_nodes.clear()
+	traps.clear()
+	shops.clear()
+	chest = null
+	_clear_level_nodes()
 
+	_hero_node.texture = load(CLASS_DIR + Data.class_by_id(player.hero_class)["sprite"] + ".png")
 	var start: Vector2i = rooms[0].center() if not rooms.is_empty() else Vector2i(1, 1)
 	player.x = start.x
 	player.y = start.y
@@ -150,6 +289,20 @@ func new_level() -> void:
 	_populate()
 	recompute_fov()
 	paint()
+	# The floor is the natural checkpoint: it is the one moment where
+	# the whole level is settled and nothing is half-resolved.
+	save_run()
+
+
+## Sprites belong to the floor they were made for; a new floor gets
+## new ones. Left behind, they hang in mid-air over the next map.
+func _clear_level_nodes() -> void:
+	for node in _actor_nodes.values():
+		node.queue_free()
+	_actor_nodes.clear()
+	for node in _item_nodes.values():
+		node.queue_free()
+	_item_nodes.clear()
 
 
 func _populate() -> void:
@@ -163,6 +316,54 @@ func _populate() -> void:
 		monster.y = cell.y
 		monster.snap()
 		monsters.append(monster)
+
+	# The boss holds the key, so it is placed first and far from the
+	# hero - a floor you have to finish rather than cross.
+	stairs_locked = false
+	if Data.has_boss(depth):
+		var boss_cell = _free_cell([rooms[-1]] if not rooms.is_empty() else spawn_rooms)
+		if boss_cell != null:
+			var boss := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"])
+			boss.x = boss_cell.x
+			boss.y = boss_cell.y
+			boss.max_hp = int(boss.max_hp * Data.BOSS_HP_MULT)
+			boss.hp = boss.max_hp
+			boss.power = int(boss.power * Data.BOSS_POWER_MULT)
+			boss.xp_reward *= 3
+			boss.is_boss = true
+			boss.awake = true
+			boss.display_name = "%s-König" % boss.display_name
+			boss.snap()
+			monsters.append(boss)
+			stairs_locked = true
+
+	# A chest, which is sometimes not a chest at all.
+	if depth >= 2 and rng.randf() < 0.55:
+		var chest_cell = _free_cell(spawn_rooms)
+		if chest_cell != null:
+			chest = {"cell": chest_cell, "mimic": depth >= 3 and rng.randf() < 0.3,
+				"opened": false}
+
+	# Traps, hidden until stepped on.
+	var trap_kinds: Array = Data.TRAPS.keys()
+	for _i in range(depth / 2 + 1):
+		var trap_cell = _free_cell(spawn_rooms)
+		if trap_cell != null:
+			traps[trap_cell] = trap_kinds[rng.randi() % trap_kinds.size()]
+
+	# A merchant, and deeper down a smith. Never anywhere that would
+	# wall the level off: walking into one opens their shop instead of
+	# moving, so their tile is a wall that never opens. The Python
+	# build shipped without this check and 5.7% of the floors that had
+	# a shopkeeper could not be finished at all.
+	if depth >= 2 and rng.randf() < 0.4:
+		var spot = _shopkeeper_spot(spawn_rooms)
+		if spot != null:
+			shops.append({"cell": spot, "kind": "merchant"})
+	if depth >= 4 and rng.randf() < 0.3:
+		var spot = _shopkeeper_spot(spawn_rooms)
+		if spot != null:
+			shops.append({"cell": spot, "kind": "smith"})
 
 	for _i in range(2 + depth / 3):
 		var cell: Variant = _free_cell(spawn_rooms)
@@ -197,6 +398,35 @@ func _free_cell(where: Array) -> Variant:
 	return null
 
 
+## Every cell the hero can walk to, with `blocked` treated as solid.
+## Used before putting a shopkeeper down: theirs is a tile nobody can
+## pass, so it must never be the only way through.
+func reachable_from(start: Vector2i, blocked := {}) -> Dictionary:
+	var seen := {start: true}
+	var stack: Array[Vector2i] = [start]
+	while not stack.is_empty():
+		var cell: Vector2i = stack.pop_back()
+		for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var step: Vector2i = cell + offset
+			if seen.has(step) or blocked.has(step):
+				continue
+			if not Dungeon.is_walkable(grid, step.x, step.y):
+				continue
+			seen[step] = true
+			stack.append(step)
+	return seen
+
+
+func _shopkeeper_spot(where: Array) -> Variant:
+	for _try in 20:
+		var cell = _free_cell(where)
+		if cell == null:
+			return null
+		if reachable_from(Vector2i(player.x, player.y), {cell: true}).has(stairs):
+			return cell
+	return null            ## rather no shop than a floor nobody can finish
+
+
 func occupied(cell: Vector2i) -> bool:
 	for m in monsters:
 		if m.is_alive() and m.cell() == cell:
@@ -209,6 +439,20 @@ func monster_at(cell: Vector2i) -> Variant:
 		if m.is_alive() and m.cell() == cell:
 			return m
 	return null
+
+
+func shop_at(cell: Vector2i) -> Variant:
+	for shop in shops:
+		if shop["cell"] == cell:
+			return shop
+	return null
+
+
+func boss_alive() -> bool:
+	for m in monsters:
+		if m.is_alive() and m.is_boss:
+			return true
+	return false
 
 
 func item_at(cell: Vector2i) -> Variant:
@@ -246,19 +490,32 @@ func _line_clear(from: Vector2i, to: Vector2i) -> bool:
 # --- the turn -------------------------------------------------------------
 
 func try_move(step: Vector2i) -> void:
-	if dead or step == Vector2i.ZERO:
+	if dead or choosing or step == Vector2i.ZERO or shop_open != null:
 		return
 	var target := Vector2i(player.x + step.x, player.y + step.y)
 	if step.x != 0:
 		player.facing = 1 if step.x > 0 else -1
 
 	var monster: Variant = monster_at(target)
+	var shop: Variant = shop_at(target)
 	if monster != null:
 		_attack_monster(monster)
+	elif shop != null:
+		# Walking into a shopkeeper opens their shop instead of moving,
+		# which is why they are never placed in a chokepoint.
+		open_shop(shop)
+		return
+	elif target == stairs and stairs_locked and boss_alive():
+		say("Der Weg nach unten ist verriegelt. Der Boss hält den Schlüssel.")
+		return
 	elif Dungeon.is_walkable(grid, target.x, target.y):
 		player.x = target.x
 		player.y = target.y
 		_pick_up(target)
+		_open_chest(target)
+		_spring_trap(target)
+		if dead:
+			return
 		if target == stairs:
 			depth += 1
 			say("Du steigst hinab - Ebene %d." % depth)
@@ -267,6 +524,7 @@ func try_move(step: Vector2i) -> void:
 	else:
 		return
 
+	_tick_poison()
 	enemy_turn()
 	recompute_fov()
 	paint()
@@ -338,6 +596,7 @@ func _monster_attacks(monster) -> void:
 	if player.hp <= 0:
 		player.hp = 0
 		dead = true
+		Save.wipe()
 		say("Du stirbst auf Ebene %d. Tippe NEU." % depth)
 
 
@@ -375,8 +634,136 @@ func _pick_up(cell: Vector2i) -> void:
 		_item_nodes.erase(cell)
 
 
+func _tick_poison() -> void:
+	if player.poison_turns <= 0 or dead:
+		return
+	player.poison_turns -= 1
+	player.hp -= Data.POISON_PER_TURN
+	say("Das Gift zehrt an dir (%d)." % Data.POISON_PER_TURN)
+	if player.hp <= 0:
+		player.hp = 0
+		dead = true
+		Save.wipe()
+		say("Das Gift bringt dich um. Tippe NEU.")
+
+
+func _spring_trap(cell: Vector2i) -> void:
+	if not traps.has(cell):
+		return
+	var id: String = traps[cell]
+	var trap: Dictionary = Data.TRAPS[id]
+	# One-shot traps are gone once sprung; the rest stay dangerous,
+	# the same as the Python build.
+	if trap.get("one_shot", false):
+		traps.erase(cell)
+	player.hp -= trap["damage"]
+	say("%s! Du nimmst %d Schaden." % [trap["name"], trap["damage"]])
+	if trap.has("poison"):
+		player.poison_turns = maxi(player.poison_turns, trap["poison"])
+		say("Du bist vergiftet.")
+	if player.hp <= 0:
+		player.hp = 0
+		dead = true
+		Save.wipe()
+		say("Die Falle bringt dich um. Tippe NEU.")
+
+
+func _open_chest(cell: Vector2i) -> void:
+	if chest == null or chest["opened"] or chest["cell"] != cell:
+		return
+	chest["opened"] = true
+	if not chest["mimic"]:
+		var gold: int = 25 + depth * 8
+		player.gold += gold
+		player.potions += 1
+		say("Die Truhe enthält %d Gold und einen Trank." % gold)
+		return
+	# Beside the chest, never on it: a chest is opened by walking
+	# onto it, so the hero is standing there - and a monster sharing
+	# your tile cannot be attacked at all, because attacks are aimed
+	# at the tile you walk into. The Python build had exactly that
+	# bug until playing it turned it up.
+	var spot: Variant = null
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
+			Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)]:
+		var candidate: Vector2i = cell + offset
+		if Dungeon.is_walkable(grid, candidate.x, candidate.y) and not occupied(candidate):
+			spot = candidate
+			break
+	if spot == null:
+		say("Die Truhe war eine Mimik - aber sie kommt nicht heraus.")
+		return
+	var mimic := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"])
+	mimic.x = spot.x
+	mimic.y = spot.y
+	mimic.max_hp = int(mimic.max_hp * Data.MIMIC_MULT)
+	mimic.hp = mimic.max_hp
+	mimic.power = int(mimic.power * Data.MIMIC_MULT)
+	mimic.is_mimic = true
+	mimic.awake = true
+	mimic.display_name = "Mimik (%s)" % mimic.display_name
+	mimic.snap()
+	monsters.append(mimic)
+	say("Die Truhe schnappt zu - es war eine Mimik!")
+
+
+## The shop is a panel over the game rather than a screen of its own:
+## the dungeon stays visible behind it, and closing it is one tap.
+func open_shop(shop: Dictionary) -> void:
+	shop_open = shop
+	_refresh_shop()
+	if _shop_panel != null:
+		_shop_panel.visible = true
+
+
+func close_shop() -> void:
+	shop_open = null
+	if _shop_panel != null:
+		_shop_panel.visible = false
+
+
+func buy(what: String) -> void:
+	if shop_open == null:
+		return
+	match what:
+		"potion":
+			if _spend(Data.POTION_COST):
+				player.potions += 1
+				say("Trank gekauft.")
+		"weapon":
+			var next: int = player.weapon + 1
+			if next >= Data.WEAPONS.size():
+				say("Nichts Besseres im Angebot.")
+			elif _spend(Data.WEAPONS[next]["cost"]):
+				player.weapon = next
+				say("Gekauft: %s." % Data.WEAPONS[next]["name"])
+		"armour":
+			var next: int = player.armour + 1
+			if next >= Data.ARMOURS.size():
+				say("Nichts Besseres im Angebot.")
+			elif _spend(Data.ARMOURS[next]["cost"]):
+				player.armour = next
+				say("Gekauft: %s." % Data.ARMOURS[next]["name"])
+		"heal":
+			if player.hp >= player.max_hp:
+				say("Dir fehlt nichts.")
+			elif _spend(Data.UPGRADE_COST):
+				player.hp = player.max_hp
+				player.poison_turns = 0
+				say("Der Schmied flickt dich zusammen.")
+	_refresh_shop()
+
+
+func _spend(cost: int) -> bool:
+	if player.gold < cost:
+		say("Zu wenig Gold - %d fehlen." % (cost - player.gold))
+		return false
+	player.gold -= cost
+	return true
+
+
 func drink() -> void:
-	if dead or player.potions <= 0 or player.hp >= player.max_hp:
+	if dead or choosing or player.potions <= 0 or player.hp >= player.max_hp:
 		return
 	player.potions -= 1
 	player.hp = mini(player.max_hp, player.hp + Data.POTION_HEAL)
@@ -413,6 +800,11 @@ func paint() -> void:
 
 	for item in items:
 		_place_item(item)
+	if chest != null:
+		_place_prop(chest["cell"], "chest_empty_open_anim_f2" if chest["opened"]
+			else "chest_full_open_anim_f0")
+	for shop in shops:
+		_place_prop(shop["cell"], "blacksmith" if shop["kind"] == "smith" else "merchant")
 	for monster in monsters:
 		_place_monster(monster)
 
@@ -462,6 +854,25 @@ func _place_item(item: Dictionary) -> void:
 	sprite.visible = explored.has(cell)
 
 
+## One standing thing on the map - a chest, a shopkeeper. Kept in the
+## same node cache as everything else so a repaint moves sprites
+## rather than rebuilding them.
+func _place_prop(cell: Vector2i, art: String) -> void:
+	var key := "prop:%s" % str(cell)
+	if not _item_nodes.has(key):
+		var node := Sprite2D.new()
+		node.texture = _sprite_for(art)
+		node.centered = false
+		node.z_index = 1
+		add_child(node)
+		_item_nodes[key] = node
+	var sprite: Sprite2D = _item_nodes[key]
+	sprite.texture = _sprite_for(art)
+	sprite.position = Vector2(cell) * TILE + Vector2(
+		0, TILE - sprite.texture.get_height())
+	sprite.visible = explored.has(cell)
+
+
 func _place_monster(monster) -> void:
 	if not _actor_nodes.has(monster):
 		var node := Sprite2D.new()
@@ -486,16 +897,24 @@ func _build_hud() -> void:
 	_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(_hud)
 
+	# Everything the player uses while walking lives in one node, so
+	# the title screen can put it away with a single flag instead of
+	# leaving a d-pad and a health bar showing through the menu.
+	_play_ui = Control.new()
+	_play_ui.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_play_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud.add_child(_play_ui)
+
 	for name in ["stats", "fps", "log"]:
 		var label := Label.new()
 		label.name = name
 		label.add_theme_font_size_override("font_size", 22)
 		label.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
-		_hud.add_child(label)
-	_hud.get_node("stats").position = Vector2(14, 8)
-	_hud.get_node("fps").position = Vector2(14, 36)
+		_play_ui.add_child(label)
+	_play_ui.get_node("stats").position = Vector2(14, 8)
+	_play_ui.get_node("fps").position = Vector2(14, 36)
 
-	var log_label: Label = _hud.get_node("log")
+	var log_label: Label = _play_ui.get_node("log")
 	log_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	log_label.position = Vector2(-620, -170)
 	log_label.custom_minimum_size = Vector2(600, 130)
@@ -516,7 +935,7 @@ func _build_hud() -> void:
 	heal.position = Vector2(-pad - size * 1.6, -pad - size * 0.8)
 	heal.add_theme_font_size_override("font_size", 28)
 	heal.pressed.connect(drink)
-	_hud.add_child(heal)
+	_play_ui.add_child(heal)
 
 	var again := Button.new()
 	again.text = "NEU"
@@ -524,8 +943,195 @@ func _build_hud() -> void:
 	again.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	again.position = Vector2(-pad - size, pad)
 	again.add_theme_font_size_override("font_size", 26)
-	again.pressed.connect(new_run)
-	_hud.add_child(again)
+	again.pressed.connect(show_title)
+	_play_ui.add_child(again)
+
+	_build_shop_panel()
+	_build_title_panel()
+
+
+## The title screen: three heroes, one tap each. It sits on the HUD
+## layer over a dungeon that already exists, so the first floor is
+## generated and drawn before anyone chooses - tapping a hero starts
+## the run instantly instead of stopping to build a level.
+func _build_title_panel() -> void:
+	_title_panel = PanelContainer.new()
+	_title_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_hud.add_child(_title_panel)
+
+	var backdrop := ColorRect.new()
+	backdrop.color = Color(0.04, 0.03, 0.06, 0.92)
+	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_title_panel.add_child(backdrop)
+
+	var column := VBoxContainer.new()
+	column.set_anchors_preset(Control.PRESET_FULL_RECT)
+	column.alignment = BoxContainer.ALIGNMENT_CENTER
+	column.add_theme_constant_override("separation", 18)
+	_title_panel.add_child(column)
+
+	var heading := Label.new()
+	heading.text = "DUNGEON CRAWLER"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 56)
+	heading.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
+	column.add_child(heading)
+
+	var subtitle := Label.new()
+	subtitle.text = "Wähle deinen Helden"
+	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	subtitle.add_theme_font_size_override("font_size", 26)
+	column.add_child(subtitle)
+
+	# Only shown when there is something to continue. A dead run wipes
+	# its own save, so this never offers to resume a finished one.
+	_continue_button = Button.new()
+	_continue_button.text = "LAUF FORTSETZEN"
+	_continue_button.custom_minimum_size = Vector2(0, 78)
+	_continue_button.add_theme_font_size_override("font_size", 30)
+	_continue_button.pressed.connect(continue_run)
+	_continue_button.custom_minimum_size = Vector2(440, 78)
+	var centred := CenterContainer.new()
+	centred.add_child(_continue_button)
+	column.add_child(centred)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 26)
+	column.add_child(row)
+
+	for info in Data.CLASSES:
+		var card := VBoxContainer.new()
+		card.custom_minimum_size = Vector2(300, 0)
+		card.add_theme_constant_override("separation", 8)
+		row.add_child(card)
+
+		var portrait := TextureRect.new()
+		portrait.texture = load(CLASS_DIR + info["sprite"] + ".png")
+		portrait.custom_minimum_size = Vector2(0, 150)
+		portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		portrait.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		card.add_child(portrait)
+
+		var blurb := Label.new()
+		blurb.text = info["blurb"]
+		blurb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		blurb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		blurb.custom_minimum_size = Vector2(280, 64)
+		blurb.add_theme_font_size_override("font_size", 20)
+		blurb.add_theme_color_override("font_color", Color(0.80, 0.80, 0.86))
+		card.add_child(blurb)
+
+		var pick := Button.new()
+		pick.text = info["name"]
+		pick.custom_minimum_size = Vector2(0, 76)
+		pick.add_theme_font_size_override("font_size", 30)
+		pick.add_theme_color_override("font_color", info["color"])
+		pick.pressed.connect(choose_class.bind(info["id"]))
+		card.add_child(pick)
+
+
+## Puts the title screen back up and rolls a fresh floor behind it, so
+## the choice is never made against the corpse of the last run.
+func show_title() -> void:
+	choosing = true
+	close_shop()
+	if _continue_button != null:
+		_continue_button.visible = Save.exists()
+	if _play_ui != null:
+		_play_ui.visible = false
+	if _title_panel != null:
+		_title_panel.visible = true
+
+
+## Picks the saved run back up. If the file turns out to be unreadable
+## the title screen simply stays where it is - a broken save is not
+## worth a dead start.
+func continue_run() -> void:
+	if load_run():
+		say("Weiter geht es auf Ebene %d." % depth)
+	else:
+		Save.wipe()
+		if _continue_button != null:
+			_continue_button.visible = false
+
+
+func choose_class(id: String) -> void:
+	hero_class = id
+	choosing = false
+	if _play_ui != null:
+		_play_ui.visible = true
+	if _title_panel != null:
+		_title_panel.visible = false
+	new_run()
+	say("%s betritt den Dungeon." % Data.class_by_id(id)["name"])
+
+
+func _build_shop_panel() -> void:
+	_shop_panel = PanelContainer.new()
+	_shop_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_shop_panel.position = Vector2(-330, -190)
+	_shop_panel.custom_minimum_size = Vector2(660, 380)
+	_shop_panel.visible = false
+	_hud.add_child(_shop_panel)
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 14)
+	_shop_panel.add_child(column)
+
+	_shop_title = Label.new()
+	_shop_title.add_theme_font_size_override("font_size", 30)
+	_shop_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	column.add_child(_shop_title)
+
+	_shop_buttons.clear()
+	for entry in [["potion", "Heiltrank"], ["weapon", "Bessere Waffe"],
+			["armour", "Bessere Rüstung"], ["heal", "Voll heilen"]]:
+		var button := Button.new()
+		button.custom_minimum_size = Vector2(0, 62)
+		button.add_theme_font_size_override("font_size", 26)
+		button.pressed.connect(buy.bind(entry[0]))
+		column.add_child(button)
+		_shop_buttons.append({"node": button, "what": entry[0], "label": entry[1]})
+
+	var leave := Button.new()
+	leave.text = "VERLASSEN"
+	leave.custom_minimum_size = Vector2(0, 70)
+	leave.add_theme_font_size_override("font_size", 28)
+	leave.pressed.connect(close_shop)
+	column.add_child(leave)
+
+
+func _refresh_shop() -> void:
+	if _shop_panel == null or shop_open == null:
+		return
+	var smith: bool = shop_open["kind"] == "smith"
+	_shop_title.text = "%s     Dein Gold: %d" % [
+		"Schmied" if smith else "Händler", player.gold]
+	for entry in _shop_buttons:
+		var node: Button = entry["node"]
+		var what: String = entry["what"]
+		var cost := 0
+		var available := true
+		match what:
+			"potion":
+				cost = Data.POTION_COST
+				available = not smith
+			"weapon":
+				var next: int = player.weapon + 1
+				available = next < Data.WEAPONS.size()
+				cost = Data.WEAPONS[next]["cost"] if available else 0
+			"armour":
+				var next: int = player.armour + 1
+				available = next < Data.ARMOURS.size()
+				cost = Data.ARMOURS[next]["cost"] if available else 0
+			"heal":
+				cost = Data.UPGRADE_COST
+				available = smith
+		node.visible = available
+		node.disabled = player.gold < cost
+		node.text = "%s - %d Gold" % [entry["label"], cost]
 
 
 func _button(label: String, where: Vector2, size: float, step: Vector2i) -> void:
@@ -541,7 +1147,7 @@ func _button(label: String, where: Vector2, size: float, step: Vector2i) -> void
 	button.button_up.connect(func() -> void:
 		if _held == step:
 			_held = Vector2i.ZERO)
-	_hud.add_child(button)
+	_play_ui.add_child(button)
 
 
 func _process(delta: float) -> void:
@@ -562,11 +1168,11 @@ func _process(delta: float) -> void:
 		if not Input.is_anything_pressed():
 			_held = Vector2i.ZERO
 
-	_hud.get_node("stats").text = "%s  Ebene %d     HP %d/%d     Stufe %d (%d/%d XP)     %d Gold     %d Tränke" % [
+	_play_ui.get_node("stats").text = "%s  Ebene %d     HP %d/%d     Stufe %d (%d/%d XP)     %d Gold     %d Tränke" % [
 		tier.get("name", ""), depth, player.hp, player.max_hp,
 		player.level, player.xp, player.xp_to_next, player.gold, player.potions]
-	_hud.get_node("log").text = "\n".join(log_lines)
-	_hud.get_node("fps").text = "%d fps   %.1f ms   %d draw calls" % [
+	_play_ui.get_node("log").text = "\n".join(log_lines)
+	_play_ui.get_node("fps").text = "%d fps   %.1f ms   %d draw calls" % [
 		Engine.get_frames_per_second(),
 		Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
 		Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)]

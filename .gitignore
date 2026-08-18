@@ -17,3 +17,6 @@ _update.bat
 # Godot: import cache and the 1.3GB export templates are not source
 godot/.godot/
 godot/android/
+
+# Screenshots taken by scripts/shot.gd - looked at, not kept.
+godot/*.png

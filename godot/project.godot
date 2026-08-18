@@ -35,6 +35,7 @@ window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 
 [rendering]
+environment/defaults/default_clear_color=Color(0.043, 0.031, 0.055, 1)
 
 ; The mobile renderer, and no smoothing anywhere: this is 16x16 pixel
 ; art and any filtering turns it to mush - the same rule the pygame

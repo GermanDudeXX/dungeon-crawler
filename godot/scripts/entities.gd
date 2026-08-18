@@ -37,11 +37,23 @@ class Player extends Actor:
 	var gold := 0
 	var kills := 0
 	var facing := 1
+	var poison_turns := 0
 
-	func _init() -> void:
-		max_hp = 20
+	var hero_class := "warrior"
+
+	## The class shapes the opening hand only: it multiplies the base
+	## pool once, here, so a level-up later adds to the adjusted value
+	## rather than rescaling it.
+	func _init(class_id := Data.DEFAULT_CLASS) -> void:
+		var info := Data.class_by_id(class_id)
+		hero_class = info["id"]
+		max_hp = maxi(1, int(round(20 * float(info["hp_mult"]))))
 		hp = max_hp
-		potions = 2
+		base_power += int(info["power"])
+		base_defense += int(info["defense"])
+		weapon = int(info["weapon"])
+		armour = int(info["armour"])
+		potions = int(info["potions"])
 
 	func power() -> int:
 		return base_power + Data.WEAPONS[weapon]["bonus"]
@@ -77,6 +89,8 @@ class Monster extends Actor:
 	var speed := 1
 	var poisons := false
 	var flees_below := 0.0
+	var is_boss := false
+	var is_mimic := false
 
 	func _init(kind_id: String, tier_mult: float) -> void:
 		kind = kind_id
