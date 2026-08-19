@@ -56,6 +56,7 @@ func _process(_delta: float) -> bool:
 	var started := Time.get_ticks_msec()
 	_check_audio()
 	_check_updater()
+	_check_score()
 	_check_dungeon()
 
 	# Seeded, so a failure can be looked at again instead of being a
@@ -2101,4 +2102,36 @@ func _check_bestiary_and_waiting() -> void:
 	p.buffs.clear()
 	_game.close_bag()
 	_settle()
+
+
+## The score and the later achievements. A score has one job - letting
+## two runs be compared - so what matters is that deeper, stronger and
+## richer all move it upwards.
+func _check_score() -> void:
+	var shallow := Stats.score_of(3, 4, 20, 100)
+	if Stats.score_of(9, 4, 20, 100) <= shallow:
+		_complain("tiefer gekommen zählt nicht mehr")
+	if Stats.score_of(3, 9, 20, 100) <= shallow:
+		_complain("höhere Stufe zählt nicht mehr")
+	if Stats.score_of(3, 4, 60, 100) <= shallow:
+		_complain("mehr Kills zählen nicht mehr")
+	if Stats.score_of(3, 4, 20, 900) <= shallow:
+		_complain("mehr Gold zählt nicht mehr")
+	if Stats.score_of(1, 1, 0, 0) <= 0:
+		_complain("ein Lauf ist nie null Punkte wert")
+
+	# The five later achievements have to be reachable at all.
+	for id in ["doorman", "contractor", "naturalist", "exorcist", "descent"]:
+		var found := false
+		for entry in Achievements.ALL:
+			if entry["id"] == id:
+				found = true
+		if not found:
+			_complain("Erfolg fehlt in der Liste", id)
+
+	# And the counters they read must exist, or they can never be met.
+	var record := Stats.read()
+	for field in ["doors", "quests", "best_score"]:
+		if not record.has(field):
+			_complain("Zähler fehlt in der Statistik", field)
 

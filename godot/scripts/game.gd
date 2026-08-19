@@ -1159,6 +1159,7 @@ func _settle_quest() -> void:
 	var flasks: int = int(quest["potion"])
 	if flasks > 0:
 		player.add_potion(Data.pick_potion(depth, rng, false), flasks)
+	Stats.bump("quests")
 	audio.play("coin")
 	say("Belohnung: %d Gold%s." % [gold, " und ein Trank" if flasks > 0 else ""])
 
@@ -1280,6 +1281,7 @@ func _touches_room(cell: Vector2i, room) -> bool:
 ## and a moment of exposure, not a lock.
 func _open_door(cell: Vector2i) -> void:
 	doors[cell] = true
+	Stats.bump("doors")
 	audio.play("stairs")
 	say("Du öffnest die Tür.")
 	_tick_buffs()
@@ -1459,6 +1461,8 @@ func _step_in_web(cell: Vector2i) -> void:
 ## that skipped this step handed out no experience at all.
 func _kill(monster) -> void:
 	_note_kind(monster.kind, "killed")
+	if monster.kind == "bone_mage":
+		_award("exorcist")
 	if monster.explodes > 0:
 		_explode(monster)
 	_sparks(monster.cell(), Color(0.85, 0.30, 0.28), 16)
@@ -3293,6 +3297,14 @@ func _check_awards() -> void:
 		_award("centurion")
 	if depth >= 3 and potion_free:
 		_award("untouchable")
+	if depth >= Data.SUPERBOSS_LEVEL:
+		_award("descent")
+	if int(record["doors"]) >= 25:
+		_award("doorman")
+	if int(record["quests"]) >= 10:
+		_award("contractor")
+	if known.size() >= Data.MONSTERS.size():
+		_award("naturalist")
 
 
 ## The update button and the line under it.
@@ -3616,12 +3628,21 @@ func _show_death() -> void:
 		return
 	# The run goes into the record before it is shown, so the totals
 	# under the summary already include the run being summarised.
+	var score := Stats.score_of(depth, player.level, player.kills, player.gold)
 	var stats := Stats.record_run(depth, player.level, player.kills, player.gold, true)
-	_dead_text.text = "Ebene %d     Stufe %d     %d Kills     %d Gold
-
-%d Läufe, %d Tode - am tiefsten: Ebene %d" % [
-		depth, player.level, player.kills, player.gold,
-		stats["runs"], stats["deaths"], stats["deepest"]]
+	var best: int = int(stats["best_score"])
+	var lines: Array[String] = [
+		"Ebene %d     Stufe %d     %d Kills     %d Gold" % [
+			depth, player.level, player.kills, player.gold],
+		"",
+		"%d Punkte%s" % [score,
+			"  (neuer Bestwert!)" if score >= best else "  (Bestwert: %d)" % best],
+		"",
+		"%d Läufe, %d Tode - am tiefsten: Ebene %d" % [
+			stats["runs"], stats["deaths"], stats["deepest"]],
+	]
+	_dead_text.text = "
+".join(lines)
 	_dead_panel.visible = true
 
 
@@ -3889,9 +3910,9 @@ func show_title() -> void:
 		if int(record["runs"]) == 0:
 			_record_label.text = "Noch kein Lauf. Viel Glück."
 		else:
-			_record_label.text = "%d Läufe, %d Tode - am tiefsten: Ebene %d, beste Stufe %d, %d Kills" % [
+			_record_label.text = "%d Läufe, %d Tode - Ebene %d, Stufe %d, %d Kills, Bestwert %d" % [
 				int(record["runs"]), int(record["deaths"]), int(record["deepest"]),
-				int(record["best_level"]), int(record["kills"])]
+				int(record["best_level"]), int(record["kills"]), int(record["best_score"])]
 	if _play_ui != null:
 		_play_ui.visible = false
 	if _title_panel != null:

@@ -22,6 +22,12 @@ const ALL := [
 	{"id": "persistent", "name": "Hartnäckig", "how": "Stirb fünfmal."},
 	{"id": "centurion", "name": "Zenturio", "how": "Besiege insgesamt 100 Monster."},
 	{"id": "untouchable", "name": "Unberührt", "how": "Erreiche Ebene 3 ohne einen Trank."},
+	# The later ones, for the systems that came after the first twelve.
+	{"id": "doorman", "name": "Türsteher", "how": "Öffne insgesamt 25 Türen."},
+	{"id": "contractor", "name": "Auftragnehmer", "how": "Erfülle insgesamt 10 Aufträge."},
+	{"id": "naturalist", "name": "Naturkundler", "how": "Begegne jeder Art im Dungeon."},
+	{"id": "exorcist", "name": "Exorzist", "how": "Erschlage einen Knochenmagier."},
+	{"id": "descent", "name": "Der Abstieg", "how": "Erreiche Ebene 25."},
 ]
 
 
