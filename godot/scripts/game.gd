@@ -73,6 +73,9 @@ var _camera: Camera2D
 var _hud: Control
 var audio: Audio
 var settings := Settings.DEFAULTS.duplicate()
+var earned := {}                 ## achievements already won
+var scrolls_read := 0            ## across all runs, for one of them
+var potion_free := true          ## no potion drunk this run yet
 var _play_ui: Control            ## stats, log and the pad - hidden on the title
 var _shop_panel: PanelContainer
 var _shop_title: Label
@@ -86,6 +89,8 @@ var _difficulty_button: Button
 var _flash_button: Button
 var _record_label: Label
 var _hint_label: Label
+var _awards_panel: PanelContainer
+var _awards_list: VBoxContainer
 var _drink_button: Button
 var _bag_panel: PanelContainer
 var _bag_list: VBoxContainer
@@ -112,6 +117,7 @@ var _step_cooldown := 0.0
 func _ready() -> void:
 	rng.randomize()
 	settings = Settings.read()
+	earned = Achievements.read()
 	audio = Audio.new()
 	add_child(audio)
 	audio.enabled = settings["sound"]
@@ -192,6 +198,7 @@ func _sprite_for(name: String) -> Texture2D:
 # --- a run ----------------------------------------------------------------
 
 func new_run() -> void:
+	potion_free = true
 	player = Entities.Player.new(hero_class, difficulty)
 	depth = 1
 	dead = false
@@ -909,6 +916,7 @@ func try_move(step: Vector2i) -> void:
 
 	_tick_poison()
 	_tick_regen()
+	_check_awards()
 	_tick_buffs()
 	enemy_turn()
 	recompute_fov()
@@ -993,6 +1001,8 @@ func _kill(monster) -> void:
 		_split(monster)
 	audio.play("monster_death")
 	say("%s stirbt." % monster.display_name)
+	if monster.is_boss:
+		_award("boss_slayer")
 	player.kills += 1
 	if player.gain_xp(monster.xp_reward) > 0:
 		audio.play("levelup")
@@ -1514,6 +1524,28 @@ func buy(what: String) -> void:
 				say("Der Schmied verstärkt %s auf +%d." % [
 					player.armour_name(), player.armour_bonus()])
 
+		"enchant":
+			if _spend(price(Data.SMITH_ENCHANT_PRICE)):
+				# A reroll may land on what it already had - that is the
+				# gamble, and pretending otherwise would need a memory of
+				# what was tried.
+				var ids: Array = Data.ELEMENTS.keys()
+				player.weapon_element = ids[rng.randi() % ids.size()]
+				audio.play("equip")
+				say("Die Waffe trägt jetzt %s." % Data.ELEMENTS[player.weapon_element]["name"])
+		"reforge":
+			if _spend(price(Data.SMITH_REFORGE_PRICE)):
+				var was: int = Data.RARITIES.find(Data.rarity_by_id(player.weapon_rarity))
+				var now := Data.pick_rarity(depth, rng)
+				# One tier up where the depth allows it, so the price buys
+				# a step rather than a coin flip that usually loses.
+				if Data.RARITIES.find(now) <= was:
+					var up: int = mini(was + 1, Data.RARITIES.size() - 1)
+					if int(Data.RARITIES[up]["min_level"]) <= depth:
+						now = Data.RARITIES[up]
+				player.weapon_rarity = now["id"]
+				audio.play("equip")
+				say("Umgeschmiedet: %s +%d." % [player.weapon_name(), player.weapon_bonus()])
 		"heal":
 			if player.hp >= player.max_hp:
 				say("Dir fehlt nichts.")
@@ -1562,6 +1594,9 @@ func drink() -> void:
 		return
 
 	player.add_potion(id, -1)
+	# One flask is enough to lose it - that is the whole point of
+	# the achievement.
+	potion_free = false
 	audio.play("pickup")
 	say("Du trinkst: %s." % potion["name"])
 	_apply_effect(effect)
@@ -1705,6 +1740,7 @@ func read_scroll(id: String) -> void:
 	if int(player.scrolls[id]) <= 0:
 		player.scrolls.erase(id)
 	say("Du liest: %s." % scroll["name"])
+	scrolls_read += 1
 	match id:
 		"fireball":
 			_fireball(int(scroll["damage"]))
@@ -2140,6 +2176,7 @@ func _build_hud() -> void:
 
 	_build_minimap()
 	_build_bag_panel()
+	_build_awards_panel()
 	_build_shop_panel()
 	_build_perk_panel()
 	_build_dead_panel()
@@ -2353,6 +2390,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 ## Shuts the topmost thing that is open and says whether there was one.
 ## The order is the order they sit in front of each other.
 func close_topmost() -> bool:
+	if _awards_panel != null and _awards_panel.visible:
+		close_awards()
+		return true
 	if _bag_panel != null and _bag_panel.visible:
 		close_bag()
 		return true
@@ -2519,6 +2559,120 @@ func _describe(effect: Dictionary) -> String:
 	return ", ".join(parts)
 
 
+## Awards an achievement once, with a banner, and remembers it.
+##
+## Called from wherever the thing actually happens rather than from one
+## place that inspects everything each turn: the condition is then
+## written next to the event it belongs to, and cannot drift away from
+## it.
+func _award(id: String) -> void:
+	if earned.has(id):
+		return
+	earned[id] = true
+	Achievements.write(earned)
+	var entry := Achievements.by_id(id)
+	audio.play("levelup")
+	banner("Erfolg: %s" % entry["name"], Color(0.55, 0.85, 0.98))
+	say("Erfolg freigeschaltet: %s - %s" % [entry["name"], entry["how"]])
+
+
+## The conditions that are about a running total rather than a moment.
+## Cheap enough to ask every turn, and asking every turn is what keeps
+## them from being missed.
+func _check_awards() -> void:
+	var record := Stats.read()
+	if player.kills >= 1:
+		_award("first_blood")
+	if player.level >= 5:
+		_award("survivor")
+	if player.level >= 10:
+		_award("veteran")
+	if depth >= 5:
+		_award("deep_delver")
+	if depth >= 10:
+		_award("spelunker")
+	if player.gold >= 100:
+		_award("rich")
+	if int(record["gold"]) + player.gold >= 500:
+		_award("hoarder")
+	if scrolls_read >= 10:
+		_award("well_read")
+	if int(record["deaths"]) >= 5:
+		_award("persistent")
+	if int(record["kills"]) + player.kills >= 100:
+		_award("centurion")
+	if depth >= 3 and potion_free:
+		_award("untouchable")
+
+
+## The list of achievements, won and unwon, on the title screen.
+##
+## The unwon ones are shown too, with what they ask for: a list that
+## only appears once something is on it tells a new player nothing about
+## what there is to do.
+func _build_awards_panel() -> void:
+	_awards_panel = PanelContainer.new()
+	_awards_panel.custom_minimum_size = Vector2(760, 560)
+	_awards_panel.visible = false
+	_solid_panel(_awards_panel)
+	_hud.add_child(_centred(_awards_panel))
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 10)
+	_awards_panel.add_child(column)
+
+	var heading := Label.new()
+	heading.text = "Erfolge"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 32)
+	heading.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
+	column.add_child(heading)
+
+	var scroller := ScrollContainer.new()
+	scroller.custom_minimum_size = Vector2(0, 400)
+	scroller.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	column.add_child(scroller)
+
+	_awards_list = VBoxContainer.new()
+	_awards_list.custom_minimum_size = Vector2(700, 0)
+	_awards_list.add_theme_constant_override("separation", 4)
+	scroller.add_child(_awards_list)
+
+	var close := Button.new()
+	close.text = "ZURÜCK"
+	close.custom_minimum_size = Vector2(0, 64)
+	close.add_theme_font_size_override("font_size", 26)
+	close.pressed.connect(close_awards)
+	column.add_child(close)
+
+
+func open_awards() -> void:
+	if _awards_panel == null:
+		return
+	earned = Achievements.read()
+	for old in _awards_list.get_children():
+		old.queue_free()
+	for entry in Achievements.ALL:
+		var line := Label.new()
+		var got: bool = earned.has(entry["id"])
+		line.text = "%s  %s - %s" % ["✓" if got else "·", entry["name"], entry["how"]]
+		line.add_theme_font_size_override("font_size", 22)
+		line.add_theme_color_override("font_color",
+			Color(0.55, 0.85, 0.98) if got else Color(0.55, 0.55, 0.62))
+		_awards_list.add_child(line)
+	# In front of the title screen, which was added later and therefore
+	# draws over it: sibling order is draw order.
+	var holder := _awards_panel.get_parent()
+	if holder != null:
+		holder.move_to_front()
+	_awards_panel.visible = true
+
+
+func close_awards() -> void:
+	if _awards_panel != null:
+		_awards_panel.visible = false
+
+
 ## A line across the middle of the screen for the handful of moments that
 ## deserve one: a boss waking up, a vault found, a new stretch of the
 ## dungeon. The log at the bottom is for everything else - a banner for
@@ -2674,6 +2828,13 @@ func _build_settings(column: VBoxContainer) -> void:
 	_flash_button.add_theme_font_size_override("font_size", 24)
 	_flash_button.pressed.connect(toggle_flash)
 	row.add_child(_flash_button)
+
+	var awards := Button.new()
+	awards.text = "Erfolge"
+	awards.custom_minimum_size = Vector2(190, 62)
+	awards.add_theme_font_size_override("font_size", 24)
+	awards.pressed.connect(open_awards)
+	row.add_child(awards)
 	_refresh_settings()
 
 
@@ -2877,6 +3038,7 @@ func continue_run() -> void:
 
 func choose_class(id: String) -> void:
 	hero_class = id
+	close_awards()
 	close_bag()
 	if _perk_panel != null:
 		_perk_panel.visible = false
@@ -2943,6 +3105,12 @@ func _refresh_shop() -> void:
 		offers.append(["armour", "Verstärken: %s +%d" % [
 			Data.ARMOURS[player.armour]["name"], Data.SMITH_ARMOUR_STEP],
 			price(Data.smith_price(player.armour_extra))])
+		var element_label: String = "Waffe verzaubern"
+		if player.weapon_element != "":
+			element_label = "Verzauberung neu würfeln (%s)" % Data.ELEMENTS[player.weapon_element]["name"]
+		offers.append(["enchant", element_label, price(Data.SMITH_ENCHANT_PRICE)])
+		offers.append(["reforge", "Waffe umschmieden (Seltenheit)",
+			price(Data.SMITH_REFORGE_PRICE)])
 		offers.append(["heal", "Voll heilen", price(Data.UPGRADE_COST)])
 
 	else:

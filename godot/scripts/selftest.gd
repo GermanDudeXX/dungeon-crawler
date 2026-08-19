@@ -83,6 +83,7 @@ func _process(_delta: float) -> bool:
 	_check_monster_habits()
 	_check_bag()
 	_check_boss_stands()
+	_check_awards()
 
 	# The direct checks above are deliberately rough with the game:
 	# they set the hero to 200 health, drop them next to a test
@@ -1306,4 +1307,51 @@ func _check_boss_stands() -> void:
 		_complain("Boss weicht immer aus",
 			"nur %d von 12 Zügen in Reichweite geblieben" % stayed)
 	_game.monsters.erase(boss)
+
+
+## Achievements have to be reachable and have to fire. Each condition
+## sits next to the event it belongs to, so the risk is not the logic -
+## it is one that nobody ever calls.
+func _check_awards() -> void:
+	_settle()
+	var p = _game.player
+	_game.earned.clear()
+
+	# The ones that hang off a running total.
+	p.kills = 1
+	p.level = 10
+	p.gold = 120
+	_game.depth = 10
+	_game.scrolls_read = 10
+	_game._check_awards()
+	for id in ["first_blood", "survivor", "veteran", "deep_delver", "spelunker",
+			"rich", "well_read"]:
+		if not _game.earned.has(id):
+			_complain("Erfolg wird nie vergeben", id)
+
+	# And the one that hangs off killing a boss.
+	_game.earned.erase("boss_slayer")
+	var spot: Variant = _open_spot()
+	if spot != null:
+		var boss = Entities.Monster.new("rat", 1.0, "easy")
+		boss.x = spot.x
+		boss.y = spot.y
+		boss.is_boss = true
+		boss.hp = 1
+		boss.snap()
+		_game.monsters.append(boss)
+		_game._kill(boss)
+		if not _game.earned.has("boss_slayer"):
+			_complain("Bosstöter wird nicht vergeben")
+
+	# Every entry must be one the list knows: a typo in an id would
+	# silently award nothing at all.
+	for id in _game.earned:
+		var known := false
+		for entry in Achievements.ALL:
+			if entry["id"] == id:
+				known = true
+		if not known:
+			_complain("unbekannter Erfolg vergeben", id)
+	_settle()
 

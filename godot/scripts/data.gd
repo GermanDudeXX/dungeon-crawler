@@ -480,6 +480,11 @@ const SMITH_BASE_PRICE := 25
 const SMITH_PRICE_PER_POINT := 18
 const SMITH_WEAPON_STEP := 2
 const SMITH_ARMOUR_STEP := 1
+# Enchanting puts an element on a bare weapon, or rerolls the one it
+# has; reforging rerolls the rarity, one tier up where there is room.
+# Both are expensive on purpose: they are what late gold is for.
+const SMITH_ENCHANT_PRICE := 90
+const SMITH_REFORGE_PRICE := 140
 
 
 static func smith_price(bonus: int) -> int:
