@@ -27,6 +27,8 @@ const BOSS_SCALE := 1.8
 const PROP_TILES := 1.6
 const ITEM_TILES := 1.1
 const MINIMAP_SCALE := 4
+# How much dungeon should be on screen at once, in tiles across.
+const TILES_ACROSS := 30.0
 
 # Scenery only, no rules: what a floor is dressed with.
 const DECOR := ["crate", "skull", "wall_banner_red", "wall_banner_blue",
@@ -151,9 +153,23 @@ func _build_world() -> void:
 	add_child(_hero_node)
 
 	_camera = Camera2D.new()
-	_camera.zoom = Vector2(2.2, 2.2)
+	_fit_camera()
+	get_viewport().size_changed.connect(_fit_camera)
 	add_child(_camera)
 
+
+## Sets the zoom so that roughly the same slice of the dungeon is on
+## screen whatever shape the screen is.
+##
+## A fixed zoom means a phone in landscape sees the entire forty-tile
+## map at once while a small window sees a keyhole. Aiming at a number
+## of tiles instead keeps the sprites the size they were drawn to be.
+func _fit_camera() -> void:
+	if _camera == null:
+		return
+	var wide := float(get_viewport().get_visible_rect().size.x)
+	var zoom := clampf(wide / (TILES_ACROSS * float(TILE)), 1.6, 4.0)
+	_camera.zoom = Vector2(zoom, zoom)
 
 func _build_tileset() -> TileSet:
 	var tileset := TileSet.new()
@@ -314,7 +330,8 @@ func load_run() -> bool:
 		for id in entry.get("stock", []):
 			stock.append(str(id))
 		shops.append({"cell": Vector2i(int(entry["x"]), int(entry["y"])),
-			"kind": str(entry["kind"]), "stock": stock})
+			"kind": str(entry["kind"]), "stock": stock,
+			"scroll": str(entry.get("scroll", ""))})
 	chest = null
 	if save["chest"] != null:
 		var c: Dictionary = save["chest"]
@@ -624,7 +641,12 @@ func _populate() -> void:
 				var id: String = Data.pick_potion(depth, rng, false)
 				if not stock.has(id):
 					stock.append(id)
-			shops.append({"cell": spot, "kind": "merchant", "stock": stock})
+			# And one scroll, so gold has something to buy that is not a
+			# flask - a merchant who only sells potions is a merchant you
+			# stop visiting once you have eight.
+			var paper: String = Data.SCROLLS[rng.randi() % Data.SCROLLS.size()]["id"]
+			shops.append({"cell": spot, "kind": "merchant", "stock": stock,
+				"scroll": paper})
 	if depth >= 4 and rng.randf() < 0.3:
 		var spot = _shopkeeper_spot(spawn_rooms)
 		if spot != null:
@@ -1538,13 +1560,24 @@ func close_shop() -> void:
 func buy(what: String) -> void:
 	if shop_open == null:
 		return
-	match ("potion" if what.begins_with("potion:") else what):
+	var kind: String = what
+	if what.begins_with("potion:"):
+		kind = "potion"
+	elif what.begins_with("scroll:"):
+		kind = "scroll"
+	match kind:
 		"potion":
 			var id: String = what.substr(7) if what.begins_with("potion:") else Data.DEFAULT_POTION
 			var potion := Data.potion_by_id(id)
 			if _spend(price(int(potion["price"]))):
 				player.add_potion(id)
 				say("Gekauft: %s." % potion["name"])
+		"scroll":
+			var paper_id: String = what.substr(7)
+			var scroll := Data.scroll_by_id(paper_id)
+			if _spend(price(int(scroll["price"]))):
+				player.scrolls[paper_id] = int(player.scrolls.get(paper_id, 0)) + 1
+				say("Gekauft: %s." % scroll["name"])
 		"weapon":
 			# The smith hammers on what you carry rather than selling you a
 			# new one: that is the whole reason he exists, and it keeps the
@@ -2082,7 +2115,19 @@ func _place_monster(monster) -> void:
 	sprite.visible = lit.has(monster.cell())
 	# Asleep is worth seeing: it is the difference between walking
 	# past something and waking it.
-	sprite.modulate = Color(0.62, 0.62, 0.78) if not monster.awake else Color.WHITE
+	# Asleep is pale; an elite wears a tint of its own so a familiar
+	# silhouette that is about to hit twice as hard looks different from
+	# the one that is not.
+	if not monster.awake:
+		sprite.modulate = Color(0.62, 0.62, 0.78)
+	elif monster.is_boss:
+		sprite.modulate = Color(1.0, 0.80, 0.70)
+	elif monster.is_keeper:
+		sprite.modulate = Color(0.85, 0.95, 1.0)
+	elif monster.is_elite:
+		sprite.modulate = Color(1.0, 0.92, 0.55)
+	else:
+		sprite.modulate = Color.WHITE
 
 	var bar: ColorRect = sprite.get_node_or_null("health")
 	if bar != null:
@@ -3181,6 +3226,10 @@ func _refresh_shop() -> void:
 		for id in shop_open.get("stock", []):
 			var potion := Data.potion_by_id(id)
 			offers.append(["potion:" + id, potion["name"], price(int(potion["price"]))])
+		var paper: String = shop_open.get("scroll", "")
+		if paper != "":
+			var scroll := Data.scroll_by_id(paper)
+			offers.append(["scroll:" + paper, scroll["name"], price(int(scroll["price"]))])
 
 	for i in _shop_buttons.size():
 		var button: Button = _shop_buttons[i]

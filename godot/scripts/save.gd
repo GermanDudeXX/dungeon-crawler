@@ -68,7 +68,7 @@ static func write(game) -> void:
 	var shops: Array = []
 	for shop in game.shops:
 		shops.append({"x": shop["cell"].x, "y": shop["cell"].y, "kind": shop["kind"],
-			"stock": shop.get("stock", [])})
+			"stock": shop.get("stock", []), "scroll": shop.get("scroll", "")})
 
 	var p = game.player
 	var data := {
