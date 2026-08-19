@@ -72,6 +72,7 @@ func _process(_delta: float) -> bool:
 	_check_difficulty()
 	_check_scrolls()
 	_check_traps()
+	_check_elements()
 
 	for turn in _turns:
 		if _game.dead:
@@ -734,4 +735,47 @@ func _check_traps() -> void:
 		if not trap.get("one_shot", false) and not still_there:
 			_complain("Dauerfalle verschwindet", id)
 		_game.traps.erase(spot)
+
+
+## Swings each elemental weapon at a monster until the element fires, and
+## checks it left the mark it promises. A 30-40% proc on a 30% drop is
+## not something a playthrough can be relied on to reach.
+func _check_elements() -> void:
+	var p = _game.player
+	var was: String = p.weapon_element
+	for id in Data.ELEMENTS:
+		var element: Dictionary = Data.ELEMENTS[id]
+		p.weapon_element = id
+		var spot: Variant = _open_spot()
+		if spot == null:
+			break
+		var dummy = Entities.Monster.new("orc", 40.0, "easy")
+		dummy.x = spot.x
+		dummy.y = spot.y
+		dummy.snap()
+		_game.monsters.append(dummy)
+		# Forty swings: at the lowest proc chance in the table that is a one
+		# in a hundred thousand chance of seeing nothing at all.
+		var landed := false
+		for _swing in 40:
+			_game._fire_element(dummy)
+			match element["status"]:
+				"burn":
+					landed = dummy.burn_turns > 0
+				"weaken":
+					landed = dummy.weaken_turns > 0
+				"stun":
+					landed = dummy.stun_turns > 0
+				"poison":
+					landed = dummy.venom_turns > 0
+			if landed:
+				break
+		if not landed:
+			_complain("Element wirkt nie", "%s (%s)" % [id, element["status"]])
+		var frozen: bool = id == "frost" and dummy.weaken_turns > 0 and dummy.defense > 0
+		if frozen and dummy.defense_now() >= dummy.defense:
+			_complain("Frost senkt die Verteidigung nicht",
+				"%d bleibt %d" % [dummy.defense, dummy.defense_now()])
+		_game.monsters.erase(dummy)
+	p.weapon_element = was
 

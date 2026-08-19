@@ -495,3 +495,32 @@ static func difficulty_by_id(id: String) -> Dictionary:
 			return entry
 	return DIFFICULTIES[1]
 
+
+# --- Elementarwaffen ------------------------------------------------------
+# A weapon can carry an element, rolled when it drops. Each has a chance
+# to fire per hit: extra damage now, plus a status the monster carries
+# for a few turns. Values from constants.py ELEMENTS.
+const ELEMENTS := {
+	"fire": {"name": "Flammen", "status": "burn", "turns": 3, "damage": 3, "chance": 0.35},
+	"frost": {"name": "Frost", "status": "weaken", "turns": 3, "damage": 2, "chance": 0.40},
+	"lightning": {"name": "Blitz", "status": "stun", "turns": 1, "damage": 2, "chance": 0.30},
+	"poison": {"name": "Gift", "status": "poison", "turns": 4, "damage": 2, "chance": 0.40},
+}
+const ELEMENT_CHANCE := 0.3          ## that a dropped weapon carries one
+const ELEMENT_MIN_LEVEL := 2
+const WEAKEN_DEFENSE_MULT := 0.6
+
+# Bleed is the crit-only counterpart to poison: roughly double the damage
+# over half the duration, so it matters in the fight that started it
+# rather than being a slow drain.
+const BLEED_DAMAGE := 5
+const BLEED_TURNS := 2
+
+
+## The element a dropped weapon carries, or "" for a plain one.
+static func pick_element(level: int, rng: RandomNumberGenerator) -> String:
+	if level < ELEMENT_MIN_LEVEL or rng.randf() >= ELEMENT_CHANCE:
+		return ""
+	var ids: Array = ELEMENTS.keys()
+	return ids[rng.randi() % ids.size()]
+

@@ -33,6 +33,7 @@ class Player extends Actor:
 	var weapon_rarity := "common"      ## multiplies the base bonus
 	var armour_rarity := "common"
 	var weapon_extra := 0              ## what the smith has hammered on
+	var weapon_element := ""           ## "", or a key of Data.ELEMENTS
 	var armour_extra := 0
 	var level := 1
 	var xp := 0
@@ -107,7 +108,10 @@ class Player extends Actor:
 	## The full name of a piece, the way it reads in the log and the
 	## shop: "Seltene Streitaxt +2".
 	func weapon_name() -> String:
-		return _named(Data.WEAPONS[weapon]["name"], weapon_rarity, weapon_extra)
+		var named := _named(Data.WEAPONS[weapon]["name"], weapon_rarity, weapon_extra)
+		if weapon_element == "":
+			return named
+		return "%s [%s]" % [named, Data.ELEMENTS[weapon_element]["name"]]
 
 
 	func armour_name() -> String:
@@ -200,6 +204,9 @@ class Monster extends Actor:
 	var is_boss := false
 	var is_mimic := false
 	var burn_turns := 0             ## takes damage at the end of its turn
+	var weaken_turns := 0           ## defends worse while this lasts
+	var venom_turns := 0            ## loses health each of its turns
+	var bleed_turns := 0            ## the same, from a critical hit
 	var slow_turns := 0             ## moves every other turn
 	var stun_turns := 0             ## does not act at all
 	var regen := 0                  ## heals this much at the end of its turn
@@ -238,6 +245,14 @@ class Monster extends Actor:
 		regen = int(modifier.get("regen", 0))
 		xp_reward = maxi(1, int(round(xp_reward * Data.ELITE_XP_MULT)))
 		display_name = "%s %s" % [modifier["name"], display_name]
+
+
+	## What this monster actually defends with right now. Frost eats
+	## into it for a few turns.
+	func defense_now() -> int:
+		if weaken_turns <= 0:
+			return defense
+		return int(round(defense * Data.WEAKEN_DEFENSE_MULT))
 
 
 	func is_fleeing() -> bool:

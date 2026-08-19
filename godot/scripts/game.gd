@@ -205,6 +205,7 @@ func load_run() -> bool:
 	player.weapon_rarity = str(p.get("weapon_rarity", "common"))
 	player.armour_rarity = str(p.get("armour_rarity", "common"))
 	player.weapon_extra = int(p.get("weapon_extra", 0))
+	player.weapon_element = str(p.get("weapon_element", ""))
 	player.armour_extra = int(p.get("armour_extra", 0))
 	player.level = int(p["level"])
 	player.xp = int(p["xp"])
@@ -312,6 +313,9 @@ func load_run() -> bool:
 		monster.slow_turns = int(entry.get("slow", 0))
 		monster.stun_turns = int(entry.get("stun", 0))
 		monster.regen = int(entry.get("regen", 0))
+		monster.weaken_turns = int(entry.get("weaken", 0))
+		monster.venom_turns = int(entry.get("venom", 0))
+		monster.bleed_turns = int(entry.get("bleed", 0))
 		monster.is_elite = bool(entry.get("elite", false))
 		monster.snap()
 		monsters.append(monster)
@@ -729,12 +733,16 @@ func try_move(step: Vector2i) -> void:
 
 
 func _attack_monster(monster) -> void:
-	var damage: int = maxi(1, int(round((player.power() - monster.defense)
+	var damage: int = maxi(1, int(round((player.power() - monster.defense_now())
 		* float(Data.difficulty_by_id(difficulty)["player_damage"]))))
-	damage = maxi(1, damage)
 	var crit := rng.randf() < player.crit_chance()
 	if crit:
 		damage *= Data.CRIT_MULT
+		# Any critical hit opens a wound, whatever the weapon is made
+		# of - bleeding is not an element, it is what a bad cut does.
+		monster.bleed_turns = maxi(monster.bleed_turns, Data.BLEED_TURNS)
+	var element := _fire_element(monster)
+	damage += element
 	audio.play("boss" if monster.is_boss else "hit")
 	monster.hp -= damage
 	var leech := player.buff_total("lifesteal")
@@ -747,6 +755,31 @@ func _attack_monster(monster) -> void:
 		return
 	_kill(monster)
 
+
+## Rolls the weapon's element for this swing and returns the extra
+## damage it did. The status it leaves behind is what makes an element
+## worth carrying: fire burns on, frost softens the next blow, lightning
+## buys a turn, venom drains.
+func _fire_element(monster) -> int:
+	var id: String = player.weapon_element
+	if id == "" or not Data.ELEMENTS.has(id):
+		return 0
+	var element: Dictionary = Data.ELEMENTS[id]
+	if rng.randf() >= float(element["chance"]):
+		return 0
+	var turns: int = int(element["turns"])
+	match element["status"]:
+		"burn":
+			monster.burn_turns = maxi(monster.burn_turns, turns)
+		"weaken":
+			monster.weaken_turns = maxi(monster.weaken_turns, turns)
+			monster.slow_turns = maxi(monster.slow_turns, turns)
+		"stun":
+			monster.stun_turns = maxi(monster.stun_turns, turns)
+		"poison":
+			monster.venom_turns = maxi(monster.venom_turns, turns)
+	say("%s: %s!" % [Data.ELEMENTS[id]["name"], monster.display_name])
+	return int(element["damage"])
 
 ## A monster dies: experience, the level-up that may follow, and the
 ## sprite. Anything that can kill goes through here - a thrown flask
@@ -778,6 +811,20 @@ func enemy_turn() -> void:
 		if not monster.is_alive():
 			continue
 		# Fire keeps burning whether the thing acts or not.
+		if monster.weaken_turns > 0:
+			monster.weaken_turns -= 1
+		if monster.venom_turns > 0:
+			monster.venom_turns -= 1
+			monster.hp -= Data.POISON_PER_TURN
+			if not monster.is_alive():
+				_kill(monster)
+				continue
+		if monster.bleed_turns > 0:
+			monster.bleed_turns -= 1
+			monster.hp -= Data.BLEED_DAMAGE
+			if not monster.is_alive():
+				_kill(monster)
+				continue
 		if monster.burn_turns > 0:
 			monster.burn_turns -= 1
 			monster.hp -= Data.BURN_DAMAGE
@@ -913,6 +960,7 @@ func _pick_up(cell: Vector2i) -> void:
 				player.weapon = w_type
 				player.weapon_rarity = w_rarity["id"]
 				player.weapon_extra = 0
+				player.weapon_element = Data.pick_element(depth, rng)
 				audio.play("equip")
 				say("Neue Waffe: %s +%d." % [player.weapon_name(), player.weapon_bonus()])
 			else:

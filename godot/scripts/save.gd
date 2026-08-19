@@ -40,6 +40,7 @@ static func write(game) -> void:
 			"awake": m.awake, "boss": m.is_boss, "mimic": m.is_mimic,
 			"burn": m.burn_turns, "slow": m.slow_turns, "stun": m.stun_turns,
 			"regen": m.regen, "elite": m.is_elite,
+			"weaken": m.weaken_turns, "venom": m.venom_turns, "bleed": m.bleed_turns,
 		})
 
 	var explored: Array = []
@@ -90,6 +91,7 @@ static func write(game) -> void:
 			"weapon": p.weapon, "armour": p.armour,
 			"weapon_rarity": p.weapon_rarity, "armour_rarity": p.armour_rarity,
 			"weapon_extra": p.weapon_extra, "armour_extra": p.armour_extra,
+			"weapon_element": p.weapon_element,
 			"level": p.level, "xp": p.xp, "xp_to_next": p.xp_to_next,
 			"potions": p.potions, "gold": p.gold, "kills": p.kills,
 			"facing": p.facing, "poison_turns": p.poison_turns,
