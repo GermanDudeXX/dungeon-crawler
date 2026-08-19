@@ -55,6 +55,7 @@ func _process(_delta: float) -> bool:
 	var depth_at: int = _game.depth
 	var started := Time.get_ticks_msec()
 	_check_audio()
+	_check_updater()
 	_check_dungeon()
 
 	# Seeded, so a failure can be looked at again instead of being a
@@ -1480,4 +1481,46 @@ func _check_shops() -> void:
 		_complain("Umschmieden kostet nichts")
 	_game.close_shop()
 	_settle()
+
+
+## The update button lives or dies on two small functions: pulling a
+## version out of a tag, and deciding which of two versions is newer.
+## Both are pure, so they can be checked without a network - and both
+## are the kind of thing that looks right and is not: a plain string
+## comparison says 0.10.0 is older than 0.9.0.
+func _check_updater() -> void:
+	var tags := {
+		"godot-0.9.0-publicdev": "0.9.0",
+		"godot-1.0.0": "1.0.0",
+		"godot-0.10.2-publicdev": "0.10.2",
+		"android-latest": "",
+		"godot-nightly": "",
+	}
+	for tag in tags:
+		var got := Updater.version_of(tag)
+		if got != tags[tag]:
+			_complain("Version falsch aus dem Etikett gelesen",
+				"%s -> '%s' statt '%s'" % [tag, got, tags[tag]])
+
+	var pairs := [
+		["0.9.0", "0.8.0", true],
+		["0.10.0", "0.9.0", true],
+		["1.0.0", "0.99.9", true],
+		["0.8.0", "0.8.0", false],
+		["0.8.0", "0.9.0", false],
+		["0.8.1", "0.8.0", true],
+		["0.8", "0.8.1", false],
+	]
+	for pair in pairs:
+		if Updater.newer(pair[0], pair[1]) != bool(pair[2]):
+			_complain("Versionsvergleich falsch",
+				"%s gegenüber %s" % [pair[0], pair[1]])
+
+	# And the build has to know its own number, or it compares against
+	# nothing and offers an update for ever.
+	var mine := Updater.running_version()
+	if mine == "0.0.0" or Updater.version_of("godot-" + mine) != mine:
+		_complain("Build kennt seine eigene Version nicht", mine)
+	if Updater.newer(mine, mine):
+		_complain("Build hält sich selbst für veraltet", mine)
 

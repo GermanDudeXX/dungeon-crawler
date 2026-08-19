@@ -91,6 +91,10 @@ var _difficulty_button: Button
 var _flash_button: Button
 var _record_label: Label
 var _hint_label: Label
+var _update_button: Button
+var _update_label: Label
+var updater: Updater
+var _update_url := ""
 var _awards_panel: PanelContainer
 var _awards_list: VBoxContainer
 var _drink_button: Button
@@ -120,6 +124,9 @@ func _ready() -> void:
 	rng.randomize()
 	settings = Settings.read()
 	earned = Achievements.read()
+	updater = Updater.new()
+	add_child(updater)
+	updater.checked.connect(_update_answer)
 	audio = Audio.new()
 	add_child(audio)
 	audio.enabled = settings["sound"]
@@ -2693,6 +2700,60 @@ func _check_awards() -> void:
 		_award("untouchable")
 
 
+## The update button and the line under it.
+##
+## There is no store behind this game: the APK is installed by hand once
+## and would otherwise stay at that version for ever. The button asks
+## GitHub what the newest build is; if there is one, it turns into a
+## download link and Android takes it from there.
+func _build_update(column: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 16)
+	column.add_child(row)
+
+	_update_button = Button.new()
+	_update_button.text = "NACH UPDATE SUCHEN"
+	_update_button.custom_minimum_size = Vector2(380, 54)
+	_update_button.add_theme_font_size_override("font_size", 24)
+	_update_button.pressed.connect(_update_pressed)
+	row.add_child(_update_button)
+
+	_update_label = Label.new()
+	_update_label.text = "Version %s" % Updater.running_version()
+	_update_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_update_label.add_theme_font_size_override("font_size", 22)
+	_update_label.add_theme_color_override("font_color", Color(0.72, 0.72, 0.80))
+	row.add_child(_update_label)
+
+
+func _update_pressed() -> void:
+	if _update_url != "":
+		# Second press, with an update waiting: hand the link to the
+		# browser. Downloading and installing an APK from inside the app
+		# needs a permission and a file provider; a link needs neither and
+		# cannot fail in a way that leaves no working install behind.
+		OS.shell_open(_update_url)
+		_update_label.text = "Download läuft im Browser - danach antippen und installieren."
+		return
+	_update_button.disabled = true
+	_update_label.text = "Suche ..."
+	updater.check()
+
+
+func _update_answer(available: bool, version: String, url: String, note: String) -> void:
+	_update_button.disabled = false
+	_update_label.text = note
+	if available:
+		_update_url = url
+		_update_button.text = "VERSION %s LADEN" % version
+		_update_label.add_theme_color_override("font_color", Color(0.55, 0.85, 0.98))
+	else:
+		_update_url = ""
+		_update_button.text = "NACH UPDATE SUCHEN"
+		_update_label.add_theme_color_override("font_color", Color(0.72, 0.72, 0.80))
+
+
 ## The list of achievements, won and unwon, on the title screen.
 ##
 ## The unwon ones are shown too, with what they ask for: a list that
@@ -2912,13 +2973,13 @@ func _build_settings(column: VBoxContainer) -> void:
 	column.add_child(row)
 
 	_sound_button = Button.new()
-	_sound_button.custom_minimum_size = Vector2(230, 62)
+	_sound_button.custom_minimum_size = Vector2(210, 54)
 	_sound_button.add_theme_font_size_override("font_size", 24)
 	_sound_button.pressed.connect(toggle_sound)
 	row.add_child(_sound_button)
 
 	_music_button = Button.new()
-	_music_button.custom_minimum_size = Vector2(230, 62)
+	_music_button.custom_minimum_size = Vector2(210, 54)
 	_music_button.add_theme_font_size_override("font_size", 24)
 	_music_button.pressed.connect(toggle_music)
 	row.add_child(_music_button)
@@ -2926,21 +2987,21 @@ func _build_settings(column: VBoxContainer) -> void:
 	# The difficulty sits with the other switches rather than on a page
 	# of its own: it is picked once, in the same breath as the sound.
 	_difficulty_button = Button.new()
-	_difficulty_button.custom_minimum_size = Vector2(320, 62)
+	_difficulty_button.custom_minimum_size = Vector2(300, 54)
 	_difficulty_button.add_theme_font_size_override("font_size", 24)
 	_difficulty_button.pressed.connect(cycle_difficulty)
 	row.add_child(_difficulty_button)
 
 	# The red wash is the one effect people ask to turn off.
 	_flash_button = Button.new()
-	_flash_button.custom_minimum_size = Vector2(260, 62)
+	_flash_button.custom_minimum_size = Vector2(240, 54)
 	_flash_button.add_theme_font_size_override("font_size", 24)
 	_flash_button.pressed.connect(toggle_flash)
 	row.add_child(_flash_button)
 
 	var awards := Button.new()
 	awards.text = "Erfolge"
-	awards.custom_minimum_size = Vector2(190, 62)
+	awards.custom_minimum_size = Vector2(170, 54)
 	awards.add_theme_font_size_override("font_size", 24)
 	awards.pressed.connect(open_awards)
 	row.add_child(awards)
@@ -3016,20 +3077,24 @@ func _build_title_panel() -> void:
 	var column := VBoxContainer.new()
 	column.set_anchors_preset(Control.PRESET_FULL_RECT)
 	column.alignment = BoxContainer.ALIGNMENT_CENTER
-	column.add_theme_constant_override("separation", 18)
+	# Everything on this screen has to fit into 720 logical pixels of
+	# height, on a phone as much as in a window. It stopped fitting the
+	# moment the update button arrived, and what falls off the bottom is
+	# invisible rather than scrollable.
+	column.add_theme_constant_override("separation", 8)
 	_title_panel.add_child(column)
 
 	var heading := Label.new()
 	heading.text = "DUNGEON CRAWLER"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	heading.add_theme_font_size_override("font_size", 56)
+	heading.add_theme_font_size_override("font_size", 44)
 	heading.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
 	column.add_child(heading)
 
 	var subtitle := Label.new()
 	subtitle.text = "Wähle deinen Helden"
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	subtitle.add_theme_font_size_override("font_size", 26)
+	subtitle.add_theme_font_size_override("font_size", 22)
 	column.add_child(subtitle)
 
 	# Only shown when there is something to continue. A dead run wipes
@@ -3039,7 +3104,7 @@ func _build_title_panel() -> void:
 	_continue_button.custom_minimum_size = Vector2(0, 78)
 	_continue_button.add_theme_font_size_override("font_size", 30)
 	_continue_button.pressed.connect(continue_run)
-	_continue_button.custom_minimum_size = Vector2(440, 78)
+	_continue_button.custom_minimum_size = Vector2(440, 66)
 	var centred := CenterContainer.new()
 	centred.add_child(_continue_button)
 	column.add_child(centred)
@@ -3057,7 +3122,7 @@ func _build_title_panel() -> void:
 
 		var portrait := TextureRect.new()
 		portrait.texture = load(CLASS_DIR + info["sprite"] + ".png")
-		portrait.custom_minimum_size = Vector2(0, 150)
+		portrait.custom_minimum_size = Vector2(0, 112)
 		portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		portrait.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -3070,20 +3135,21 @@ func _build_title_panel() -> void:
 		# Tall enough for three lines: the longest blurb wraps to three,
 		# and a card that grows pushes its own button out of line with
 		# the others.
-		blurb.custom_minimum_size = Vector2(280, 96)
-		blurb.add_theme_font_size_override("font_size", 20)
+		blurb.custom_minimum_size = Vector2(300, 88)
+		blurb.add_theme_font_size_override("font_size", 19)
 		blurb.add_theme_color_override("font_color", Color(0.80, 0.80, 0.86))
 		card.add_child(blurb)
 
 		var pick := Button.new()
 		pick.text = info["name"]
-		pick.custom_minimum_size = Vector2(0, 76)
-		pick.add_theme_font_size_override("font_size", 30)
+		pick.custom_minimum_size = Vector2(0, 62)
+		pick.add_theme_font_size_override("font_size", 26)
 		pick.add_theme_color_override("font_color", info["color"])
 		pick.pressed.connect(choose_class.bind(info["id"]))
 		card.add_child(pick)
 
 	_build_settings(column)
+	_build_update(column)
 
 	# The record so far, under the choice. A dead run leaves nothing
 	# else behind, and this is the line that makes the next one worth
