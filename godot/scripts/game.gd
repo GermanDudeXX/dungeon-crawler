@@ -88,6 +88,8 @@ var _flash: ColorRect
 var _minimap: TextureRect
 var _minimap_drawn := -1
 var _minimap_at := Vector2i(-1, -1)
+var _gliding := {}               ## sprite -> where it is walking to
+var _camera_to := Vector2.ZERO
 var _scroll_buttons: Array = []
 var _perk_panel: PanelContainer
 var _perk_buttons: Array = []
@@ -1528,9 +1530,11 @@ func paint() -> void:
 	for monster in monsters:
 		_place_monster(monster)
 
-	_stand_on(_hero_node, Vector2i(player.x, player.y), HERO_TILES)
+	_stand_on(_hero_node, Vector2i(player.x, player.y), HERO_TILES, true)
 	_hero_node.flip_h = player.facing < 0
-	_camera.position = Vector2(player.x, player.y) * TILE + Vector2(TILE, TILE) * 0.5
+	_camera_to = Vector2(player.x, player.y) * TILE + Vector2(TILE, TILE) * 0.5
+	if _camera.position.distance_to(_camera_to) > TILE * 6.0:
+		_camera.position = _camera_to
 
 
 func _tile_for(x: int, y: int) -> String:
@@ -1615,7 +1619,7 @@ func _place_prop(cell: Vector2i, art: String) -> void:
 ## rather than hanging from its top. Everything taller than one tile -
 ## monsters, shopkeepers, the hero - overlaps the wall behind it, which
 ## is exactly how the pygame build looks.
-func _stand_on(sprite: Sprite2D, cell: Vector2i, tiles: float) -> void:
+func _stand_on(sprite: Sprite2D, cell: Vector2i, tiles: float, glide := false) -> void:
 	var texture := sprite.texture
 	if texture == null:
 		return
@@ -1623,8 +1627,22 @@ func _stand_on(sprite: Sprite2D, cell: Vector2i, tiles: float) -> void:
 	var factor := (TILE * tiles) / height if height > 0.0 else 1.0
 	sprite.scale = Vector2(factor, factor)
 	var width := float(texture.get_width()) * factor
-	sprite.position = Vector2(cell) * TILE + Vector2(
+	var where := Vector2(cell) * TILE + Vector2(
 		(TILE - width) * 0.5, TILE - height * factor)
+	# Things that walk slide to their new cell over the next few
+	# frames; everything else is simply put down. A step that snaps
+	# reads as a teleport, and the game is nothing but steps.
+	if not glide:
+		_gliding.erase(sprite)
+		sprite.position = where
+		return
+	# Far enough that it cannot be a step - a new floor, a blink -
+	# so there is nothing to glide along.
+	if sprite.position.distance_to(where) > TILE * 3.0:
+		sprite.position = where
+		_gliding.erase(sprite)
+		return
+	_gliding[sprite] = where
 
 
 func _place_monster(monster) -> void:
@@ -1635,11 +1653,37 @@ func _place_monster(monster) -> void:
 		node.z_index = 2
 		add_child(node)
 		_actor_nodes[monster] = node
+
+		# A bar over the head, shown only once something has hurt it.
+		# Without it a fight is a guess: the log says numbers, but
+		# whether the thing in front of you is nearly dead is the one
+		# thing you actually want to know.
+		var bar := ColorRect.new()
+		bar.name = "health"
+		bar.color = Color(0.85, 0.25, 0.25)
+		bar.visible = false
+		node.add_child(bar)
 	var sprite: Sprite2D = _actor_nodes[monster]
 	_stand_on(sprite, monster.cell(),
-		MONSTER_TILES * (BOSS_SCALE if monster.is_boss else 1.0))
+		MONSTER_TILES * (BOSS_SCALE if monster.is_boss else 1.0), true)
 	sprite.flip_h = monster.x > player.x
 	sprite.visible = lit.has(monster.cell())
+	# Asleep is worth seeing: it is the difference between walking
+	# past something and waking it.
+	sprite.modulate = Color(0.62, 0.62, 0.78) if not monster.awake else Color.WHITE
+
+	var bar: ColorRect = sprite.get_node_or_null("health")
+	if bar != null:
+		var hurt: bool = monster.hp < monster.max_hp
+		bar.visible = hurt
+		if hurt:
+			# In the sprite's own coordinates, so the scale that makes a
+			# boss large makes its bar wide to match.
+			var span := float(sprite.texture.get_width())
+			var left := float(monster.hp) / float(maxi(1, monster.max_hp))
+			bar.position = Vector2(0, -6.0 / sprite.scale.y)
+			bar.size = Vector2(span * left, 3.0 / sprite.scale.y)
+			bar.color = Color(0.85, 0.25, 0.25) if left < 0.35 else Color(0.90, 0.62, 0.20)
 
 
 # --- the panel ------------------------------------------------------------
@@ -1888,6 +1932,25 @@ func _update_minimap() -> void:
 	image.set_pixelv(here, Color(1.0, 1.0, 1.0))
 	_minimap.texture = ImageTexture.create_from_image(image)
 
+
+## Moves everything that is mid-step a little closer to where it belongs.
+## Eight tiles a second: a step lands in an eighth of a second, which is
+## under the 0.16s the input allows between steps, so a held direction
+## still looks continuous and never falls behind.
+func _glide(delta: float) -> void:
+	if _camera != null and _camera.position != _camera_to:
+		_camera.position = _camera.position.move_toward(_camera_to, TILE * 10.0 * delta)
+	if _gliding.is_empty():
+		return
+	var speed := TILE * 8.0 * delta
+	for sprite in _gliding.keys():
+		if not is_instance_valid(sprite):
+			_gliding.erase(sprite)
+			continue
+		var where: Vector2 = _gliding[sprite]
+		sprite.position = sprite.position.move_toward(where, speed)
+		if sprite.position.is_equal_approx(where):
+			_gliding.erase(sprite)
 
 ## A number that floats off a cell and fades. The cheapest way to make a
 ## hit legible: without it the only sign that anything happened is a
@@ -2304,6 +2367,7 @@ func _button(label: String, where: Vector2, size: float, step: Vector2i) -> void
 
 
 func _process(delta: float) -> void:
+	_glide(delta)
 	_step_cooldown -= delta
 	if _held == Vector2i.ZERO:
 		for pair in [[KEY_D, Vector2i(1, 0)], [KEY_RIGHT, Vector2i(1, 0)],
