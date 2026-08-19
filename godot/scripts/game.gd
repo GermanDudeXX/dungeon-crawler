@@ -52,6 +52,7 @@ var traps := {}                 ## cell -> trap id
 var chest = null                ## {cell, mimic, opened}
 var shops: Array = []           ## {cell, kind}
 var stairs_locked := false
+var hazards := {}               ## cell -> a standing danger, in plain sight
 var decor := {}                  ## cell -> a sprite that is only scenery
 var shrine = null                ## the cell holding this floor's shrine, or null
 var shop_open = null            ## the shop the hero is standing in
@@ -269,6 +270,9 @@ func load_run() -> bool:
 	var up: Variant = save.get("up_stairs", null)
 	up_stairs = Vector2i(int(up[0]), int(up[1])) if up != null else Vector2i(player.x, player.y)
 	stairs_locked = bool(save["stairs_locked"])
+	hazards.clear()
+	for entry in save.get("hazards", []):
+		hazards[Vector2i(int(entry[0]), int(entry[1]))] = str(entry[2])
 	decor.clear()
 	for entry in save.get("decor", []):
 		decor[Vector2i(int(entry[0]), int(entry[1]))] = str(entry[2])
@@ -438,6 +442,15 @@ func _populate() -> void:
 			boss.is_boss = true
 			boss.awake = true
 			boss.display_name = "%s-König" % boss.display_name
+			# The floor everything has been building towards. Not a wall -
+			# the run can go deeper afterwards - but the one fight the
+			# whole descent is preparation for.
+			if depth == Data.SUPERBOSS_LEVEL:
+				boss.max_hp = int(boss.max_hp * Data.SUPERBOSS_MULT)
+				boss.hp = boss.max_hp
+				boss.power = int(boss.power * Data.SUPERBOSS_MULT)
+				boss.xp_reward *= 3
+				boss.display_name = "Der Herr der Tiefe"
 			boss.snap()
 			monsters.append(boss)
 			stairs_locked = true
@@ -489,11 +502,44 @@ func _populate() -> void:
 			chest = {"cell": chest_cell, "mimic": depth >= 3 and rng.randf() < 0.3,
 				"opened": false}
 
+	# Standing hazards: visible from the moment the tile is, so they are
+	# something to walk around rather than something to discover. That is
+	# the whole difference from a trap.
+	hazards.clear()
+	var hazard_kinds: Array = Data.hazards_for(depth)
+	if not hazard_kinds.is_empty():
+		for room in spawn_rooms:
+			if rng.randf() >= Data.HAZARD_CHANCE_PER_ROOM:
+				continue
+			var kind: String = hazard_kinds[rng.randi() % hazard_kinds.size()]
+			for _patch in rng.randi_range(1, 3):
+				var patch: Variant = _free_cell([room])
+				if patch != null:
+					hazards[patch] = kind
+
+	# Scenery. Most of it is only something to look at, but a crate or a
+	# column is a solid object and reads as one, so those are walls. A
+	# wall dropped in a one-tile corridor can seal the stairs off, so each
+	# one is put down, checked, and taken back if the floor stopped being
+	# whole.
+	decor.clear()
+	for _piece in range(4 + depth / 2):
+		var spot: Variant = _free_cell(spawn_rooms)
+		if spot == null:
+			continue
+		var piece: String = DECOR[rng.randi() % DECOR.size()]
+		decor[spot] = piece
+		if piece in Data.BLOCKING_DECOR and _seals_something():
+			decor.erase(spot)
+
+
 	# A shrine, at most one, stepped on like a trap - but this one can
 	# be worth stepping on.
 	shrine = null
 	if depth >= 2 and rng.randf() < Data.SHRINE_CHANCE:
-		shrine = _free_cell(spawn_rooms)
+		# Only where the hero can actually walk: the crates are already
+		# standing by now, and one of them may have closed a room.
+		shrine = _free_cell(spawn_rooms, reachable_from(Vector2i(player.x, player.y)))
 
 	# Traps, hidden until stepped on.
 	var trap_kinds: Array = Data.TRAPS.keys()
@@ -554,6 +600,29 @@ func _populate() -> void:
 		items.append(loot)
 
 
+## Whether the floor, as it stands right now, has cut something off from
+## the hero. Asked after every solid piece of scenery is put down.
+##
+## Checking only the stairs was not enough: a crate can seal the chest
+## into a dead-end and leave the floor perfectly finishable, which is
+## how a run loses its treasure without anything looking wrong.
+func _seals_something() -> bool:
+	var open_cells := reachable_from(Vector2i(player.x, player.y))
+	if not open_cells.has(stairs):
+		return true
+	if chest != null and not open_cells.has(chest["cell"]):
+		return true
+	if shrine != null and not open_cells.has(shrine):
+		return true
+	for shop in shops:
+		if not open_cells.has(shop["cell"]):
+			return true
+	for item in items:
+		if not open_cells.has(item["cell"]):
+			return true
+	return false
+
+
 ## A free cell in one of these rooms. `within`, when given, is the set
 ## of cells the hero can actually walk to - loot dropped outside it is
 ## loot nobody ever picks up, which is how a scroll ended up sealed
@@ -589,7 +658,7 @@ func reachable_from(start: Vector2i, blocked := {}) -> Dictionary:
 			var step: Vector2i = cell + offset
 			if seen.has(step) or blocked.has(step):
 				continue
-			if not Dungeon.is_walkable(grid, step.x, step.y):
+			if not Dungeon.is_walkable(grid, step.x, step.y) or blocks(step):
 				continue
 			seen[step] = true
 			stack.append(step)
@@ -633,7 +702,7 @@ func taken(cell: Vector2i) -> bool:
 		return true
 	if shrine != null and shrine == cell:
 		return true
-	if decor.has(cell):
+	if decor.has(cell) or hazards.has(cell):
 		return true
 	return shop_at(cell) != null
 
@@ -721,12 +790,15 @@ func try_move(step: Vector2i) -> void:
 	elif target == stairs and stairs_locked and boss_alive():
 		say("Der Weg nach unten ist verriegelt. Der Boss hält den Schlüssel.")
 		return
+	elif blocks(target):
+		return
 	elif Dungeon.is_walkable(grid, target.x, target.y):
 		player.x = target.x
 		player.y = target.y
 		_pick_up(target)
 		_open_chest(target)
 		_spring_trap(target)
+		_step_in_hazard(target)
 		_touch_shrine(target)
 		if dead:
 			return
@@ -752,6 +824,12 @@ func try_move(step: Vector2i) -> void:
 	recompute_fov()
 	paint()
 
+
+## Whether something standing on this cell closes it to walking. Kept
+## apart from Dungeon.is_walkable because the map is the map: what is
+## put on top of it changes from floor to floor.
+func blocks(cell: Vector2i) -> bool:
+	return decor.get(cell, "") in Data.BLOCKING_DECOR
 
 func _attack_monster(monster) -> void:
 	var damage: int = maxi(1, int(round((player.power() - monster.defense_now())
@@ -897,7 +975,7 @@ func _step_monster(monster, step: Vector2i) -> void:
 			monster.cell() + Vector2i(0, step.y)]:
 		if candidate == monster.cell():
 			continue
-		if not Dungeon.is_walkable(grid, candidate.x, candidate.y):
+		if not Dungeon.is_walkable(grid, candidate.x, candidate.y) or blocks(candidate):
 			continue
 		# Never onto the hero: a monster sharing your tile cannot be
 		# attacked at all, since attacks are aimed at the tile you walk
@@ -1106,6 +1184,34 @@ func _spring_trap(cell: Vector2i) -> void:
 		_show_death()
 		say("Die Falle bringt dich um. Tippe NEU.")
 
+
+## A hazard the hero walked into anyway. It was in plain sight - that is
+## the difference from a trap - so this is a decision that went badly,
+## not an ambush.
+func _step_in_hazard(cell: Vector2i) -> void:
+	if not hazards.has(cell) or dead:
+		return
+	var hazard: Dictionary = Data.HAZARDS[hazards[cell]]
+	if hazard.get("one_shot", false):
+		hazards.erase(cell)
+	var damage: int = int(hazard["damage"])
+	player.hp -= damage
+	_damage_number(cell, "-%d" % damage, Color(1.0, 0.45, 0.20))
+	_hurt_flash()
+	_shake(2.0)
+	audio.play("trap")
+	say("%s! %d Schaden." % [hazard["name"], damage])
+	if hazard.has("burn"):
+		player.poison_turns = maxi(player.poison_turns, int(hazard["burn"]))
+	if hazard.has("bleed"):
+		player.bleed_turns = maxi(player.bleed_turns, int(hazard["bleed"]))
+	if player.hp <= 0:
+		player.hp = 0
+		dead = true
+		Save.wipe()
+		audio.play("death")
+		_show_death()
+		say("Du stirbst auf Ebene %d." % depth)
 
 func _open_chest(cell: Vector2i) -> void:
 	if chest == null or chest["opened"] or chest["cell"] != cell:
@@ -1519,6 +1625,8 @@ func paint() -> void:
 	if chest != null:
 		_place_prop(chest["cell"], "chest_empty_open_anim_f2" if chest["opened"]
 			else "chest_full_open_anim_f0")
+	for cell in hazards:
+		_place_prop(cell, Data.HAZARDS[hazards[cell]]["tile"])
 	for cell in decor:
 		_place_prop(cell, decor[cell])
 	if shrine != null:

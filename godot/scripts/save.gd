@@ -57,6 +57,10 @@ static func write(game) -> void:
 			"kind": item["kind"], "amount": item.get("amount", 0),
 			"potion": item.get("potion", ""), "scroll": item.get("scroll", "")})
 
+	var hazards: Array = []
+	for cell in game.hazards:
+		hazards.append([cell.x, cell.y, game.hazards[cell]])
+
 	var decor: Array = []
 	for cell in game.decor:
 		decor.append([cell.x, cell.y, game.decor[cell]])
@@ -78,6 +82,7 @@ static func write(game) -> void:
 		"stairs_locked": game.stairs_locked,
 		"shrine": null if game.shrine == null else [game.shrine.x, game.shrine.y],
 		"decor": decor,
+		"hazards": hazards,
 		"explored": explored,
 		"monsters": monsters,
 		"items": items,

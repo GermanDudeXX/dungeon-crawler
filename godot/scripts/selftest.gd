@@ -76,6 +76,7 @@ func _process(_delta: float) -> bool:
 	_check_up_stairs()
 	_check_boss_phases()
 	_check_classes()
+	_check_superboss()
 
 	for turn in _turns:
 		if _game.dead:
@@ -345,7 +346,7 @@ func _route(target: Vector2i) -> Variant:
 			var step: Vector2i = cell + offset
 			if came.has(step):
 				continue
-			if not Dungeon.is_walkable(_game.grid, step.x, step.y):
+			if not Dungeon.is_walkable(_game.grid, step.x, step.y) or _game.blocks(step):
 				continue
 			# There is no getting past a shopkeeper, so a route may not
 			# plan through one - the same reason they may not stand in a
@@ -431,8 +432,8 @@ func _fingerprint() -> String:
 		"Waffe=%s(%d) Ruestung=%s(%d) Schild=%d Bluten=%d" % [
 			p.weapon_name(), p.weapon_bonus(), p.armour_name(), p.armour_bonus(),
 			p.shield, p.bleed_turns],
-		"Traenke=%s gewaehlt=%s" % [str(p.potion_counts), p.selected_potion],
-		"Buffs=%s Rollen=%s" % [str(p.buffs), str(p.scrolls)],
+		"Traenke=%s gewaehlt=%s" % [_stable(p.potion_counts), p.selected_potion],
+		"Buffs=%s Rollen=%s" % [_stable(p.buffs), _stable(p.scrolls)],
 		"Schrein=%s" % str(_game.shrine),
 		"Angriff=%d Verteidigung=%d Krit=%.3f Minderung=%.3f Gold x%.2f" % [
 			p.base_power, p.base_defense, p.bonus_crit, p.damage_reduction, p.gold_mult],
@@ -545,6 +546,10 @@ func _check_placement() -> void:
 		things.append([_game.shrine, "Schrein"])
 	for cell in _game.traps:
 		things.append([cell, "Falle"])
+	for cell in _game.hazards:
+		things.append([cell, "Gefahr"])
+	for cell in _game.decor:
+		things.append([cell, "Dekor"])
 	for item in _game.items:
 		things.append([item["cell"], "Beute (%s)" % item["kind"]])
 	for entry in things:
@@ -957,4 +962,50 @@ func _check_classes() -> void:
 			_complain("zwei Klassen starten identisch",
 				"%s und %s" % [id, seen_hands[hands[id]]])
 		seen_hands[hands[id]] = id
+
+
+## A dictionary as text, in a fixed order. JSON does not promise to give
+## keys back in the order they went in, so comparing str(dict) across a
+## save and a load reports a difference where there is none - it did,
+## and the "difference" was two potions swapping places.
+func _stable(values: Dictionary) -> String:
+	var keys: Array = values.keys()
+	keys.sort()
+	var parts: Array[String] = []
+	for key in keys:
+		parts.append("%s=%s" % [key, values[key]])
+	return "{%s}" % ", ".join(parts)
+
+
+## Ebene 25 has to actually hold the thing it promises, and it has to be
+## worse than the boss two floors above it - otherwise the deepest fight
+## in the game is an ordinary one with a name.
+func _check_superboss() -> void:
+	_settle()
+	if not Data.has_boss(Data.SUPERBOSS_LEVEL):
+		_complain("Ebene %d hat gar keinen Boss" % Data.SUPERBOSS_LEVEL)
+		return
+	# The boss floor just above, whichever that is - boss floors are
+	# every third one, so "three floors up" is not one of them.
+	var previous := Data.SUPERBOSS_LEVEL - 1
+	while previous > 1 and not Data.has_boss(previous):
+		previous -= 1
+	var strengths := {}
+	for level in [previous, Data.SUPERBOSS_LEVEL]:
+		_game.depth = level
+		_game.new_level()
+		var found := 0
+		for m in _game.monsters:
+			if m.is_boss:
+				found += 1
+				strengths[level] = m.max_hp
+		if found == 0:
+			_complain("Bossebene ohne Boss", "Ebene %d" % level)
+		if found > 1:
+			_complain("mehr als ein Boss auf einer Ebene", "Ebene %d: %d" % [level, found])
+	if strengths.has(Data.SUPERBOSS_LEVEL) and strengths.has(previous):
+		if strengths[Data.SUPERBOSS_LEVEL] <= strengths[previous]:
+			_complain("Superboss ist nicht stärker",
+				"%d gegen %d Leben auf Ebene %d" % [strengths[Data.SUPERBOSS_LEVEL],
+				strengths[previous], previous])
 

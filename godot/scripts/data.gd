@@ -137,6 +137,10 @@ const POTION_COST := 18
 
 
 static func has_boss(level: int) -> bool:
+	# 25 is not a multiple of three, so the floor the whole descent
+	# builds towards would otherwise have had no boss on it at all.
+	if level == SUPERBOSS_LEVEL:
+		return true
 	return level >= BOSS_FROM_LEVEL and level % BOSS_EVERY == 0
 
 # --- Heldenklassen --------------------------------------------------------
@@ -548,4 +552,35 @@ static func boss_phase(hp: int, max_hp: int) -> Dictionary:
 		if ratio <= float(phase["at"]):
 			current = phase
 	return current
+
+
+# --- Gefahren -------------------------------------------------------------
+# Unlike traps, these are visible from the start: they are meant to be
+# walked around, not discovered. Values from constants.py HAZARD_TYPES.
+const HAZARDS := {
+	"lava": {"name": "Lavariss", "tile": "wall_goo", "damage": 8, "burn": 3, "min_level": 3},
+	"collapse": {"name": "Loch", "tile": "hole", "damage": 12, "min_level": 4,
+		"one_shot": true},
+	"spikes": {"name": "Stachelboden", "tile": "floor_spikes_anim_f2", "damage": 6,
+		"bleed": 2, "min_level": 3},
+}
+const HAZARD_CHANCE_PER_ROOM := 0.25
+
+# Decoration you cannot walk through. A crate or a stone column is a
+# solid object and reads as one; a skull on the floor does not, so it
+# stays walkable. Placing these needs care - one dropped in a one-tile
+# corridor can seal the stairs off entirely.
+const BLOCKING_DECOR := ["crate", "column"]
+
+# The run's final challenge. Reachable, but a long way down.
+const SUPERBOSS_LEVEL := 25
+const SUPERBOSS_MULT := 3.0
+
+
+static func hazards_for(level: int) -> Array:
+	var out: Array = []
+	for id in HAZARDS:
+		if int(HAZARDS[id]["min_level"]) <= level:
+			out.append(id)
+	return out
 
