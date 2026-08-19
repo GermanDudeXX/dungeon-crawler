@@ -114,6 +114,7 @@ var _awards_list: VBoxContainer
 var _kin_panel: PanelContainer
 var _kin_list: VBoxContainer
 var _drink_button: Button
+var _shoot_button: Button
 var _bag_panel: PanelContainer
 var _bag_list: VBoxContainer
 var _bag_stats: Label
@@ -283,6 +284,7 @@ func load_run() -> bool:
 	player.facing = int(p["facing"])
 	player.poison_turns = int(p["poison_turns"])
 	player.webbed = int(p.get("webbed", 0))
+	player.shot_cooldown = int(p.get("shot_cooldown", 0))
 	player.bonus_crit = float(p.get("bonus_crit", 0.0))
 	player.damage_reduction = float(p.get("damage_reduction", 0.0))
 	player.gold_mult = float(p.get("gold_mult", 1.0))
@@ -481,6 +483,10 @@ func new_level() -> void:
 	_clear_level_nodes()
 
 	_hero_node.texture = load(CLASS_DIR + Data.class_by_id(player.hero_class)["sprite"] + ".png")
+	# The ranger shares the rogue's painting - there are three hero
+	# sprites and four classes - so it wears its own colour to tell the
+	# two apart at a glance.
+	_hero_node.modulate = Data.class_by_id(player.hero_class).get("shade", Color.WHITE)
 	var start: Vector2i = rooms[0].center() if not rooms.is_empty() else Vector2i(1, 1)
 	player.x = start.x
 	player.y = start.y
@@ -1798,7 +1804,11 @@ func _pick_up(cell: Vector2i) -> void:
 			# A find is compared against what is in hand, not against its own
 			# tier: a Fine Dagger can beat a plain Short Sword, and the sale
 			# price is what stops a worse one from being a dead pickup.
-			var w_type: int = mini(Data.WEAPONS.size() - 1, 1 + depth / 2)
+			# Whoever is carrying a bow finds bows. Without this rule the
+			# first axe on the floor quietly ends the ranger: it has the
+			# bigger number, so it wins the comparison, and the character
+			# is gone without anyone deciding anything.
+			var w_type: int = _weapon_find()
 			var w_rarity: Dictionary = _roll_rarity()
 			var w_value: int = int(round(float(Data.WEAPONS[w_type]["bonus"])
 				* float(w_rarity["mult"])))
@@ -1837,6 +1847,8 @@ func _pick_up(cell: Vector2i) -> void:
 ## regeneration they grant, and bleeding. Called once per player turn,
 ## never per frame.
 func _tick_buffs() -> void:
+	if player.shot_cooldown > 0:
+		player.shot_cooldown -= 1
 	var regen := int(player.buff_total("regen"))
 	for id in player.buffs.keys():
 		var left: int = int(player.buffs[id]) - 1
@@ -1870,6 +1882,27 @@ func _roll_rarity() -> Dictionary:
 	if Data.RARITIES.find(second) > Data.RARITIES.find(rolled):
 		return second
 	return rolled
+
+
+## The kind of weapon this depth drops - in the style the hero already
+## fights in, so a find is an upgrade rather than a change of character.
+func _weapon_find() -> int:
+	var wants_reach: bool = player.reach() > 0
+	var best := 0
+	for i in Data.WEAPONS.size():
+		var entry: Dictionary = Data.WEAPONS[i]
+		if (int(entry.get("reach", 0)) > 0) != wants_reach:
+			continue
+		# Deeper floors unlock better ones, the same curve as before.
+		if i > 1 + depth / 2:
+			continue
+		if int(entry["bonus"]) >= int(Data.WEAPONS[best]["bonus"]):
+			best = i
+	if best == 0 and wants_reach:
+		# Nothing ranged unlocked yet: leave the bow alone rather than
+		# handing out fists.
+		return player.weapon
+	return maxi(best, 1)
 
 
 ## Regeneration ticks on the turn, not the frame - a hero who heals
@@ -2452,6 +2485,76 @@ func _blink() -> void:
 	say("Ein Blinzeln - und du stehst woanders.")
 
 
+## Looses an arrow at the nearest thing you can see.
+##
+## Aimed for you, like the scrolls are: there is no cursor on a phone,
+## and a targeting mode for one attack would be more interface than the
+## attack is worth. It costs a turn like any other action, hits for less
+## than a swing, and needs a moment before the next one - otherwise a bow
+## is simply a sword that also works at range.
+func shoot() -> void:
+	if dead or choosing or shop_open != null or player.reach() <= 0:
+		return
+	if _bag_panel != null and _bag_panel.visible:
+		return
+	if player.pending_perks > 0 and _perk_panel != null and _perk_panel.visible:
+		return
+	if player.shot_cooldown > 0:
+		audio.play("denied")
+		say("Der Bogen ist noch nicht bereit.")
+		return
+
+	var here := Vector2i(player.x, player.y)
+	var target = null
+	var closest := 1 << 30
+	for monster in monsters:
+		if not monster.is_alive() or not lit.has(monster.cell()):
+			continue
+		var away: int = absi(monster.x - here.x) + absi(monster.y - here.y)
+		if away > player.reach() or away >= closest:
+			continue
+		if not _line_clear(here, monster.cell()):
+			continue
+		closest = away
+		target = monster
+	if target == null:
+		audio.play("denied")
+		say("Nichts in Reichweite.")
+		return
+
+	var damage: int = maxi(1, int(round(
+		(player.power() - target.defense_now()) * Data.SHOT_DAMAGE_MULT)))
+	var crit := rng.randf() < player.crit_chance()
+	if crit:
+		damage *= Data.CRIT_MULT
+	damage += _fire_element(target)
+	target.hp -= damage
+	target.awake = true
+	if target.x != player.x:
+		player.facing = 1 if target.x > player.x else -1
+	audio.play("hit")
+	_damage_number(target.cell(), str(damage),
+		Color(1.0, 0.92, 0.35) if crit else Color(0.85, 0.95, 1.0))
+	_sparks(target.cell(), Color(0.85, 0.95, 1.0), 5)
+	say("Dein Schuss trifft %s für %d." % [target.display_name, damage])
+	if not target.is_alive():
+		_kill(target)
+
+	_tick_poison()
+	_tick_regen()
+	_tick_buffs()
+	# Set after the turn has been ticked, not before: everything that
+	# runs on turns runs inside this call, so a cooldown set earlier is
+	# counted down again immediately and the bow is never actually
+	# busy.
+	player.shot_cooldown = Data.SHOT_COOLDOWN
+	if dead:
+		return
+	enemy_turn()
+	recompute_fov()
+	paint()
+
+
 ## Stand still for a turn.
 ##
 ## Sounds like nothing and is not: regeneration, poison, burning and
@@ -2790,6 +2893,16 @@ func _build_hud() -> void:
 	swap.pressed.connect(cycle_potion)
 	_play_ui.add_child(swap)
 
+	_shoot_button = Button.new()
+	_shoot_button.text = "SCHIESSEN"
+	_shoot_button.custom_minimum_size = Vector2(size * 1.6, size * 0.7)
+	_shoot_button.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_shoot_button.position = Vector2(-pad - size * 1.6, -pad - size * 1.65)
+	_shoot_button.add_theme_font_size_override("font_size", 24)
+	_shoot_button.pressed.connect(shoot)
+	_shoot_button.visible = false
+	_play_ui.add_child(_shoot_button)
+
 	var rest := Button.new()
 	rest.text = "WARTEN"
 	rest.custom_minimum_size = Vector2(size * 1.2, size * 0.6)
@@ -3059,6 +3172,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			cycle_potion()
 		KEY_SPACE, KEY_PERIOD:
 			wait_a_turn()
+		KEY_F:
+			shoot()
 		KEY_1, KEY_2, KEY_3:
 			var at: int = key - KEY_1
 			if at < Data.SCROLLS.size():
@@ -3651,10 +3766,15 @@ func _show_death() -> void:
 ## pause button: that is where you already are before a run starts, and
 ## the sound is the first thing anyone turns off.
 func _build_settings(column: VBoxContainer) -> void:
+	# Two rows: six buttons in one line run off the edge of a phone.
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 20)
+	row.add_theme_constant_override("separation", 14)
 	column.add_child(row)
+	var row_two := HBoxContainer.new()
+	row_two.alignment = BoxContainer.ALIGNMENT_CENTER
+	row_two.add_theme_constant_override("separation", 14)
+	column.add_child(row_two)
 
 	_sound_button = Button.new()
 	_sound_button.custom_minimum_size = Vector2(210, 54)
@@ -3688,20 +3808,20 @@ func _build_settings(column: VBoxContainer) -> void:
 	awards.custom_minimum_size = Vector2(170, 54)
 	awards.add_theme_font_size_override("font_size", 24)
 	awards.pressed.connect(open_awards)
-	row.add_child(awards)
+	row_two.add_child(awards)
 
 	var kin := Button.new()
 	kin.text = "Bestiarium"
 	kin.custom_minimum_size = Vector2(210, 54)
 	kin.add_theme_font_size_override("font_size", 24)
 	kin.pressed.connect(open_kin)
-	row.add_child(kin)
+	row_two.add_child(kin)
 
 	_pad_button = Button.new()
 	_pad_button.custom_minimum_size = Vector2(250, 54)
 	_pad_button.add_theme_font_size_override("font_size", 24)
 	_pad_button.pressed.connect(toggle_pad)
-	row.add_child(_pad_button)
+	row_two.add_child(_pad_button)
 	_refresh_settings()
 
 
@@ -3831,18 +3951,20 @@ func _build_title_panel() -> void:
 
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 26)
+	row.add_theme_constant_override("separation", 14)
 	column.add_child(row)
 
 	for info in Data.CLASSES:
 		var card := VBoxContainer.new()
-		card.custom_minimum_size = Vector2(300, 0)
+		# Four heroes have to fit across 1280 logical pixels, so the cards
+		# are narrower than they were with three.
+		card.custom_minimum_size = Vector2(224, 0)
 		card.add_theme_constant_override("separation", 8)
 		row.add_child(card)
 
 		var portrait := TextureRect.new()
 		portrait.texture = load(CLASS_DIR + info["sprite"] + ".png")
-		portrait.custom_minimum_size = Vector2(0, 112)
+		portrait.custom_minimum_size = Vector2(0, 96)
 		portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		portrait.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -3855,8 +3977,8 @@ func _build_title_panel() -> void:
 		# Tall enough for three lines: the longest blurb wraps to three,
 		# and a card that grows pushes its own button out of line with
 		# the others.
-		blurb.custom_minimum_size = Vector2(300, 88)
-		blurb.add_theme_font_size_override("font_size", 19)
+		blurb.custom_minimum_size = Vector2(224, 96)
+		blurb.add_theme_font_size_override("font_size", 17)
 		blurb.add_theme_color_override("font_color", Color(0.80, 0.80, 0.86))
 		card.add_child(blurb)
 

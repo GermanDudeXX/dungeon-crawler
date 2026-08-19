@@ -48,6 +48,7 @@ func _process(_delta: float) -> bool:
 	var played := {}
 	var perks := 0
 	var shopped := false
+	var shots := 0
 	var drunk := {}
 	var killers := {}
 	var deaths_at := {}
@@ -83,6 +84,7 @@ func _process(_delta: float) -> bool:
 	_check_quests()
 	_check_more()
 	_check_bestiary_and_waiting()
+	_check_bow()
 	_check_elements()
 	_check_up_stairs()
 	_check_boss_phases()
@@ -161,6 +163,21 @@ func _process(_delta: float) -> bool:
 					_game.player.selected_potion = "healing" if _game.player.potion_counts.has("healing") else _game.player.selected_potion
 				drunk[_game.player.selected_potion] = true
 				_game.drink()
+
+		# With a bow in hand, shooting first is what the weapon is for.
+		if _game.player.reach() > 0 and _game.player.shot_cooldown <= 0:
+			var in_range := false
+			for m in _game.monsters:
+				if not m.is_alive() or not _game.lit.has(m.cell()):
+					continue
+				if absi(m.x - _game.player.x) + absi(m.y - _game.player.y) <= _game.player.reach():
+					in_range = true
+					break
+			if in_range:
+				shots += 1
+				_game.shoot()
+				_check("Schuss in Zug %d" % turn)
+				continue
 
 		# A level-up asks for a perk before anything else can happen.
 		if _game.player.pending_perks > 0:
@@ -334,7 +351,8 @@ func _process(_delta: float) -> bool:
 	for what in seen:
 		parts.append("%d %s" % [seen[what], what])
 	print("  angefasst: " + ", ".join(parts))
-	print("  gespielt: %s, %d Gaben gewählt" % [", ".join(played.keys()), perks])
+	print("  gespielt: %s, %d Gaben gewählt, %d Schüsse" % [
+		", ".join(played.keys()), perks, shots])
 	print("  getrunken: %d von %d Trankarten" % [drunk.size(), Data.POTIONS.size()])
 	var depths: Array = deaths_at.keys()
 	depths.sort()
@@ -2154,4 +2172,96 @@ func _check_score() -> void:
 	for field in ["doors", "quests", "best_score"]:
 		if not record.has(field):
 			_complain("Zähler fehlt in der Statistik", field)
+
+
+## The bow, and the class built around it.
+##
+## A ranged attack is the one thing in the game that can hit something
+## that cannot hit back, so it is worth checking that it costs a turn,
+## that it needs a moment between shots, and that it refuses when there
+## is nothing in range - otherwise it is not a bow, it is a button that
+## kills everything.
+func _check_bow() -> void:
+	_settle()
+	var p = _game.player
+
+	# The class exists and starts with something that reaches.
+	var ranger = Entities.Player.new("ranger", "normal")
+	if ranger.reach() <= 0:
+		_complain("Jäger startet ohne Fernwaffe")
+	var warrior = Entities.Player.new("warrior", "normal")
+	if warrior.reach() > 0:
+		_complain("Krieger startet mit einer Fernwaffe")
+
+	_game.depth = 4
+	_game.new_level()
+	var spot: Variant = _open_spot()
+	if spot == null:
+		return
+	p.weapon = 2
+	p.weapon_rarity = "common"
+	p.weapon_extra = 0
+	p.weapon_element = ""
+	p.shot_cooldown = 0
+	p.max_hp = 300
+	p.hp = 300
+	p.x = spot.x
+	p.y = spot.y
+	if p.reach() <= 0:
+		_complain("Kurzbogen reicht nicht weit")
+		return
+
+	# Nothing in range: the shot is refused rather than wasted.
+	for other in _game.monsters.duplicate():
+		_game.monsters.erase(other)
+	_game.recompute_fov()
+	p.buffs["strength"] = 5
+	_game.shoot()
+	if int(p.buffs.get("strength", 0)) != 5:
+		_complain("Schuss ins Leere kostet trotzdem einen Zug")
+
+	# Something in range, in the open: it takes the hit from a distance.
+	var mark = Entities.Monster.new("orc", 8.0, "easy")
+	mark.x = spot.x + 3
+	mark.y = spot.y
+	if not Dungeon.is_walkable(_game.grid, mark.x, mark.y):
+		mark.x = spot.x
+		mark.y = spot.y + 3
+	if not Dungeon.is_walkable(_game.grid, mark.x, mark.y):
+		_game.monsters.erase(mark)
+		return
+	mark.snap()
+	_game.monsters.append(mark)
+	_game.recompute_fov()
+	var before: int = mark.hp
+	p.buffs["strength"] = 5
+	_game.shoot()
+	if mark.is_alive() and mark.hp >= before:
+		_complain("Schuss richtet nichts an")
+	if int(p.buffs.get("strength", 0)) != 4:
+		_complain("Schuss kostet keinen Zug")
+	if p.shot_cooldown <= 0:
+		_complain("Bogen ist sofort wieder bereit")
+
+	# And the second shot has to wait.
+	var after_first: int = mark.hp
+	_game.shoot()
+	if mark.is_alive() and mark.hp < after_first:
+		_complain("Bogen schießt trotz Wartezeit")
+	p.buffs.clear()
+	_game.monsters.erase(mark)
+
+	# A bow-carrier finds bows: the first axe on the floor must not end
+	# the character by accident.
+	p.weapon = 2
+	for level in [3, 6, 9, 12]:
+		_game.depth = level
+		if int(Data.WEAPONS[_game._weapon_find()].get("reach", 0)) <= 0:
+			_complain("Bogenträger findet Schwerter", "Ebene %d" % level)
+	p.weapon = 3
+	for level in [3, 6, 9, 12]:
+		_game.depth = level
+		if int(Data.WEAPONS[_game._weapon_find()].get("reach", 0)) > 0:
+			_complain("Nahkämpfer findet Bögen", "Ebene %d" % level)
+	_settle()
 

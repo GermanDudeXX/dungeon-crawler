@@ -116,7 +116,7 @@ static func write(game) -> void:
 			"weapon_element": p.weapon_element,
 			"level": p.level, "xp": p.xp, "xp_to_next": p.xp_to_next,
 			"potions": p.potions, "gold": p.gold, "kills": p.kills,
-			"facing": p.facing, "poison_turns": p.poison_turns, "webbed": p.webbed,
+			"facing": p.facing, "poison_turns": p.poison_turns, "webbed": p.webbed, "shot_cooldown": p.shot_cooldown,
 			"bonus_crit": p.bonus_crit, "damage_reduction": p.damage_reduction,
 			"gold_mult": p.gold_mult, "xp_mult": p.xp_mult,
 			"potion_mult": p.potion_mult, "scholar": p.scholar,

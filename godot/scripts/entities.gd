@@ -50,6 +50,7 @@ class Player extends Actor:
 	var facing := 1
 	var poison_turns := 0
 	var webbed := 0                 ## turns spent tearing free
+	var shot_cooldown := 0          ## turns before the bow is ready again
 	var bonus_crit := 0.0
 	var damage_reduction := 0.0
 	var gold_mult := 1.0
@@ -109,6 +110,12 @@ class Player extends Actor:
 
 	## The weapon's own contribution: its type's bonus, multiplied by
 	## the rarity it rolled, plus whatever the smith has added since.
+	## How far the equipped weapon reaches, or zero for one that only
+	## swings.
+	func reach() -> int:
+		return int(Data.WEAPONS[weapon].get("reach", 0))
+
+
 	func weapon_bonus() -> int:
 		var base: float = float(Data.WEAPONS[weapon]["bonus"])
 		var mult: float = float(Data.rarity_by_id(weapon_rarity)["mult"])

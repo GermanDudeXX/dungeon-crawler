@@ -107,14 +107,22 @@ const SPAWN_WEIGHTS := {
 	"widow_spider": [9, 0.9],
 }
 
+# Weapons in the order they get better; "reach" marks the ones that can
+# be fired across the room. A bow hits for less than a blade of the same
+# tier - what it buys is the first hit, and sometimes the only one.
 const WEAPONS := [
 	{"name": "Fäuste", "bonus": 0, "cost": 0},
 	{"name": "Dolch", "bonus": 2, "cost": 12},
+	{"name": "Kurzbogen", "bonus": 3, "cost": 26, "reach": 5},
 	{"name": "Kurzschwert", "bonus": 4, "cost": 30},
 	{"name": "Streitaxt", "bonus": 6, "cost": 60},
+	{"name": "Jagdbogen", "bonus": 7, "cost": 95, "reach": 6},
 	{"name": "Kriegshammer", "bonus": 9, "cost": 110},
 	{"name": "Klinge der Tiefe", "bonus": 13, "cost": 200},
+	{"name": "Bogen der Tiefe", "bonus": 11, "cost": 190, "reach": 7},
 ]
+const SHOT_DAMAGE_MULT := 0.75      ## a shot lands for less than a swing
+const SHOT_COOLDOWN := 1            ## turns between shots
 
 const ARMOURS := [
 	{"name": "Keine", "bonus": 0, "cost": 0},
@@ -252,6 +260,17 @@ const CLASSES := [
 		"scrolls": {"fireball": 2, "reveal": 1},
 		"weapon": 0, "armour": 0, "element": "fire",
 		"blurb": "Schwach im Nahkampf, aber Rollen und Elemente gehorchen dir.",
+	},
+	{
+		"id": "ranger", "name": "Jäger", "sprite": "elf_m_idle_anim_f0",
+		"color": Color8(190, 214, 120),
+		"hp_mult": 0.95, "power": 0, "defense": 1,
+		"potions": {"healing": 1, "precision": 1}, "scrolls": {},
+		# Starts with the short bow, which is the whole character: the
+		# first hit lands before anything is next to you.
+		"weapon": 2, "armour": 0,
+		"shade": Color(0.80, 1.0, 0.72),
+		"blurb": "Trifft, bevor es dich erreicht - im Nahkampf dünn.",
 	},
 ]
 const DEFAULT_CLASS := "warrior"
