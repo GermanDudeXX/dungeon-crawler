@@ -1,17 +1,20 @@
-## Asks GitHub whether there is a newer build, and hands over the link.
+## Finds the newest build, fetches it, and hands it to Android to install.
 ##
 ## The phone has no store behind it: the APK is side-loaded once by hand,
-## and after that this is the only way the game learns that a new version
-## exists. So it does the boring half itself - find the newest release,
-## compare it with what is running, say plainly which it is - and leaves
-## the actual install to Android, by opening the download in the browser.
-## Downloading and installing an APK from inside the app needs a special
-## permission and a file provider; a link needs neither and cannot go
-## wrong in a way that bricks the install.
+## and after that this is the only way the game learns a new version
+## exists. So it does the whole thing - ask GitHub what is newest, compare
+## it with what is running, download the file, and open it with the
+## system installer.
 ##
-## TLS verification is left exactly as Godot sets it up. This asks a
-## server which file to install next: an unverified answer to that
-## question is not a small thing, it is someone else choosing the file.
+## Handing the file over can fail for reasons this app cannot fix: the
+## permission to install unknown apps may be off, or the device may refuse
+## the intent. So the browser link stays as a fallback and is offered by
+## name when the direct route does not take - a dead end with no way
+## forward would be worse than one extra tap.
+##
+## TLS verification is left exactly as Godot sets it up. This asks a server
+## which file to install next: an unverified answer to that question is not
+## a small thing, it is someone else choosing the file.
 class_name Updater
 extends Node
 
@@ -25,7 +28,13 @@ const API_URL := "https://api.github.com/repos/GermanDudeXX/dungeon-crawler/rele
 ## already the newest build, `note` is the line to show either way.
 signal checked(available: bool, version: String, url: String, note: String)
 
+## How the download is going: `done` false while it runs, `note` is the
+## line to show. `path` is empty until the file is on disk.
+signal fetched(done: bool, path: String, note: String)
+
 var _request: HTTPRequest
+var _download: HTTPRequest
+var _target := ""
 
 
 func _ready() -> void:
@@ -135,3 +144,86 @@ static func newer(version: String, than: String) -> bool:
 		if a != b:
 			return a > b
 	return false
+
+
+## Where a downloaded build is kept. One fixed name: the old one is
+## worthless the moment a newer exists, and two copies of a forty-megabyte
+## APK on a phone is rude.
+const APK_PATH := "user://update.apk"
+
+
+## Fetches the APK. Progress arrives through `fetched`.
+func download(url: String) -> void:
+	if _download != null:
+		return
+	_download = HTTPRequest.new()
+	_download.download_file = APK_PATH
+	# Big chunks: this is forty megabytes, not a handful of JSON.
+	_download.download_chunk_size = 1 << 20
+	_download.timeout = 120.0
+	add_child(_download)
+	_download.request_completed.connect(_downloaded)
+	if not _download.is_inside_tree():
+		await _download.tree_entered
+	var error := _download.request(url)
+	if error != OK:
+		fetched.emit(true, "", "Download lässt sich nicht starten (Fehler %d)." % error)
+		_forget()
+		return
+	_target = url
+	fetched.emit(false, "", "Lade herunter ...")
+
+
+## How far along the download is, as a line of text, or "" when nothing
+## is running. Polled rather than pushed: HTTPRequest has no progress
+## signal, only counters.
+func progress() -> String:
+	if _download == null:
+		return ""
+	var got: int = _download.get_downloaded_bytes()
+	var total: int = _download.get_body_size()
+	if total <= 0:
+		return "Lade herunter ... %.1f MB" % (got / 1048576.0)
+	return "Lade herunter ... %d%% (%.1f von %.1f MB)" % [
+		got * 100 / total, got / 1048576.0, total / 1048576.0]
+
+
+func _downloaded(result: int, code: int, _headers: PackedStringArray,
+		_body: PackedByteArray) -> void:
+	var ok: bool = result == HTTPRequest.RESULT_SUCCESS and code == 200
+	_forget()
+	if not ok:
+		fetched.emit(true, "", "Download fehlgeschlagen (Fehler %d)." % code)
+		return
+	# A file that is far too small is not an APK - a redirect page, an
+	# error, half a download. Installing it would only produce a confusing
+	# refusal from Android.
+	if not FileAccess.file_exists(APK_PATH):
+		fetched.emit(true, "", "Die Datei ist nicht angekommen.")
+		return
+	var file := FileAccess.open(APK_PATH, FileAccess.READ)
+	var size: int = file.get_length() if file != null else 0
+	if file != null:
+		file.close()
+	if size < 1048576:
+		fetched.emit(true, "", "Die geladene Datei ist zu klein (%d Bytes)." % size)
+		return
+	fetched.emit(true, APK_PATH, "Geladen (%.1f MB). Installieren?" % (size / 1048576.0))
+
+
+func _forget() -> void:
+	if _download != null:
+		_download.queue_free()
+		_download = null
+
+
+## Hands the downloaded file to Android. Returns whether the handover was
+## even attempted - whether the installer then appears is up to the
+## device and the permission, which is why the caller keeps the browser
+## link ready.
+func install(path: String) -> bool:
+	if not FileAccess.file_exists(path):
+		return false
+	var full := ProjectSettings.globalize_path(path)
+	var error := OS.shell_open("file://" + full)
+	return error == OK

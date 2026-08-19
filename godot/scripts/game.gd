@@ -110,6 +110,8 @@ var _update_button: Button
 var _update_label: Label
 var updater: Updater
 var _update_url := ""
+var _update_file := ""           ## the downloaded APK, once it is here
+var _update_busy := false
 var _awards_panel: PanelContainer
 var _awards_list: VBoxContainer
 var _kin_panel: PanelContainer
@@ -148,6 +150,7 @@ func _ready() -> void:
 	updater = Updater.new()
 	add_child(updater)
 	updater.checked.connect(_update_answer)
+	updater.fetched.connect(_update_fetched)
 	audio = Audio.new()
 	add_child(audio)
 	audio.enabled = settings["sound"]
@@ -3562,18 +3565,61 @@ func _build_update(column: VBoxContainer) -> void:
 	row.add_child(_update_label)
 
 
+## The button walks through three states: look, fetch, install. Each
+## press does the next one, so there is only ever one thing to press and
+## the label says what it will do.
 func _update_pressed() -> void:
+	if _update_busy:
+		return
+	if _update_file != "":
+		_install_update()
+		return
 	if _update_url != "":
-		# Second press, with an update waiting: hand the link to the
-		# browser. Downloading and installing an APK from inside the app
-		# needs a permission and a file provider; a link needs neither and
-		# cannot fail in a way that leaves no working install behind.
-		OS.shell_open(_update_url)
-		_update_label.text = "Download läuft im Browser - danach antippen und installieren."
+		_update_busy = true
+		_update_button.disabled = true
+		updater.download(_update_url)
 		return
 	_update_button.disabled = true
 	_update_label.text = "Suche ..."
 	updater.check()
+
+
+## Hands the file to Android, and keeps the browser in reserve.
+##
+## Whether the installer actually appears depends on a permission the
+## player may not have given yet and on the device's own opinion of
+## intents. If it does not, the same button becomes the browser link -
+## a dead end with no way forward would be worse than one extra tap.
+func _install_update() -> void:
+	if updater.install(_update_file):
+		_update_label.text = "Android fragt jetzt nach der Installation."
+		return
+	_update_label.text = "Installer ließ sich nicht öffnen - im Browser laden."
+	_update_button.text = "IM BROWSER LADEN"
+	_update_file = ""
+	_update_button.pressed.disconnect(_update_pressed)
+	_update_button.pressed.connect(_open_update_in_browser)
+
+
+func _open_update_in_browser() -> void:
+	OS.shell_open(_update_url)
+	_update_label.text = "Download läuft im Browser - danach antippen und installieren."
+
+
+func _update_fetched(done: bool, path: String, note: String) -> void:
+	_update_label.text = note
+	if not done:
+		return
+	_update_busy = false
+	_update_button.disabled = false
+	if path == "":
+		# Failed: back to offering the download again, and the browser is
+		# one press further on.
+		_update_button.text = "NOCHMAL VERSUCHEN"
+		return
+	_update_file = path
+	_update_button.text = "JETZT INSTALLIEREN"
+	_update_label.add_theme_color_override("font_color", Color(0.55, 0.85, 0.98))
 
 
 func _update_answer(available: bool, version: String, url: String, note: String) -> void:
@@ -3581,7 +3627,7 @@ func _update_answer(available: bool, version: String, url: String, note: String)
 	_update_label.text = note
 	if available:
 		_update_url = url
-		_update_button.text = "VERSION %s LADEN" % version
+		_update_button.text = "VERSION %s HERUNTERLADEN" % version
 		_update_label.add_theme_color_override("font_color", Color(0.55, 0.85, 0.98))
 	else:
 		_update_url = ""
@@ -4285,6 +4331,12 @@ func _button(label: String, where: Vector2, size: float, step: Vector2i) -> void
 
 func _process(delta: float) -> void:
 	_glide(delta)
+	# HTTPRequest has counters but no progress signal, so the running
+	# download is read once a frame while the title screen is up.
+	if _update_busy and _update_label != null:
+		var note := updater.progress()
+		if note != "":
+			_update_label.text = note
 	_step_cooldown -= delta
 	# Keys are added up rather than taken one at a time, so holding two
 	# walks diagonally. Eight directions instead of four is the other half

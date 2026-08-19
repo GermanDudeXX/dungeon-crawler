@@ -1748,6 +1748,18 @@ func _check_updater() -> void:
 			_complain("Versionsvergleich falsch",
 				"%s gegenüber %s" % [pair[0], pair[1]])
 
+	# The in-app update: refusing a file that is not there is the only
+	# part that can be checked without a phone, and it is the part that
+	# would otherwise hand Android a path to nothing.
+	var updater := Updater.new()
+	if updater.install("user://gibtesnicht.apk"):
+		_complain("Installer wird auf eine fehlende Datei losgelassen")
+	updater.free()
+	if not Updater.newer("1.3.0", "0.13.0"):
+		_complain("1.3.0 gilt nicht als neuer als 0.13.0")
+	if Updater.version_of("godot-1.3.0-publicdev") != "1.3.0":
+		_complain("1.3.0 wird aus dem Etikett falsch gelesen")
+
 	# And the build has to know its own number, or it compares against
 	# nothing and offers an update for ever.
 	var mine := Updater.running_version()
