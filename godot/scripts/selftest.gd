@@ -514,17 +514,42 @@ func _fingerprint() -> String:
 		"Regen=%d/%d offen=%d" % [p.regen_counter, p.regen_interval, p.pending_perks],
 		"Treppe=%s verriegelt=%s" % [str(_game.stairs), str(_game.stairs_locked)],
 		"erkundet=%d" % _game.explored.size(),
-		"Fallen=%d Laeden=%d Beute=%d" % [
-			_game.traps.size(), _game.shops.size(), _game.items.size()],
+		"Fallen=%d Gefahren=%d Dekor=%d Laeden=%d Beute=%d" % [
+			_game.traps.size(), _game.hazards.size(), _game.decor.size(),
+			_game.shops.size(), _game.items.size()],
+		"Aufstieg=%s" % str(_game.up_stairs),
 		"Truhe=%s" % str(_game.chest),
 	]
 	var alive: Array[String] = []
 	for m in _game.monsters:
 		if m.is_alive():
-			alive.append("%s@%d,%d %d/%d g%d%s" % [m.kind, m.x, m.y, m.hp, m.max_hp,
-				m.generation, "E" if m.is_elite else ""])
+			alive.append("%s@%d,%d %d/%d g%d%s%s%s" % [m.kind, m.x, m.y, m.hp, m.max_hp,
+				m.generation, "E" if m.is_elite else "", "B" if m.is_boss else "",
+				"W" if m.is_keeper else ""])
 	alive.sort()
 	parts.append("Monster=[%s]" % ", ".join(alive))
+	var shop_lines: Array[String] = []
+	for shop in _game.shops:
+		shop_lines.append("%s@%s[%s|%s]" % [shop["kind"], str(shop["cell"]),
+			", ".join(shop.get("stock", [])), shop.get("scroll", "")])
+	shop_lines.sort()
+	parts.append("Laden=[%s]" % ", ".join(shop_lines))
+	var loot_lines: Array[String] = []
+	for item in _game.items:
+		loot_lines.append("%s@%s%s%s" % [item["kind"], str(item["cell"]),
+			item.get("potion", ""), item.get("scroll", "")])
+	loot_lines.sort()
+	parts.append("Beute=[%s]" % ", ".join(loot_lines))
+	var hazard_lines: Array[String] = []
+	for cell in _game.hazards:
+		hazard_lines.append("%s@%s" % [_game.hazards[cell], str(cell)])
+	hazard_lines.sort()
+	parts.append("Gefahr=[%s]" % ", ".join(hazard_lines))
+	var decor_lines: Array[String] = []
+	for cell in _game.decor:
+		decor_lines.append("%s@%s" % [_game.decor[cell], str(cell)])
+	decor_lines.sort()
+	parts.append("Dekor=[%s]" % ", ".join(decor_lines))
 	var walls := 0
 	for row in _game.grid:
 		for value in row:
