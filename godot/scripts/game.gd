@@ -1096,10 +1096,21 @@ func enemy_turn() -> void:
 				# A kiter would rather not be here at all: it takes the free
 				# step back instead of trading blows, and only swings when it
 				# has nowhere left to go.
-				if monster.kites and _step_monster(monster, -towards):
+				#
+				# Not for ever, and never for a boss. A boss holding the key
+				# to the stairs that backs away every turn cannot be caught,
+				# and the floor can then never be finished - a skeleton king
+				# did exactly that for six hundred turns. Three steps back
+				# is a tactic; a hundred is a stalemate.
+				var may_kite: bool = monster.kites and not monster.is_boss
+				if may_kite and monster.kited < 3 and _step_monster(monster, -towards):
+					monster.kited += 1
 					continue
+				monster.kited = 0
 				_monster_attacks(monster)
 				break
+			if reach > 2:
+				monster.kited = 0
 			var can_shoot: bool = monster.ranged and reach <= Data.RANGED_RANGE
 			if can_shoot and _line_clear(monster.cell(), here):
 				_monster_shoots(monster)

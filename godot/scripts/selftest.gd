@@ -49,6 +49,8 @@ func _process(_delta: float) -> bool:
 	var perks := 0
 	var shopped := false
 	var drunk := {}
+	var killers := {}
+	var deaths_at := {}
 	var next_class := 0
 	var depth_at: int = _game.depth
 	var started := Time.get_ticks_msec()
@@ -80,6 +82,7 @@ func _process(_delta: float) -> bool:
 	_check_superboss()
 	_check_monster_habits()
 	_check_bag()
+	_check_boss_stands()
 
 	# The direct checks above are deliberately rough with the game:
 	# they set the hero to 200 health, drop them next to a test
@@ -94,6 +97,18 @@ func _process(_delta: float) -> bool:
 	for turn in _turns:
 		if _game.dead:
 			deaths += 1
+			# What the run died to, taken from the last thing the log says.
+			# Not proof, but it points at the right suspect.
+			var last := ""
+			for line in _game.log_lines:
+				var hurt: bool = line.contains("trifft dich") \
+					or line.contains("schießt") or line.contains("Falle") \
+					or line.contains("Gift") or line.contains("Schaden")
+				if hurt:
+					last = line
+			var who: String = last.split(" ")[0] if last != "" else "unbekannt"
+			killers[who] = int(killers.get(who, 0)) + 1
+			deaths_at[_game.depth] = int(deaths_at.get(_game.depth, 0)) + 1
 			next_class = (next_class + 1) % Data.CLASSES.size()
 			_game.choose_class(Data.CLASSES[next_class]["id"])
 			played[_game.player.hero_class] = true
@@ -209,7 +224,12 @@ func _process(_delta: float) -> bool:
 					target = Vector2i(m.x, m.y)
 					what = "Boss"
 					break
+		# Around the lava if there is a way around; through it if that is
+		# the only way. Refusing outright turned "there is a puddle in
+		# the corridor" into "the shrine cannot be reached".
 		var step: Variant = _route(target)
+		if step == null:
+			step = _route(target, false)
 		if step == null:
 			# A target that cannot be walked to at all is a placement bug:
 			# something got put behind a wall, or a keeper closed the only
@@ -301,6 +321,16 @@ func _process(_delta: float) -> bool:
 	print("  angefasst: " + ", ".join(parts))
 	print("  gespielt: %s, %d Gaben gewählt" % [", ".join(played.keys()), perks])
 	print("  getrunken: %d von %d Trankarten" % [drunk.size(), Data.POTIONS.size()])
+	var depths: Array = deaths_at.keys()
+	depths.sort()
+	var where_died: Array[String] = []
+	for level in depths:
+		where_died.append("E%d:%d" % [level, deaths_at[level]])
+	print("  gestorben auf: " + ", ".join(where_died))
+	var by_whom: Array[String] = []
+	for who in killers:
+		by_whom.append("%s:%d" % [who, killers[who]])
+	print("  zuletzt getroffen von: " + ", ".join(by_whom))
 
 	if perks == 0:
 		print("  nie eine Gabe gewählt - der Stufenaufstieg ist ungetestet")
@@ -346,7 +376,7 @@ func _complain(what: String, detail: String = "") -> void:
 
 
 ## One step towards target, or null when there is no way there at all.
-func _route(target: Vector2i) -> Variant:
+func _route(target: Vector2i, dodge_hazards := true) -> Variant:
 	var start := Vector2i(_game.player.x, _game.player.y)
 	if start == target:
 		return Vector2i.ZERO
@@ -365,6 +395,11 @@ func _route(target: Vector2i) -> Variant:
 			# plan through one - the same reason they may not stand in a
 			# chokepoint.
 			if step != target and _game.shop_at(step) != null:
+				continue
+			# Hazards are visible. A player walks around the lava; a bot
+			# that walks through it dies to the level design rather than
+			# to the game, and every number it produces is then wrong.
+			if dodge_hazards and step != target and _game.hazards.has(step):
 				continue
 			came[step] = cell
 			if step == target:
@@ -1232,4 +1267,43 @@ func _check_bag() -> void:
 	if not p.buffs.has("haste"):
 		_complain("Trank aus der Tasche wirkt nicht", "haste")
 	_game.close_bag()
+
+
+## A boss must be catchable. One that backs away every turn cannot be
+## killed, and since the boss holds the key to the stairs, the floor is
+## then over before it starts. This is checked by cornering one: put the
+## hero next to it and see whether it is still there.
+func _check_boss_stands() -> void:
+	_settle()
+	var spot: Variant = _open_spot()
+	if spot == null:
+		return
+	var boss = Entities.Monster.new("skeleton", 2.0, "normal")
+	boss.x = spot.x
+	boss.y = spot.y
+	boss.is_boss = true
+	boss.awake = true
+	boss.display_name = "Prüf-König"
+	boss.snap()
+	_game.monsters.append(boss)
+	_game.player.max_hp = 500
+	_game.player.hp = 500
+
+	var stayed := 0
+	for _turn in 12:
+		# Stand next to it, let it act, and see whether it is still within
+		# reach afterwards.
+		_game.player.x = boss.x
+		_game.player.y = boss.y + 1
+		if not Dungeon.is_walkable(_game.grid, _game.player.x, _game.player.y):
+			_game.player.x = boss.x + 1
+			_game.player.y = boss.y
+		_game.enemy_turn()
+		var away: int = absi(boss.x - _game.player.x) + absi(boss.y - _game.player.y)
+		if away <= 1:
+			stayed += 1
+	if stayed < 6:
+		_complain("Boss weicht immer aus",
+			"nur %d von 12 Zügen in Reichweite geblieben" % stayed)
+	_game.monsters.erase(boss)
 

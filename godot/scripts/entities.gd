@@ -226,6 +226,7 @@ class Monster extends Actor:
 	var phase_said := ""            ## the boss phase already announced
 	var ranged := false             ## attacks from a distance
 	var kites := false              ## and backs away when you get close
+	var kited := 0                  ## steps taken back in a row
 	var sets_traps := false
 	var splits := false             ## breaks in two when killed
 	var generation := 0             ## how many splits deep this one is
