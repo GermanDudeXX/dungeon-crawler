@@ -301,6 +301,14 @@ class Monster extends Actor:
 		defense = int(round(defense * float(modifier["defense"])))
 		speed += int(modifier.get("speed", 0))
 		regen = int(modifier.get("regen", 0))
+		# An elite can also pick up a habit it did not have: venom,
+		# a hot skin, a voice that calls its own kind.
+		if modifier.get("poisons", false):
+			poisons = true
+		if int(modifier.get("burns", 0)) > 0:
+			burns_toucher = maxi(burns_toucher, int(modifier["burns"]))
+		if modifier.get("calls", false) and summons == "":
+			summons = kind
 		xp_reward = maxi(1, int(round(xp_reward * Data.ELITE_XP_MULT)))
 		display_name = "%s %s" % [modifier["name"], display_name]
 

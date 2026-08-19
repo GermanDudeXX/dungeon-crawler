@@ -189,6 +189,13 @@ const TRAPS := {
 	"spikes": {"name": "Stachelfalle", "damage": 6},
 	"poison": {"name": "Giftgas", "damage": 3, "poison": 4},
 	"collapse": {"name": "Einsturz", "damage": 4, "one_shot": true},
+	# Four more, and none of them is only a bigger number: an alarm costs
+	# you surprise, a dart costs you armour, a rune costs you your
+	# footing, a trapdoor costs you the rest of the floor.
+	"alarm": {"name": "Alarmfalle", "damage": 1, "wakes": true},
+	"dart": {"name": "Pfeilfalle", "damage": 5, "weaken": 6},
+	"rune": {"name": "Fluchrune", "damage": 3, "curse": true, "one_shot": true},
+	"trapdoor": {"name": "Falltür", "damage": 4, "drops": true, "one_shot": true},
 }
 
 ## A boss holds the key to the stairs, so a floor is a place you finish
@@ -479,6 +486,10 @@ const SHRINES := [
 	{"id": "fortune", "name": "Glücksfall", "weight": 3.0},
 	{"id": "frailty", "name": "Fluch der Gebrechlichkeit", "weight": 2.0},
 	{"id": "ambush", "name": "Rachsüchtige Geister", "weight": 1.5},
+	{"id": "wisdom", "name": "Segen der Einsicht", "weight": 2.0},
+	{"id": "cleanse", "name": "Reinigung", "weight": 2.0},
+	{"id": "hoard", "name": "Verstreutes Gut", "weight": 1.5},
+	{"id": "guardian", "name": "Erweckter Wächter", "weight": 1.0},
 ]
 
 
@@ -504,6 +515,9 @@ const ELITES := [
 	{"name": "Bösartiger", "hp": 1.2, "power": 1.6, "defense": 1.0},
 	{"name": "Gepanzerter", "hp": 1.4, "power": 1.0, "defense": 2.2},
 	{"name": "Nachwachsender", "hp": 1.6, "power": 1.1, "defense": 1.0, "regen": 1},
+	{"name": "Giftiger", "hp": 1.1, "power": 1.2, "defense": 1.0, "poisons": true},
+	{"name": "Brennender", "hp": 1.2, "power": 1.1, "defense": 1.0, "burns": 3},
+	{"name": "Rufender", "hp": 1.3, "power": 1.0, "defense": 1.2, "calls": true},
 ]
 const ELITE_CHANCE := 0.10
 const ELITE_XP_MULT := 2.5

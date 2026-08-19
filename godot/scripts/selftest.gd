@@ -959,7 +959,9 @@ func _check_traps() -> void:
 		p.hp = 200
 		p.poison_turns = 0
 		p.damage_reduction = 0.0
+		p.buffs.clear()
 		_game.dead = false
+		var was_depth: int = _game.depth
 		_game.traps[spot] = id
 		p.x = spot.x
 		p.y = spot.y
@@ -968,12 +970,32 @@ func _check_traps() -> void:
 			_complain("Falle richtet keinen Schaden an", id)
 		if trap.has("poison") and p.poison_turns <= 0:
 			_complain("Giftfalle vergiftet nicht", id)
+		if trap.get("wakes", false):
+			var asleep := 0
+			for m in _game.monsters:
+				if m.is_alive() and not m.awake:
+					asleep += 1
+			if asleep > 0:
+				_complain("Alarmfalle weckt nicht alles", "%d schlafen weiter" % asleep)
+		if int(trap.get("weaken", 0)) > 0 and not p.buffs.has("frailty"):
+			_complain("Pfeilfalle schwächt nicht", id)
+		if trap.get("curse", false):
+			var cursed: bool = p.buffs.has("clumsy") or p.buffs.has("frailty")
+			if not cursed:
+				_complain("Fluchrune verflucht nicht", id)
 		# One-shot traps are gone after springing; the others stay armed.
 		var still_there: bool = _game.traps.has(spot)
 		if trap.get("one_shot", false) and still_there:
 			_complain("Einmalfalle bleibt liegen", id)
 		if not trap.get("one_shot", false) and not still_there:
 			_complain("Dauerfalle verschwindet", id)
+		if trap.get("drops", false):
+			if _game.depth != was_depth + 1:
+				_complain("Falltür wirft nicht eine Ebene tiefer",
+					"%d statt %d" % [_game.depth, was_depth + 1])
+			# The floor is a new one now; nothing of the old setup is
+			# left to clean up.
+			continue
 		_game.traps.erase(spot)
 
 

@@ -1947,6 +1947,24 @@ func _spring_trap(cell: Vector2i) -> void:
 	_shake(2.5)
 	audio.play("trap")
 	say("%s! Du nimmst %d Schaden." % [trap["name"], trap["damage"]])
+	if trap.get("wakes", false):
+		var roused := 0
+		for monster in monsters:
+			if monster.is_alive() and not monster.awake:
+				monster.awake = true
+				roused += 1
+		banner("Alarm!", Color(1.0, 0.70, 0.30))
+		say("Die Ebene ist wach - %d Kreaturen." % roused)
+	if int(trap.get("weaken", 0)) > 0:
+		# A dart in the joints: the armour stops doing its job for a
+		# while, which is worse than the damage.
+		player.buffs["frailty"] = int(player.buffs.get("frailty", 0)) + int(trap["weaken"])
+		say("Der Pfeil sitzt tief - deine Deckung leidet.")
+	if trap.get("curse", false):
+		var curses: Array[String] = ["clumsy", "frailty"]
+		var curse: String = curses[rng.randi() % curses.size()]
+		player.buffs[curse] = int(player.buffs.get(curse, 0)) + 12
+		say("Die Rune brennt: %s." % Data.BUFFS[curse]["name"])
 	if trap.has("poison"):
 		player.poison_turns = maxi(player.poison_turns, trap["poison"])
 		say("Du bist vergiftet.")
@@ -1957,6 +1975,15 @@ func _spring_trap(cell: Vector2i) -> void:
 		audio.play("death")
 		_show_death()
 		say("Die Falle bringt dich um. Tippe NEU.")
+		return
+	if trap.get("drops", false):
+		# Straight through the floor. The way down without the stairs -
+		# and without whatever was still lying up here.
+		banner("Der Boden gibt nach!", Color(0.85, 0.60, 0.30))
+		say("Du stürzt eine Ebene tiefer.")
+		_settle_quest()
+		depth += 1
+		new_level()
 
 
 ## A hazard the hero walked into anyway. It was in plain sight - that is
@@ -2270,6 +2297,45 @@ func _touch_shrine(cell: Vector2i) -> void:
 			player.hp = mini(player.hp, player.max_hp)
 			audio.play("player_hurt")
 			say("Der Schrein zehrt an dir: -%d maximales Leben." % loss)
+		"wisdom":
+			var gained: int = player.gain_xp(int(player.xp_to_next * 0.5))
+			if gained > 0:
+				_offer_perk()
+			audio.play("levelup")
+			say("Der Schrein schenkt dir Einsicht.")
+		"cleanse":
+			player.poison_turns = 0
+			player.bleed_turns = 0
+			for curse_id in player.buffs.keys():
+				var entry: Dictionary = Data.BUFFS[curse_id]
+				if int(entry.get("power", 0)) < 0 or int(entry.get("defense", 0)) < 0:
+					player.buffs.erase(curse_id)
+			player.hp = mini(player.max_hp, player.hp + 10)
+			audio.play("pickup")
+			say("Der Schrein wäscht das Übel ab.")
+		"hoard":
+			var dropped := 0
+			for _i in 4:
+				var spot: Variant = _free_cell(rooms,
+					reachable_from(Vector2i(player.x, player.y)))
+				if spot == null:
+					continue
+				items.append({"cell": spot, "kind": "gold",
+					"amount": rng.randi_range(10, 20 + depth * 4)})
+				dropped += 1
+			audio.play("coin")
+			say("Der Schrein verstreut %d Beutel über die Ebene." % dropped)
+		"guardian":
+			# Something wakes up beside you - but it is standing on a purse.
+			audio.play("boss")
+			banner("Ein Wächter erwacht", Color(0.85, 0.32, 0.30))
+			say("Der Schrein weckt seinen Wächter.")
+			_ambush()
+			for monster in monsters:
+				if monster.is_alive() and monster.awake and not monster.is_elite:
+					monster.make_elite(Data.ELITES[rng.randi() % Data.ELITES.size()])
+					break
+			player.gold += 20 + depth * 6
 		"ambush":
 			audio.play("player_hurt")
 			banner("Rachsüchtige Geister!", Color(0.85, 0.32, 0.30))
