@@ -319,7 +319,8 @@ func load_run() -> bool:
 	if save["chest"] != null:
 		var c: Dictionary = save["chest"]
 		chest = {"cell": Vector2i(int(c["x"]), int(c["y"])),
-			"mimic": bool(c["mimic"]), "opened": bool(c["opened"])}
+			"mimic": bool(c["mimic"]), "opened": bool(c["opened"]),
+			"guarded": bool(c.get("guarded", false))}
 
 	monsters.clear()
 	for entry in save["monsters"]:
@@ -339,6 +340,7 @@ func load_run() -> bool:
 		monster.awake = bool(entry["awake"])
 		monster.is_boss = bool(entry["boss"])
 		monster.is_mimic = bool(entry["mimic"])
+		monster.is_keeper = bool(entry.get("keeper", false))
 		monster.burn_turns = int(entry.get("burn", 0))
 		monster.slow_turns = int(entry.get("slow", 0))
 		monster.stun_turns = int(entry.get("stun", 0))
@@ -542,7 +544,23 @@ func _populate() -> void:
 		var chest_cell = _free_cell(spawn_rooms)
 		if chest_cell != null:
 			chest = {"cell": chest_cell, "mimic": depth >= 3 and rng.randf() < 0.3,
-				"opened": false}
+				"opened": false, "guarded": false}
+			# Often there is something standing over it. The chest will not
+			# open while it lives - a prize you have to earn rather than
+			# one you have to find.
+			if depth >= Data.TREASURE_MIN_LEVEL and rng.randf() < Data.TREASURE_CHANCE:
+				var post: Variant = _free_cell(spawn_rooms)
+				if post != null:
+					var keeper := Entities.Monster.new(Data.pick_kind(depth, rng),
+						tier["mult"] * Data.TREASURE_GUARD_MULT, difficulty)
+					keeper.x = post.x
+					keeper.y = post.y
+					keeper.is_keeper = true
+					keeper.awake = true
+					keeper.display_name = "Wächter (%s)" % keeper.display_name
+					keeper.snap()
+					monsters.append(keeper)
+					chest["guarded"] = true
 
 	# Standing hazards: visible from the moment the tile is, so they are
 	# something to walk around rather than something to discover. That is
@@ -817,6 +835,13 @@ func shop_at(cell: Vector2i) -> Variant:
 	return null
 
 
+## Whether the thing standing over the chest is still alive.
+func _keeper_alive() -> bool:
+	for monster in monsters:
+		if monster.is_keeper and monster.is_alive():
+			return true
+	return false
+
 func boss_alive() -> bool:
 	for m in monsters:
 		if m.is_alive() and m.is_boss:
@@ -946,6 +971,13 @@ func _attack_monster(monster) -> void:
 		Color(1.0, 0.90, 0.24) if crit else Color(1.0, 1.0, 1.0))
 	if crit:
 		_shake(2.0)
+		_sparks(monster.cell(), Color(1.0, 0.92, 0.35), 11)
+		# Hitstop: the next step waits a moment longer. In a turn-based
+		# game there is no frame to freeze, but a held direction still
+		# hesitates - which is what makes a big hit feel big.
+		_step_cooldown = maxf(_step_cooldown, 0.12)
+	else:
+		_sparks(monster.cell(), Color(0.95, 0.85, 0.80), 4)
 	var leech := player.buff_total("lifesteal")
 	if leech > 0.0 and player.hp < player.max_hp:
 		var back: int = maxi(1, int(round(damage * leech)))
@@ -994,6 +1026,7 @@ func _fire_element(monster) -> int:
 ## sprite. Anything that can kill goes through here - a thrown flask
 ## that skipped this step handed out no experience at all.
 func _kill(monster) -> void:
+	_sparks(monster.cell(), Color(0.85, 0.30, 0.28), 16)
 	# A slime does not die the first time: it comes apart into two
 	# smaller ones. Two generations deep and there is nothing left to
 	# divide, or one slime would keep a floor busy forever.
@@ -1442,6 +1475,10 @@ func _step_in_hazard(cell: Vector2i) -> void:
 func _open_chest(cell: Vector2i) -> void:
 	if chest == null or chest["opened"] or chest["cell"] != cell:
 		return
+	if chest.get("guarded", false) and _keeper_alive():
+		audio.play("denied")
+		say("Der Wächter lässt die Truhe nicht los.")
+		return
 	chest["opened"] = true
 	if not chest["mimic"]:
 		var gold: int = 25 + depth * 8
@@ -1832,8 +1869,14 @@ func _blink() -> void:
 	# cell is not the same as a reachable one: crates can close a room
 	# off, and a blink into that pocket strands the run there - the
 	# floor is then unfinishable and nothing looks broken.
+	# Shopkeepers count as walls here, as they do everywhere else: you
+	# cannot walk through one, so landing behind one cuts the hero off
+	# from the stairs just as thoroughly as a crate would.
+	var shut := {}
+	for shop in shops:
+		shut[shop["cell"]] = true
 	var spot: Variant = _free_cell(rooms,
-		reachable_from(Vector2i(player.x, player.y)))
+		reachable_from(Vector2i(player.x, player.y), shut))
 	if spot == null:
 		say("Nichts geschieht.")
 		return
@@ -2688,6 +2731,27 @@ func banner(text: String, colour := Color(0.91, 0.71, 0.29)) -> void:
 	_banner_fade = create_tween()
 	_banner_fade.tween_interval(1.6)
 	_banner_fade.tween_property(_banner, "modulate:a", 0.0, 0.8)
+
+
+## A few specks thrown off a cell. Cheap on purpose: a handful of small
+## rectangles, each tweened once and freed - no particle system, no
+## per-frame work once they are on their way. The pygame build throws a
+## dozen per crit and this matches that.
+func _sparks(cell: Vector2i, colour: Color, count: int) -> void:
+	for i in count:
+		var speck := ColorRect.new()
+		speck.color = colour
+		speck.size = Vector2(1.5, 1.5)
+		speck.z_index = 4
+		speck.position = Vector2(cell) * TILE + Vector2(TILE, TILE) * 0.5
+		add_child(speck)
+		var away := Vector2(rng.randf_range(-1.0, 1.0), rng.randf_range(-1.0, 0.4))
+		var flight := create_tween()
+		flight.set_parallel(true)
+		flight.tween_property(speck, "position",
+			speck.position + away.normalized() * rng.randf_range(4.0, 11.0), 0.35)
+		flight.tween_property(speck, "modulate:a", 0.0, 0.35)
+		flight.chain().tween_callback(speck.queue_free)
 
 
 ## A number that floats off a cell and fades. The cheapest way to make a

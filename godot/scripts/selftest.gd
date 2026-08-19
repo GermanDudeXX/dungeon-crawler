@@ -84,6 +84,7 @@ func _process(_delta: float) -> bool:
 	_check_bag()
 	_check_boss_stands()
 	_check_awards()
+	_check_guarded_chest()
 
 	# The direct checks above are deliberately rough with the game:
 	# they set the hero to 200 health, drop them next to a test
@@ -208,7 +209,10 @@ func _process(_delta: float) -> bool:
 		elif loot_cell != null:
 			target = loot_cell
 			what = "Beute"
-		elif _game.chest != null and not _game.chest["opened"]:
+		# A guarded chest is not worth walking to until its keeper is
+		# down - it simply will not open.
+		elif _game.chest != null and not _game.chest["opened"] \
+				and not (_game.chest.get("guarded", false) and _game._keeper_alive()):
 			target = _game.chest["cell"]
 			what = "Truhe"
 		elif not shopped and _game.player.gold >= Data.POTION_COST:
@@ -475,6 +479,15 @@ func _check(where: String) -> void:
 		if cell.x < 0 or cell.y < 0 or cell.x >= 40 or cell.y >= 25:
 			_complain("Feld außerhalb der Karte erkundet", "%s bei %s" % [str(cell), where])
 			break
+	# The way down has to stay reachable for the whole floor, not just at
+	# the moment it was built: a blink once put the hero behind a
+	# shopkeeper, and a shopkeeper is a wall.
+	var shut := {}
+	for shop in _game.shops:
+		shut[shop["cell"]] = true
+	if not _game.reachable_from(Vector2i(p.x, p.y), shut).has(_game.stairs):
+		_complain("Treppe vom Helden aus abgeschnitten",
+			"(%d, %d) bei %s" % [p.x, p.y, where])
 	if p.level < 1 or p.max_hp < 1:
 		_complain("unmoegliche Spielerwerte", "Stufe %d bei %s" % [p.level, where])
 
@@ -1354,4 +1367,41 @@ func _check_awards() -> void:
 		if not known:
 			_complain("unbekannter Erfolg vergeben", id)
 	_settle()
+
+
+## A guarded chest must stay shut while its keeper lives, and open once
+## it does not. A guard that can be walked past is not a guard.
+func _check_guarded_chest() -> void:
+	_settle()
+	var spot: Variant = _open_spot()
+	if spot == null:
+		return
+	# The floor may already have a keeper of its own standing over its
+	# own chest; leave one alive and this measures that one instead.
+	for other in _game.monsters.duplicate():
+		if other.is_keeper:
+			_game.monsters.erase(other)
+	_game.chest = {"cell": spot, "mimic": false, "opened": false, "guarded": true}
+	var keeper = Entities.Monster.new("orc", 1.0, "easy")
+	keeper.x = spot.x
+	keeper.y = spot.y + 1
+	if not Dungeon.is_walkable(_game.grid, keeper.x, keeper.y):
+		keeper.x = spot.x + 1
+		keeper.y = spot.y
+	keeper.is_keeper = true
+	keeper.snap()
+	_game.monsters.append(keeper)
+
+	_game.player.x = spot.x
+	_game.player.y = spot.y
+	_game._open_chest(spot)
+	if _game.chest["opened"]:
+		_complain("bewachte Truhe öffnet sich trotz lebendem Wächter")
+
+	keeper.hp = 0
+	_game._open_chest(spot)
+	if not _game.chest["opened"]:
+		_complain("bewachte Truhe bleibt zu, obwohl der Wächter tot ist")
+	_game.monsters.erase(keeper)
+	_game.chest = null
 

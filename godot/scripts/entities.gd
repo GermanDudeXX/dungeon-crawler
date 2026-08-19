@@ -215,6 +215,7 @@ class Monster extends Actor:
 	var flees_below := 0.0
 	var is_boss := false
 	var is_mimic := false
+	var is_keeper := false          ## stands over the chest
 	var burn_turns := 0             ## takes damage at the end of its turn
 	var weaken_turns := 0           ## defends worse while this lasts
 	var venom_turns := 0            ## loses health each of its turns

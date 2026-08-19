@@ -425,6 +425,13 @@ const VAULT_MIN_LEVEL := 5
 const VAULT_GUARDS := [3, 5]
 const VAULT_GUARD_MULT := 1.3
 
+# A guarded chest: one keeper standing over it, and the chest stays
+# shut until the keeper is dead. Different from the vault - that is a
+# crowd on a pile of gold, this is one fight for one prize.
+const TREASURE_CHANCE := 0.45
+const TREASURE_GUARD_MULT := 1.4
+const TREASURE_MIN_LEVEL := 2
+
 
 static func has_mini_boss(level: int) -> bool:
 	return level % MINI_BOSS_EVERY == 0 and not has_boss(level)

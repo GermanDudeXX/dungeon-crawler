@@ -37,7 +37,7 @@ static func write(game) -> void:
 			"power": m.power, "defense": m.defense, "xp": m.xp_reward,
 			"name": m.display_name, "sprite": m.sprite, "speed": m.speed,
 			"poisons": m.poisons, "flees_below": m.flees_below,
-			"awake": m.awake, "boss": m.is_boss, "mimic": m.is_mimic,
+			"awake": m.awake, "boss": m.is_boss, "mimic": m.is_mimic, "keeper": m.is_keeper,
 			"burn": m.burn_turns, "slow": m.slow_turns, "stun": m.stun_turns,
 			"regen": m.regen, "elite": m.is_elite, "generation": m.generation,
 			"weaken": m.weaken_turns, "venom": m.venom_turns, "bleed": m.bleed_turns,
@@ -90,7 +90,8 @@ static func write(game) -> void:
 		"shops": shops,
 		"chest": null if game.chest == null else {
 			"x": game.chest["cell"].x, "y": game.chest["cell"].y,
-			"mimic": game.chest["mimic"], "opened": game.chest["opened"]},
+			"mimic": game.chest["mimic"], "opened": game.chest["opened"],
+			"guarded": game.chest.get("guarded", false)},
 		"player": {
 			"x": p.x, "y": p.y, "hp": p.hp, "max_hp": p.max_hp,
 			"base_power": p.base_power, "base_defense": p.base_defense,
