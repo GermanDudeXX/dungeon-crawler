@@ -26,6 +26,7 @@ const MONSTER_TILES := 1.5
 const BOSS_SCALE := 1.8
 const PROP_TILES := 1.6
 const ITEM_TILES := 1.1
+const MINIMAP_SCALE := 4
 
 # Scenery only, no rules: what a floor is dressed with.
 const DECOR := ["crate", "skull", "wall_banner_red", "wall_banner_blue",
@@ -43,6 +44,7 @@ var player: Entities.Player
 var monsters: Array = []
 var items: Array = []
 var stairs := Vector2i.ZERO
+var up_stairs := Vector2i.ZERO   ## where you came in, and the way back
 var depth := 1
 var tier := {}
 var log_lines: Array[String] = []
@@ -83,6 +85,9 @@ var _difficulty_button: Button
 var _flash_button: Button
 var _drink_button: Button
 var _flash: ColorRect
+var _minimap: TextureRect
+var _minimap_drawn := -1
+var _minimap_at := Vector2i(-1, -1)
 var _scroll_buttons: Array = []
 var _perk_panel: PanelContainer
 var _perk_buttons: Array = []
@@ -157,7 +162,7 @@ func _tile_names() -> PackedStringArray:
 	for i in range(1, FLOOR_VARIANTS + 1):
 		names.append("floor_%d" % i)
 	names.append_array(["wall_mid", "wall_left", "wall_right", "wall_top_mid",
-		"floor_stairs"])
+		"floor_stairs", "floor_ladder"])
 	return names
 
 
@@ -259,6 +264,8 @@ func load_run() -> bool:
 			line.append(int(value))
 		grid.append(line)
 	stairs = Vector2i(int(save["stairs"][0]), int(save["stairs"][1]))
+	var up: Variant = save.get("up_stairs", null)
+	up_stairs = Vector2i(int(up[0]), int(up[1])) if up != null else Vector2i(player.x, player.y)
 	stairs_locked = bool(save["stairs_locked"])
 	decor.clear()
 	for entry in save.get("decor", []):
@@ -376,6 +383,10 @@ func new_level() -> void:
 	player.y = start.y
 	player.snap()
 	stairs = rooms[-1].center() if not rooms.is_empty() else Vector2i(2, 2)
+	# The way back up is where you came in. Going up is not a way to
+	# escape a bad floor - the floor above is regenerated too - it is
+	# there so a staircase reads as a staircase in both directions.
+	up_stairs = start
 	_populate()
 	recompute_fov()
 	paint()
@@ -721,6 +732,12 @@ func try_move(step: Vector2i) -> void:
 			depth += 1
 			audio.play("stairs")
 			say("Du steigst hinab - Ebene %d." % depth)
+			new_level()
+			return
+		if target == up_stairs and depth > 1:
+			depth -= 1
+			audio.play("stairs")
+			say("Du steigst hinauf - Ebene %d." % depth)
 			new_level()
 			return
 	else:
@@ -1472,6 +1489,8 @@ func paint() -> void:
 		var name := _tile_for(cell.x, cell.y)
 		if cell == stairs and _tile_ids.has("floor_stairs"):
 			name = "floor_stairs"
+		elif cell == up_stairs and depth > 1 and _tile_ids.has("floor_ladder"):
+			name = "floor_ladder"
 		if name == "" or not _tile_ids.has(name):
 			continue
 		var layer := _floor_layer if lit.has(cell) else _dim_layer
@@ -1708,6 +1727,7 @@ func _build_hud() -> void:
 	again.pressed.connect(show_title)
 	_play_ui.add_child(again)
 
+	_build_minimap()
 	_build_shop_panel()
 	_build_perk_panel()
 	_build_dead_panel()
@@ -1800,6 +1820,61 @@ func take_perk(index: int) -> void:
 		_offer_perk()
 	else:
 		save_run()
+
+
+## The minimap: the floor so far, four pixels to a cell, in the corner.
+##
+## Drawn into an Image and handed over as a texture rather than as a
+## thousand little rectangles - on a phone a thousand draw calls a frame
+## is the whole frame budget. It is rebuilt only when the explored set
+## has actually changed size, which on most turns it has not.
+func _build_minimap() -> void:
+	_minimap = TextureRect.new()
+	_minimap.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_minimap.position = Vector2(-14 - MAP_W * MINIMAP_SCALE, 110)
+	_minimap.custom_minimum_size = Vector2(MAP_W, MAP_H) * MINIMAP_SCALE
+	_minimap.size = _minimap.custom_minimum_size
+	# The image is one pixel per cell; without these it would be drawn at
+	# that size - forty pixels wide, in the corner of a box four times
+	# as big.
+	_minimap.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_minimap.stretch_mode = TextureRect.STRETCH_SCALE
+	_minimap.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_minimap.modulate.a = 0.85
+	_play_ui.add_child(_minimap)
+
+
+func _update_minimap() -> void:
+	if _minimap == null:
+		return
+	var here := Vector2i(player.x, player.y)
+	if explored.size() == _minimap_drawn and here == _minimap_at:
+		return
+	_minimap_drawn = explored.size()
+	_minimap_at = here
+
+	var image := Image.create(MAP_W, MAP_H, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0, 0, 0, 0.35))
+	for cell in explored:
+		var lit_here: bool = lit.has(cell)
+		image.set_pixelv(cell, Color(0.55, 0.52, 0.60) if lit_here else Color(0.28, 0.26, 0.32))
+	if explored.has(stairs):
+		image.set_pixelv(stairs, Color(0.40, 0.85, 0.95))
+	if depth > 1 and explored.has(up_stairs):
+		image.set_pixelv(up_stairs, Color(0.55, 0.55, 0.65))
+	if chest != null and explored.has(chest["cell"]) and not chest["opened"]:
+		image.set_pixelv(chest["cell"], Color(1.0, 0.84, 0.30))
+	if shrine != null and explored.has(shrine):
+		image.set_pixelv(shrine, Color(0.70, 0.60, 1.0))
+	for shop in shops:
+		if explored.has(shop["cell"]):
+			image.set_pixelv(shop["cell"], Color(0.45, 0.90, 0.55))
+	for monster in monsters:
+		if monster.is_alive() and lit.has(monster.cell()):
+			image.set_pixelv(monster.cell(),
+				Color(1.0, 0.45, 0.20) if monster.is_boss else Color(0.90, 0.30, 0.30))
+	image.set_pixelv(here, Color(1.0, 1.0, 1.0))
+	_minimap.texture = ImageTexture.create_from_image(image)
 
 
 ## A number that floats off a cell and fades. The cheapest way to make a
@@ -2260,6 +2335,7 @@ func _process(delta: float) -> void:
 		gear += "     [%s]" % ", ".join(chips)
 	_play_ui.get_node("stats").text = line
 	_play_ui.get_node("gear").text = gear
+	_update_minimap()
 	if _drink_button != null:
 		if player.potions <= 0:
 			_drink_button.text = "KEINE TRÄNKE"

@@ -73,6 +73,7 @@ func _process(_delta: float) -> bool:
 	_check_scrolls()
 	_check_traps()
 	_check_elements()
+	_check_up_stairs()
 
 	for turn in _turns:
 		if _game.dead:
@@ -576,6 +577,7 @@ func _check_potions() -> void:
 ## sometimes: it is a 30% branch of a 55% chest, so a whole run can pass
 ## without ever opening one.
 func _check_mimic() -> void:
+	_settle()
 	var spot: Variant = _open_spot()
 	if spot == null:
 		_notes.append("keine freie Zelle für den Mimik-Test - übersprungen")
@@ -662,6 +664,7 @@ func _check_difficulty() -> void:
 ## ever being carried, and "the fireball does nothing" is not something
 ## to find out on a phone.
 func _check_scrolls() -> void:
+	_settle()
 	var p = _game.player
 
 	# Enthüllung: the whole floor becomes known.
@@ -709,6 +712,7 @@ func _check_scrolls() -> void:
 ## dice roll, so a run can end without stepping on one - and a trap that
 ## does nothing is a trap nobody notices is broken.
 func _check_traps() -> void:
+	_settle()
 	for id in Data.TRAPS:
 		var trap: Dictionary = Data.TRAPS[id]
 		var p = _game.player
@@ -741,6 +745,7 @@ func _check_traps() -> void:
 ## checks it left the mark it promises. A 30-40% proc on a 30% drop is
 ## not something a playthrough can be relied on to reach.
 func _check_elements() -> void:
+	_settle()
 	var p = _game.player
 	var was: String = p.weapon_element
 	for id in Data.ELEMENTS:
@@ -778,4 +783,56 @@ func _check_elements() -> void:
 				"%d bleibt %d" % [dummy.defense, dummy.defense_now()])
 		_game.monsters.erase(dummy)
 	p.weapon_element = was
+
+
+## The way back up. Not a way to escape a floor - the one above is
+## generated fresh - but it has to exist, be walkable, and not send the
+## hero above the first floor.
+func _check_up_stairs() -> void:
+	_settle()
+	_game.depth = 4
+	_game.new_level()
+	var up: Vector2i = _game.up_stairs
+	if not Dungeon.is_walkable(_game.grid, up.x, up.y):
+		_complain("Aufstieg liegt in einer Wand", str(up))
+	if up == _game.stairs:
+		_complain("Auf- und Abstieg auf demselben Feld", str(up))
+
+	# Standing on it and stepping into it are different things: the hero
+	# starts on the up staircase, so walking off and back on is what a
+	# player actually does.
+	_game.player.x = up.x
+	_game.player.y = up.y + 1
+	if Dungeon.is_walkable(_game.grid, up.x, up.y + 1):
+		_game.try_move(Vector2i(0, -1))
+		if _game.depth != 3:
+			_complain("Aufstieg führt nicht nach oben", "Ebene %d statt 3" % _game.depth)
+
+	# And never above the top.
+	_game.depth = 1
+	_game.new_level()
+	_game.player.x = _game.up_stairs.x
+	_game.player.y = _game.up_stairs.y + 1
+	if Dungeon.is_walkable(_game.grid, _game.player.x, _game.player.y):
+		_game.try_move(Vector2i(0, -1))
+		if _game.depth < 1:
+			_complain("Aufstieg über Ebene 1 hinaus", "Ebene %d" % _game.depth)
+
+
+## Puts the game back into a state where the hero can act.
+##
+## The direct checks leave things standing: the Potion of Insight grants
+## half a level, which opens the perk panel, and movement is blocked
+## while that is up. A later check then reads "the up staircase does not
+## work" when what actually happened is that the hero was still choosing
+## a gift.
+func _settle() -> void:
+	while _game.player.pending_perks > 0 and not _game.perk_choices.is_empty():
+		_game.take_perk(0)
+	_game.player.pending_perks = 0
+	if _game._perk_panel != null:
+		_game._perk_panel.visible = false
+	_game.close_shop()
+	_game.dead = false
+	_game.player.hp = maxi(1, _game.player.hp)
 

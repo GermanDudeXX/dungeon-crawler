@@ -74,6 +74,7 @@ static func write(game) -> void:
 		"log": game.log_lines,
 		"grid": game.grid,
 		"stairs": [game.stairs.x, game.stairs.y],
+		"up_stairs": [game.up_stairs.x, game.up_stairs.y],
 		"stairs_locked": game.stairs_locked,
 		"shrine": null if game.shrine == null else [game.shrine.x, game.shrine.y],
 		"decor": decor,
