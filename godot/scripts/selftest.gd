@@ -53,6 +53,7 @@ func _process(_delta: float) -> bool:
 	var depth_at: int = _game.depth
 	var started := Time.get_ticks_msec()
 	_check_audio()
+	_check_dungeon()
 
 	# Seeded, so a failure can be looked at again instead of being a
 	# story about a run nobody can reproduce. The game randomises its
@@ -78,6 +79,7 @@ func _process(_delta: float) -> bool:
 	_check_classes()
 	_check_superboss()
 	_check_monster_habits()
+	_check_bag()
 
 	# The direct checks above are deliberately rough with the game:
 	# they set the hero to 200 health, drop them next to a test
@@ -431,6 +433,12 @@ func _check(where: String) -> void:
 	# closed off.
 	if _game.reachable_from(Vector2i(p.x, p.y)).size() < 2:
 		_complain("Held kommt nirgendwo mehr hin", "(%d, %d) bei %s" % [p.x, p.y, where])
+	# Nothing outside the map may end up remembered: drawing it reads
+	# the grid past its end.
+	for cell in _game.explored:
+		if cell.x < 0 or cell.y < 0 or cell.x >= 40 or cell.y >= 25:
+			_complain("Feld außerhalb der Karte erkundet", "%s bei %s" % [str(cell), where])
+			break
 	if p.level < 1 or p.max_hp < 1:
 		_complain("unmoegliche Spielerwerte", "Stufe %d bei %s" % [p.level, where])
 
@@ -1128,4 +1136,92 @@ func _check_monster_habits() -> void:
 		if _game.traps.is_empty():
 			_complain("Goblin legt nie etwas ab")
 		_game.traps.clear()
+
+
+## The map itself, before anything is put on it: every floor cell has to
+## be walkable to from the start, and every room has to lie inside the
+## border. A single cut-off cell is invisible until something is placed
+## on it - or until the hero is teleported into it.
+func _check_dungeon() -> void:
+	var rng := RandomNumberGenerator.new()
+	for round_ in 40:
+		rng.seed = _seed * 1000 + round_
+		var made: Dictionary = Dungeon.generate(40, 25, rng)
+		var grid: Array = made["grid"]
+		var rooms: Array = made["rooms"]
+		if rooms.is_empty():
+			_complain("Ebene ganz ohne Räume")
+			continue
+		for room in rooms:
+			if room.x1 < 1 or room.y1 < 1 or room.x2 > 39 or room.y2 > 24:
+				_complain("Raum ragt über den Rand",
+					"(%d,%d)-(%d,%d)" % [room.x1, room.y1, room.x2, room.y2])
+
+		# Flood fill from the first room and count what it did not touch.
+		var start: Vector2i = rooms[0].center()
+		var seen := {start: true}
+		var stack: Array[Vector2i] = [start]
+		while not stack.is_empty():
+			var cell: Vector2i = stack.pop_back()
+			for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var step: Vector2i = cell + offset
+				if seen.has(step) or not Dungeon.is_walkable(grid, step.x, step.y):
+					continue
+				seen[step] = true
+				stack.append(step)
+		var stranded: Array[String] = []
+		for y in 25:
+			for x in 40:
+				var cell := Vector2i(x, y)
+				if Dungeon.is_walkable(grid, x, y) and not seen.has(cell):
+					stranded.append(str(cell))
+		if not stranded.is_empty():
+			_complain("abgeschnittene Felder in der Ebene",
+				"%d Stück, z.B. %s" % [stranded.size(), stranded[0]])
+
+
+## The bag has to list what is carried and nothing else, and its buttons
+## have to do what they say. It is the one screen that is rebuilt from
+## live state every time it opens, so a stale entry is a real risk.
+func _check_bag() -> void:
+	_settle()
+	var p = _game.player
+	p.potion_counts.clear()
+	p.potions = 0
+	p.scrolls.clear()
+	p.add_potion("healing", 2)
+	p.add_potion("haste")
+	p.scrolls["reveal"] = 1
+	_game.open_bag()
+	if not _game._bag_panel.visible:
+		_complain("Tasche öffnet nicht")
+		return
+	var lines := 0
+	for child in _game._bag_list.get_children():
+		if child is Button:
+			lines += 1
+	if lines != 3:
+		_complain("Tasche listet die falsche Zahl an Dingen",
+			"%d statt 3" % lines)
+
+	# Movement is blocked while it is open, or a stray tap on the map
+	# behind it costs a turn.
+	var was := Vector2i(p.x, p.y)
+	_game.try_move(Vector2i(1, 0))
+	if Vector2i(p.x, p.y) != was:
+		_complain("Held läuft mit offener Tasche weiter")
+	_game.close_bag()
+	if _game._bag_panel.visible:
+		_complain("Tasche schließt nicht")
+
+	# Drinking from the bag drinks that one, not the selected one.
+	p.selected_potion = "healing"
+	p.hp = maxi(1, p.max_hp / 2)
+	_game.open_bag()
+	_game._drink_from_bag("haste")
+	if p.potion_counts.has("haste"):
+		_complain("Trank aus der Tasche wird nicht verbraucht", "haste")
+	if not p.buffs.has("haste"):
+		_complain("Trank aus der Tasche wirkt nicht", "haste")
+	_game.close_bag()
 

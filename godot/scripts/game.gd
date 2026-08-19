@@ -85,6 +85,9 @@ var _sound_button: Button
 var _difficulty_button: Button
 var _flash_button: Button
 var _drink_button: Button
+var _bag_panel: PanelContainer
+var _bag_list: VBoxContainer
+var _bag_stats: Label
 var _flash: ColorRect
 var _minimap: TextureRect
 var _banner: Label
@@ -814,6 +817,12 @@ func recompute_fov() -> void:
 			if Vector2(dx, dy).length() > Data.FOV_RADIUS:
 				continue
 			var cell := here + Vector2i(dx, dy)
+			# Off the map is not somewhere you can see. Without this the
+			# cells past the border end up in `explored`, and drawing them
+			# reads the grid out of bounds - which is an error every frame
+			# for as long as the hero stands near an edge.
+			if cell.x < 0 or cell.y < 0 or cell.x >= MAP_W or cell.y >= MAP_H:
+				continue
 			if _line_clear(here, cell):
 				lit[cell] = true
 				explored[cell] = true
@@ -835,6 +844,8 @@ func try_move(step: Vector2i) -> void:
 	if dead or choosing or step == Vector2i.ZERO or shop_open != null:
 		return
 	if player.pending_perks > 0 and _perk_panel != null and _perk_panel.visible:
+		return
+	if _bag_panel != null and _bag_panel.visible:
 		return
 	var target := Vector2i(player.x + step.x, player.y + step.y)
 	if step.x != 0:
@@ -1830,6 +1841,8 @@ func paint() -> void:
 
 
 func _tile_for(x: int, y: int) -> String:
+	if x < 0 or y < 0 or x >= MAP_W or y >= MAP_H:
+		return ""
 	if grid[y][x] != Dungeon.WALL:
 		return "floor_%d" % (1 + (x * 7 + y * 13 + x * y * 3) % FLOOR_VARIANTS)
 	var south := not _is_wall(x, y + 1)
@@ -2048,6 +2061,15 @@ func _build_hud() -> void:
 	swap.pressed.connect(cycle_potion)
 	_play_ui.add_child(swap)
 
+	var bag := Button.new()
+	bag.text = "TASCHE"
+	bag.custom_minimum_size = Vector2(size * 1.2, size * 0.6)
+	bag.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	bag.position = Vector2(-pad - size * 2.3, pad)
+	bag.add_theme_font_size_override("font_size", 24)
+	bag.pressed.connect(open_bag)
+	_play_ui.add_child(bag)
+
 	# One button per scroll, shown only while one is carried. Three of
 	# them, each aiming itself - a targeting mode for that would be more
 	# interface than the scrolls are worth.
@@ -2087,10 +2109,26 @@ func _build_hud() -> void:
 	_play_ui.add_child(_banner)
 
 	_build_minimap()
+	_build_bag_panel()
 	_build_shop_panel()
 	_build_perk_panel()
 	_build_dead_panel()
 	_build_title_panel()
+
+
+## Hangs a dialog in the middle of the screen and keeps it there.
+##
+## Anchoring a panel to the centre and offsetting it by half its
+## minimum size only works while the contents fit inside that minimum.
+## The moment a longer potion name makes the panel wider, it grows to
+## the right and the whole thing sits off-centre - which is exactly
+## what the bag did. A CenterContainer has no such opinion.
+func _centred(panel: Control) -> CenterContainer:
+	var holder := CenterContainer.new()
+	holder.set_anchors_preset(Control.PRESET_FULL_RECT)
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_child(panel)
+	return holder
 
 
 ## A panel you cannot see through. The default theme panel is nearly
@@ -2112,12 +2150,10 @@ func _solid_panel(panel: PanelContainer) -> void:
 ## instead of quietly throwing the second away.
 func _build_perk_panel() -> void:
 	_perk_panel = PanelContainer.new()
-	_perk_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_perk_panel.position = Vector2(-340, -180)
 	_perk_panel.custom_minimum_size = Vector2(680, 360)
 	_perk_panel.visible = false
 	_solid_panel(_perk_panel)
-	_hud.add_child(_perk_panel)
+	_hud.add_child(_centred(_perk_panel))
 
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 14)
@@ -2255,6 +2291,159 @@ func _glide(delta: float) -> void:
 		if sprite.position.is_equal_approx(where):
 			_gliding.erase(sprite)
 
+## The bag: everything carried, on one screen, each line a button.
+##
+## Cycling through thirty kinds of flask with one arrow works when you
+## carry two. It does not when you carry eight and the one you want is
+## sixth. This is also the only place the full set of numbers is written
+## out - the top line has room for the ones that change every turn, not
+## for all of them.
+func _build_bag_panel() -> void:
+	_bag_panel = PanelContainer.new()
+	_bag_panel.custom_minimum_size = Vector2(760, 520)
+	_bag_panel.visible = false
+	_solid_panel(_bag_panel)
+	_hud.add_child(_centred(_bag_panel))
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 10)
+	_bag_panel.add_child(column)
+
+	var heading := Label.new()
+	heading.text = "Tasche"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 32)
+	heading.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
+	column.add_child(heading)
+
+	_bag_stats = Label.new()
+	_bag_stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_bag_stats.add_theme_font_size_override("font_size", 22)
+	_bag_stats.add_theme_color_override("font_color", Color(0.80, 0.80, 0.86))
+	column.add_child(_bag_stats)
+
+	var scroller := ScrollContainer.new()
+	scroller.custom_minimum_size = Vector2(0, 300)
+	scroller.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	column.add_child(scroller)
+
+	_bag_list = VBoxContainer.new()
+	_bag_list.custom_minimum_size = Vector2(700, 0)
+	_bag_list.add_theme_constant_override("separation", 6)
+	scroller.add_child(_bag_list)
+
+	var close := Button.new()
+	close.text = "ZURÜCK"
+	close.custom_minimum_size = Vector2(0, 64)
+	close.add_theme_font_size_override("font_size", 26)
+	close.pressed.connect(close_bag)
+	column.add_child(close)
+
+
+func open_bag() -> void:
+	if dead or choosing or _bag_panel == null:
+		return
+	_refresh_bag()
+	_bag_panel.visible = true
+
+
+func close_bag() -> void:
+	if _bag_panel != null:
+		_bag_panel.visible = false
+
+
+## Rebuilt each time it opens: what is carried changes constantly, and a
+## handful of buttons is cheap to make.
+func _refresh_bag() -> void:
+	if _bag_list == null:
+		return
+	_bag_stats.text = "%s +%d     %s +%d     Angriff %d     Verteidigung %d     Krit %d%%" % [
+		player.weapon_name(), player.weapon_bonus(),
+		player.armour_name(), player.armour_bonus(),
+		player.power(), player.defense(), int(round(player.crit_chance() * 100.0))]
+
+	for old in _bag_list.get_children():
+		old.queue_free()
+
+	var ids: Array = player.potion_counts.keys()
+	ids.sort()
+	for id in ids:
+		var potion := Data.potion_by_id(id)
+		var button := Button.new()
+		button.custom_minimum_size = Vector2(0, 54)
+		button.add_theme_font_size_override("font_size", 22)
+		button.text = "%s  x%d - %s" % [potion["name"], int(player.potion_counts[id]),
+			_describe(potion["effect"])]
+		button.pressed.connect(_drink_from_bag.bind(id))
+		_bag_list.add_child(button)
+
+	var scroll_ids: Array = player.scrolls.keys()
+	scroll_ids.sort()
+	for id in scroll_ids:
+		var scroll := Data.scroll_by_id(id)
+		var button := Button.new()
+		button.custom_minimum_size = Vector2(0, 54)
+		button.add_theme_font_size_override("font_size", 22)
+		button.text = "%s  x%d - %s" % [scroll["name"], int(player.scrolls[id]), scroll["desc"]]
+		button.pressed.connect(_read_from_bag.bind(id))
+		_bag_list.add_child(button)
+
+	if _bag_list.get_child_count() == 0:
+		var empty := Label.new()
+		empty.text = "Nichts dabei."
+		empty.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		empty.add_theme_font_size_override("font_size", 22)
+		_bag_list.add_child(empty)
+
+
+func _drink_from_bag(id: String) -> void:
+	player.selected_potion = id
+	close_bag()
+	drink()
+
+
+func _read_from_bag(id: String) -> void:
+	close_bag()
+	read_scroll(id)
+
+
+## A potion effect in words. Built from the table, so a new potion
+## describes itself instead of needing a second list nobody remembers to
+## keep in step.
+func _describe(effect: Dictionary) -> String:
+	var parts: Array[String] = []
+	if effect.has("heal"):
+		parts.append("heilt %d" % int(effect["heal"]))
+	if effect.has("heal_pct"):
+		parts.append("heilt vollständig")
+	if effect.has("max_hp"):
+		parts.append("+%d maximales Leben" % int(effect["max_hp"]))
+	if effect.has("base_power"):
+		parts.append("+%d Angriff" % int(effect["base_power"]))
+	if effect.has("base_defense"):
+		parts.append("+%d Verteidigung" % int(effect["base_defense"]))
+	if effect.has("xp_levels"):
+		parts.append("Erfahrung")
+	if effect.has("buff"):
+		parts.append("%s für %d Züge" % [
+			Data.BUFFS[effect["buff"]]["name"], int(effect.get("turns", 10))])
+	if effect.has("shield"):
+		parts.append("Schild %d" % int(effect["shield"]))
+	if effect.has("reveal"):
+		parts.append("zeigt die Ebene")
+	if effect.has("blink"):
+		parts.append("versetzt dich")
+	if effect.has("gold"):
+		parts.append("Gold")
+	if effect.has("cure"):
+		parts.append("heilt Leiden")
+	if effect.has("self_poison"):
+		parts.append("vergiftet dich")
+	if effect.has("burst_damage"):
+		parts.append("zerplatzt: %d Schaden im Umkreis" % int(effect["burst_damage"]))
+	return ", ".join(parts)
+
+
 ## A line across the middle of the screen for the handful of moments that
 ## deserve one: a boss waking up, a vault found, a new stretch of the
 ## dungeon. The log at the bottom is for everything else - a banner for
@@ -2323,12 +2512,10 @@ func _hurt_flash() -> void:
 ## the player has no idea whether it went well.
 func _build_dead_panel() -> void:
 	_dead_panel = PanelContainer.new()
-	_dead_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_dead_panel.position = Vector2(-320, -200)
 	_dead_panel.custom_minimum_size = Vector2(640, 400)
 	_dead_panel.visible = false
 	_solid_panel(_dead_panel)
-	_hud.add_child(_dead_panel)
+	_hud.add_child(_centred(_dead_panel))
 
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 16)
@@ -2555,6 +2742,7 @@ func _build_title_panel() -> void:
 ## the choice is never made against the corpse of the last run.
 func show_title() -> void:
 	choosing = true
+	close_bag()
 	if _perk_panel != null:
 		_perk_panel.visible = false
 	if _dead_panel != null:
@@ -2582,6 +2770,7 @@ func continue_run() -> void:
 
 func choose_class(id: String) -> void:
 	hero_class = id
+	close_bag()
 	if _perk_panel != null:
 		_perk_panel.visible = false
 	if _dead_panel != null:
@@ -2597,12 +2786,10 @@ func choose_class(id: String) -> void:
 
 func _build_shop_panel() -> void:
 	_shop_panel = PanelContainer.new()
-	_shop_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_shop_panel.position = Vector2(-360, -220)
 	_shop_panel.custom_minimum_size = Vector2(720, 440)
 	_shop_panel.visible = false
 	_solid_panel(_shop_panel)
-	_hud.add_child(_shop_panel)
+	_hud.add_child(_centred(_shop_panel))
 
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 12)
