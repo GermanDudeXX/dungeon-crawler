@@ -11,6 +11,7 @@ const PATH := "user://settings.json"
 const DEFAULTS := {
 	"sound": true,
 	"music": true,
+	"difficulty": "normal",
 }
 
 

@@ -466,3 +466,32 @@ const SMITH_ARMOUR_STEP := 1
 static func smith_price(bonus: int) -> int:
 	return SMITH_BASE_PRICE + SMITH_PRICE_PER_POINT * maxi(0, bonus)
 
+
+# --- Schwierigkeit --------------------------------------------------------
+# Picked before the hero, the same four as constants.py DIFFICULTIES.
+# The multipliers are applied where the numbers are made - to the pool a
+# monster is built from and to the hero's starting health - not to every
+# calculation afterwards, so nothing has to remember to re-apply them.
+const DIFFICULTIES := [
+	{"id": "easy", "name": "Leicht", "desc": "Für den Weg dahin.",
+		"player_hp": 2.0, "player_damage": 1.0, "enemy_hp": 0.75, "enemy_damage": 0.5,
+		"markup": 0.0},
+	{"id": "normal", "name": "Normal", "desc": "So ist es gedacht.",
+		"player_hp": 1.0, "player_damage": 1.0, "enemy_hp": 1.0, "enemy_damage": 1.0,
+		"markup": 0.0},
+	{"id": "hard", "name": "Schwer", "desc": "Härter, teurer, tödlicher.",
+		"player_hp": 0.75, "player_damage": 1.2, "enemy_hp": 1.25, "enemy_damage": 1.25,
+		"markup": 0.20},
+	{"id": "hardcore", "name": "Hardcore", "desc": "Jeder Fehler zählt doppelt.",
+		"player_hp": 0.5, "player_damage": 0.5, "enemy_hp": 2.0, "enemy_damage": 2.0,
+		"markup": 0.50},
+]
+const DEFAULT_DIFFICULTY := "normal"
+
+
+static func difficulty_by_id(id: String) -> Dictionary:
+	for entry in DIFFICULTIES:
+		if entry["id"] == id:
+			return entry
+	return DIFFICULTIES[1]
+

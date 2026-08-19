@@ -55,6 +55,7 @@ var shrine = null                ## the cell holding this floor's shrine, or nul
 var shop_open = null            ## the shop the hero is standing in
 var dead := false
 var hero_class := Data.DEFAULT_CLASS
+var difficulty := Data.DEFAULT_DIFFICULTY
 var choosing := true            ## the title screen is up, nothing moves
 var rng := RandomNumberGenerator.new()
 
@@ -78,6 +79,7 @@ var _continue_button: Button
 var _dead_panel: PanelContainer
 var _dead_text: Label
 var _sound_button: Button
+var _difficulty_button: Button
 var _drink_button: Button
 var _scroll_buttons: Array = []
 var _perk_panel: PanelContainer
@@ -96,6 +98,7 @@ func _ready() -> void:
 	add_child(audio)
 	audio.enabled = settings["sound"]
 	audio.music_enabled = settings["music"]
+	difficulty = str(settings.get("difficulty", Data.DEFAULT_DIFFICULTY))
 	_build_world()
 	_build_hud()
 	# A run starts behind the title screen, not in front of it: the
@@ -171,7 +174,7 @@ func _sprite_for(name: String) -> Texture2D:
 # --- a run ----------------------------------------------------------------
 
 func new_run() -> void:
-	player = Entities.Player.new(hero_class)
+	player = Entities.Player.new(hero_class, difficulty)
 	depth = 1
 	dead = false
 	log_lines.clear()
@@ -189,7 +192,7 @@ func load_run() -> bool:
 	var save: Dictionary = data
 
 	hero_class = save["class"]
-	player = Entities.Player.new(hero_class)
+	player = Entities.Player.new(hero_class, difficulty)
 	var p: Dictionary = save["player"]
 	player.x = int(p["x"])
 	player.y = int(p["y"])
@@ -392,7 +395,7 @@ func _populate() -> void:
 		var cell: Variant = _free_cell(spawn_rooms)
 		if cell == null:
 			continue
-		var monster := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"])
+		var monster := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"], difficulty)
 		monster.x = cell.x
 		monster.y = cell.y
 		if depth >= 2 and rng.randf() < Data.ELITE_CHANCE:
@@ -406,7 +409,7 @@ func _populate() -> void:
 	if Data.has_boss(depth):
 		var boss_cell = _free_cell([rooms[-1]] if not rooms.is_empty() else spawn_rooms)
 		if boss_cell != null:
-			var boss := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"])
+			var boss := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"], difficulty)
 			boss.x = boss_cell.x
 			boss.y = boss_cell.y
 			boss.max_hp = int(boss.max_hp * Data.BOSS_HP_MULT)
@@ -426,7 +429,7 @@ func _populate() -> void:
 	if Data.has_mini_boss(depth):
 		var mini_cell = _free_cell(spawn_rooms)
 		if mini_cell != null:
-			var mini := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"])
+			var mini := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"], difficulty)
 			mini.x = mini_cell.x
 			mini.y = mini_cell.y
 			mini.max_hp = int(mini.max_hp * Data.MINI_BOSS_MULT)
@@ -449,7 +452,7 @@ func _populate() -> void:
 			if guard_cell == null:
 				continue
 			var guard := Entities.Monster.new(Data.pick_kind(depth, rng),
-				tier["mult"] * Data.VAULT_GUARD_MULT)
+				tier["mult"] * Data.VAULT_GUARD_MULT, difficulty)
 			guard.x = guard_cell.x
 			guard.y = guard_cell.y
 			guard.make_elite(Data.ELITES[rng.randi() % Data.ELITES.size()])
@@ -726,7 +729,9 @@ func try_move(step: Vector2i) -> void:
 
 
 func _attack_monster(monster) -> void:
-	var damage: int = maxi(1, player.power() - monster.defense)
+	var damage: int = maxi(1, int(round((player.power() - monster.defense)
+		* float(Data.difficulty_by_id(difficulty)["player_damage"]))))
+	damage = maxi(1, damage)
 	var crit := rng.randf() < player.crit_chance()
 	if crit:
 		damage *= Data.CRIT_MULT
@@ -1038,7 +1043,7 @@ func _open_chest(cell: Vector2i) -> void:
 	if spot == null:
 		say("Die Truhe war eine Mimik - aber sie kommt nicht heraus.")
 		return
-	var mimic := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"])
+	var mimic := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"], difficulty)
 	mimic.x = spot.x
 	mimic.y = spot.y
 	mimic.max_hp = int(mimic.max_hp * Data.MIMIC_MULT)
@@ -1075,20 +1080,20 @@ func buy(what: String) -> void:
 		"potion":
 			var id: String = what.substr(7) if what.begins_with("potion:") else Data.DEFAULT_POTION
 			var potion := Data.potion_by_id(id)
-			if _spend(int(potion["price"])):
+			if _spend(price(int(potion["price"]))):
 				player.add_potion(id)
 				say("Gekauft: %s." % potion["name"])
 		"weapon":
 			# The smith hammers on what you carry rather than selling you a
 			# new one: that is the whole reason he exists, and it keeps the
 			# weapon you found in play instead of retiring it.
-			if _spend(Data.smith_price(player.weapon_extra)):
+			if _spend(price(Data.smith_price(player.weapon_extra))):
 				player.weapon_extra += Data.SMITH_WEAPON_STEP
 				audio.play("equip")
 				say("Der Schmied schärft %s auf +%d." % [
 					player.weapon_name(), player.weapon_bonus()])
 		"armour":
-			if _spend(Data.smith_price(player.armour_extra)):
+			if _spend(price(Data.smith_price(player.armour_extra))):
 				player.armour_extra += Data.SMITH_ARMOUR_STEP
 				audio.play("equip")
 				say("Der Schmied verstärkt %s auf +%d." % [
@@ -1097,11 +1102,19 @@ func buy(what: String) -> void:
 		"heal":
 			if player.hp >= player.max_hp:
 				say("Dir fehlt nichts.")
-			elif _spend(Data.UPGRADE_COST):
+			elif _spend(price(Data.UPGRADE_COST)):
 				player.hp = player.max_hp
 				player.poison_turns = 0
 				say("Der Schmied flickt dich zusammen.")
 	_refresh_shop()
+
+
+## What a shopkeeper actually asks. The harder levels put a markup on
+## everything, which is what makes gold tight rather than just making
+## monsters hit harder.
+func price(base: int) -> int:
+	var markup: float = float(Data.difficulty_by_id(difficulty)["markup"])
+	return int(round(base * (1.0 + markup)))
 
 
 func _spend(cost: int) -> bool:
@@ -1255,7 +1268,7 @@ func _ambush() -> void:
 		var cell: Vector2i = Vector2i(player.x, player.y) + offset
 		if not Dungeon.is_walkable(grid, cell.x, cell.y) or occupied(cell):
 			continue
-		var ghost := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"])
+		var ghost := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"], difficulty)
 		ghost.x = cell.x
 		ghost.y = cell.y
 		ghost.awake = true
@@ -1768,8 +1781,14 @@ func _build_dead_panel() -> void:
 func _show_death() -> void:
 	if _dead_panel == null:
 		return
-	_dead_text.text = "Ebene %d     Stufe %d     %d Kills     %d Gold" % [
-		depth, player.level, player.kills, player.gold]
+	# The run goes into the record before it is shown, so the totals
+	# under the summary already include the run being summarised.
+	var stats := Stats.record_run(depth, player.level, player.kills, player.gold, true)
+	_dead_text.text = "Ebene %d     Stufe %d     %d Kills     %d Gold
+
+%d Läufe, %d Tode - am tiefsten: Ebene %d" % [
+		depth, player.level, player.kills, player.gold,
+		stats["runs"], stats["deaths"], stats["deepest"]]
 	_dead_panel.visible = true
 
 
@@ -1794,6 +1813,14 @@ func _build_settings(column: VBoxContainer) -> void:
 	_music_button.add_theme_font_size_override("font_size", 24)
 	_music_button.pressed.connect(toggle_music)
 	row.add_child(_music_button)
+
+	# The difficulty sits with the other switches rather than on a page
+	# of its own: it is picked once, in the same breath as the sound.
+	_difficulty_button = Button.new()
+	_difficulty_button.custom_minimum_size = Vector2(360, 62)
+	_difficulty_button.add_theme_font_size_override("font_size", 24)
+	_difficulty_button.pressed.connect(cycle_difficulty)
+	row.add_child(_difficulty_button)
 	_refresh_settings()
 
 
@@ -1801,8 +1828,27 @@ func _refresh_settings() -> void:
 	if _sound_button == null:
 		return
 	_sound_button.text = "Ton: %s" % ("AN" if settings["sound"] else "AUS")
+	if _difficulty_button != null:
+		var level_of_play := Data.difficulty_by_id(difficulty)
+		_difficulty_button.text = "Schwierigkeit: %s" % level_of_play["name"]
+		_difficulty_button.tooltip_text = level_of_play["desc"]
 	_music_button.text = "Musik: %s" % ("AN" if settings["music"] else "AUS")
 
+
+## Walks through the four levels of play. Only settable from the title
+## screen, which is the only place it is shown - changing it mid-run
+## would rescale monsters that were already built.
+func cycle_difficulty() -> void:
+	var at := 0
+	for i in Data.DIFFICULTIES.size():
+		if Data.DIFFICULTIES[i]["id"] == difficulty:
+			at = i
+			break
+	difficulty = Data.DIFFICULTIES[(at + 1) % Data.DIFFICULTIES.size()]["id"]
+	settings["difficulty"] = difficulty
+	Settings.write(settings)
+	_refresh_settings()
+	audio.play("equip")
 
 func toggle_sound() -> void:
 	settings["sound"] = not settings["sound"]
@@ -1999,16 +2045,16 @@ func _refresh_shop() -> void:
 	if smith:
 		offers.append(["weapon", "Schärfen: %s +%d" % [
 			Data.WEAPONS[player.weapon]["name"], Data.SMITH_WEAPON_STEP],
-			Data.smith_price(player.weapon_extra)])
+			price(Data.smith_price(player.weapon_extra))])
 		offers.append(["armour", "Verstärken: %s +%d" % [
 			Data.ARMOURS[player.armour]["name"], Data.SMITH_ARMOUR_STEP],
-			Data.smith_price(player.armour_extra)])
-		offers.append(["heal", "Voll heilen", Data.UPGRADE_COST])
+			price(Data.smith_price(player.armour_extra))])
+		offers.append(["heal", "Voll heilen", price(Data.UPGRADE_COST)])
 
 	else:
 		for id in shop_open.get("stock", []):
 			var potion := Data.potion_by_id(id)
-			offers.append(["potion:" + id, potion["name"], int(potion["price"])])
+			offers.append(["potion:" + id, potion["name"], price(int(potion["price"]))])
 
 	for i in _shop_buttons.size():
 		var button: Button = _shop_buttons[i]

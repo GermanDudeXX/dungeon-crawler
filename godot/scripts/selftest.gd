@@ -69,6 +69,9 @@ func _process(_delta: float) -> bool:
 	# refused while the game is still asking who you are.
 	_check_potions()
 	_check_mimic()
+	_check_difficulty()
+	_check_scrolls()
+	_check_traps()
 
 	for turn in _turns:
 		if _game.dead:
@@ -270,12 +273,13 @@ func _process(_delta: float) -> bool:
 	if played.size() < Data.CLASSES.size():
 		print("  nicht jede Klasse gespielt: %d von %d" % [played.size(), Data.CLASSES.size()])
 		failed = true
-	# Mimics have a check of their own now; a run that happens not to
-	# roll one is not a failure.
+	# Every one of these has a check of its own that does not depend
+	# on the dice, so a run that happens not to meet one is worth
+	# printing, not failing. A test that goes red for no reason is a
+	# test people learn to ignore.
 	for what in seen:
-		if seen[what] == 0 and what != "Mimics":
-			print("  nie erreicht: %s - ungetestet" % what)
-			failed = true
+		if seen[what] == 0:
+			print("  im Durchlauf nie getroffen: %s (hat eine eigene Prüfung)" % what)
 	for what in _problems:
 		print("  %5dx  %s" % [_problems[what], what])
 		failed = true
@@ -614,4 +618,120 @@ func _open_spot() -> Variant:
 				if free:
 					return cell
 	return null
+
+
+## The four levels of play have to actually differ, and in the right
+## direction. The multipliers are baked in when a monster is built, so a
+## typo there is invisible until someone plays Hardcore and finds it
+## easier than Normal.
+func _check_difficulty() -> void:
+	var last_hp := 0
+	var last_power := 0
+	for entry in Data.DIFFICULTIES:
+		var id: String = entry["id"]
+		var hero = Entities.Player.new("warrior", id)
+		var expected: int = maxi(1, int(round(20 * 1.4 * float(entry["player_hp"]))))
+		if hero.max_hp != expected:
+			_complain("Schwierigkeit ändert das Heldenleben nicht",
+				"%s: %d statt %d" % [id, hero.max_hp, expected])
+
+		var orc = Entities.Monster.new("orc", 1.0, id)
+		if id != "easy":
+			if orc.max_hp < last_hp:
+				_complain("härtere Stufe hat schwächere Gegner",
+					"%s: %d Leben nach %d" % [id, orc.max_hp, last_hp])
+			if orc.power < last_power:
+				_complain("härtere Stufe trifft schwächer",
+					"%s: %d Schaden nach %d" % [id, orc.power, last_power])
+		last_hp = orc.max_hp
+		last_power = orc.power
+
+		# Prices climb with the markup, and the smith is the one that has
+		# to feel it - he is the gold sink.
+		_game.difficulty = id
+		var asked: int = _game.price(100)
+		var want: int = int(round(100 * (1.0 + float(entry["markup"]))))
+		if asked != want:
+			_complain("Preisaufschlag stimmt nicht", "%s: %d statt %d" % [id, asked, want])
+	_game.difficulty = Data.DEFAULT_DIFFICULTY
+
+
+## Reads each scroll once and checks it did its job. Same reason as the
+## potions: scrolls are an 8% drop, so a short run can end without one
+## ever being carried, and "the fireball does nothing" is not something
+## to find out on a phone.
+func _check_scrolls() -> void:
+	var p = _game.player
+
+	# Enthüllung: the whole floor becomes known.
+	_game.explored.clear()
+	_game.explored[Vector2i(p.x, p.y)] = true
+	p.scrolls["reveal"] = 1
+	_game.read_scroll("reveal")
+	if _game.explored.size() < 50:
+		_complain("Enthüllung deckt die Ebene nicht auf",
+			"%d Felder bekannt" % _game.explored.size())
+	if p.scrolls.has("reveal"):
+		_complain("Schriftrolle wird nicht verbraucht", "reveal")
+
+	# Blitzreise: the hero ends up somewhere else, and somewhere legal.
+	var was := Vector2i(p.x, p.y)
+	p.scrolls["teleport"] = 1
+	_game.read_scroll("teleport")
+	if Vector2i(p.x, p.y) == was:
+		_complain("Blitzreise bewegt den Helden nicht")
+	if not Dungeon.is_walkable(_game.grid, p.x, p.y):
+		_complain("Blitzreise setzt den Helden in eine Wand")
+
+	# Feuerball: something in sight loses health, or dies.
+	var spot: Variant = _open_spot()
+	if spot == null:
+		return
+	p.x = spot.x
+	p.y = spot.y
+	var target = Entities.Monster.new("orc", 4.0, "easy")
+	target.x = spot.x + 1
+	target.y = spot.y
+	target.snap()
+	_game.monsters.append(target)
+	_game.recompute_fov()
+	var before: int = target.hp
+	p.scrolls["fireball"] = 1
+	_game.read_scroll("fireball")
+	if target.is_alive() and target.hp >= before:
+		_complain("Feuerball richtet keinen Schaden an",
+			"%d von %d Leben" % [target.hp, before])
+	_game.monsters.erase(target)
+
+
+## Springs every kind of trap on purpose. Which traps a floor gets is a
+## dice roll, so a run can end without stepping on one - and a trap that
+## does nothing is a trap nobody notices is broken.
+func _check_traps() -> void:
+	for id in Data.TRAPS:
+		var trap: Dictionary = Data.TRAPS[id]
+		var p = _game.player
+		var spot: Variant = _open_spot()
+		if spot == null:
+			return
+		p.max_hp = 200
+		p.hp = 200
+		p.poison_turns = 0
+		p.damage_reduction = 0.0
+		_game.dead = false
+		_game.traps[spot] = id
+		p.x = spot.x
+		p.y = spot.y
+		_game._spring_trap(spot)
+		if p.hp >= 200:
+			_complain("Falle richtet keinen Schaden an", id)
+		if trap.has("poison") and p.poison_turns <= 0:
+			_complain("Giftfalle vergiftet nicht", id)
+		# One-shot traps are gone after springing; the others stay armed.
+		var still_there: bool = _game.traps.has(spot)
+		if trap.get("one_shot", false) and still_there:
+			_complain("Einmalfalle bleibt liegen", id)
+		if not trap.get("one_shot", false) and not still_there:
+			_complain("Dauerfalle verschwindet", id)
+		_game.traps.erase(spot)
 

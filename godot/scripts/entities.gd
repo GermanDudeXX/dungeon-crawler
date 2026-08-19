@@ -60,10 +60,12 @@ class Player extends Actor:
 	## The class shapes the opening hand only: it multiplies the base
 	## pool once, here, so a level-up later adds to the adjusted value
 	## rather than rescaling it.
-	func _init(class_id := Data.DEFAULT_CLASS) -> void:
+	func _init(class_id := Data.DEFAULT_CLASS, difficulty_id := Data.DEFAULT_DIFFICULTY) -> void:
 		var info := Data.class_by_id(class_id)
+		var level_of_play := Data.difficulty_by_id(difficulty_id)
 		hero_class = info["id"]
-		max_hp = maxi(1, int(round(20 * float(info["hp_mult"]))))
+		max_hp = maxi(1, int(round(20 * float(info["hp_mult"])
+			* float(level_of_play["player_hp"]))))
 		hp = max_hp
 		base_power += int(info["power"])
 		base_defense += int(info["defense"])
@@ -203,12 +205,17 @@ class Monster extends Actor:
 	var regen := 0                  ## heals this much at the end of its turn
 	var is_elite := false
 
-	func _init(kind_id: String, tier_mult: float) -> void:
+	func _init(kind_id: String, tier_mult: float, difficulty_id := Data.DEFAULT_DIFFICULTY) -> void:
 		kind = kind_id
 		var info: Dictionary = Data.MONSTERS[kind_id]
-		max_hp = maxi(1, int(round(info["hp"] * tier_mult)))
+		var level_of_play := Data.difficulty_by_id(difficulty_id)
+		# Baked into the pool at creation, like the tier multiplier: every
+		# later bonus then stacks on the adjusted value instead of
+		# silently rescaling it.
+		max_hp = maxi(1, int(round(info["hp"] * tier_mult * float(level_of_play["enemy_hp"]))))
 		hp = max_hp
-		power = maxi(1, int(round(info["power"] * tier_mult)))
+		power = maxi(1, int(round(info["power"] * tier_mult
+			* float(level_of_play["enemy_damage"]))))
 		defense = int(round(info.get("defense", 0) * tier_mult))
 		xp_reward = maxi(1, int(round(info["xp"] * tier_mult)))
 		display_name = info["name"]
