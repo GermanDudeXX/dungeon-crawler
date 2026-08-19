@@ -191,6 +191,10 @@ const SUMMON_CHANCE := 0.18         ## per bone mage turn
 const SUMMON_LIMIT := 3             ## how many it may have out at once
 const WEB_CHANCE := 0.22            ## per widow turn
 const WEB_SLOW := 3                 ## turns a web holds you
+# A door on a room's entrance. Closed it blocks the way and the view;
+# walking into it opens it and costs the turn. Not every entrance gets
+# one, or a floor becomes a series of doors.
+const DOOR_CHANCE := 0.45
 const POISON_PER_TURN := 2
 
 ## What a shopkeeper sells, and what a smith charges. Prices rise with

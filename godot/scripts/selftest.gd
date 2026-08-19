@@ -77,6 +77,7 @@ func _process(_delta: float) -> bool:
 	_check_scrolls()
 	_check_traps()
 	_check_diagonals()
+	_check_doors()
 	_check_elements()
 	_check_up_stairs()
 	_check_boss_phases()
@@ -398,7 +399,11 @@ func _route(target: Vector2i, dodge_hazards := true) -> Variant:
 			var step: Vector2i = cell + offset
 			if came.has(step):
 				continue
-			if not Dungeon.is_walkable(_game.grid, step.x, step.y) or _game.blocks(step):
+			if not Dungeon.is_walkable(_game.grid, step.x, step.y):
+				continue
+			# A shut door is not a wall: walking into it opens it, which
+			# costs a turn and is exactly what a player does.
+			if _game.blocks(step) and not _game.door_shut(step):
 				continue
 			# There is no getting past a shopkeeper, so a route may not
 			# plan through one - the same reason they may not stand in a
@@ -517,7 +522,9 @@ func _fingerprint() -> String:
 		"Regen=%d/%d offen=%d" % [p.regen_counter, p.regen_interval, p.pending_perks],
 		"Treppe=%s verriegelt=%s" % [str(_game.stairs), str(_game.stairs_locked)],
 		"erkundet=%d" % _game.explored.size(),
-		"Netze=%d verstrickt=%d" % [_game.webs.size(), p.webbed],
+		"Netze=%d verstrickt=%d Tueren=%d offen=%d" % [
+			_game.webs.size(), p.webbed, _game.doors.size(),
+			_game.doors.values().count(true)],
 		"Fallen=%d Gefahren=%d Dekor=%d Laeden=%d Beute=%d" % [
 			_game.traps.size(), _game.hazards.size(), _game.decor.size(),
 			_game.shops.size(), _game.items.size()],
@@ -662,6 +669,8 @@ func _check_placement() -> void:
 		things.append([cell, "Gefahr"])
 	for cell in _game.decor:
 		things.append([cell, "Dekor"])
+	for cell in _game.doors:
+		things.append([cell, "Tür"])
 	for item in _game.items:
 		things.append([item["cell"], "Beute (%s)" % item["kind"]])
 	for entry in things:
@@ -1747,4 +1756,51 @@ func _check_diagonals() -> void:
 	if Vector2i(p.x, p.y) != corner[0]:
 		_complain("Held quetscht sich durch die Wandecke",
 			"%s mit %s" % [str(corner[0]), str(corner[1])])
+
+
+## Doors: shut they stop the foot and the eye, walking into one opens it
+## and costs the turn, and no door may ever seal a room off for good -
+## a door is a moment of noise, not a lock.
+func _check_doors() -> void:
+	_settle()
+	var p = _game.player
+	_game.depth = 5
+	_game.new_level()
+	if _game.doors.is_empty():
+		_notes.append("keine Tür auf dieser Ebene - übersprungen")
+		return
+
+	var cell: Vector2i = _game.doors.keys()[0]
+	_game.doors[cell] = false
+	if not _game.blocks(cell):
+		_complain("geschlossene Tür hält niemanden auf", str(cell))
+
+	# Standing next to it and walking into it opens it, and the hero stays
+	# where they were - the turn went into the door.
+	var beside: Vector2i = Vector2i.ZERO
+	var found := false
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		beside = cell + offset
+		if Dungeon.is_walkable(_game.grid, beside.x, beside.y) and not _game.blocks(beside):
+			found = true
+			break
+	if not found:
+		return
+	p.x = beside.x
+	p.y = beside.y
+	p.hp = p.max_hp
+	_game.try_move(cell - beside)
+	if Vector2i(p.x, p.y) != beside:
+		_complain("Held läuft durch die geschlossene Tür")
+	if _game.door_shut(cell):
+		_complain("Tür lässt sich nicht öffnen", str(cell))
+	if _game.blocks(cell):
+		_complain("offene Tür blockiert weiter", str(cell))
+
+	# And with every door shut again, the stairs must still be reachable:
+	# reachability counts a door as passable, because it is.
+	for door in _game.doors:
+		_game.doors[door] = false
+	if not _game.reachable_from(Vector2i(p.x, p.y)).has(_game.stairs):
+		_complain("Treppe hinter verschlossenen Türen unerreichbar")
 

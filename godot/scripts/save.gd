@@ -58,6 +58,10 @@ static func write(game) -> void:
 			"kind": item["kind"], "amount": item.get("amount", 0),
 			"potion": item.get("potion", ""), "scroll": item.get("scroll", "")})
 
+	var doors: Array = []
+	for cell in game.doors:
+		doors.append([cell.x, cell.y, game.doors[cell]])
+
 	var webs: Array = []
 	for cell in game.webs:
 		webs.append([cell.x, cell.y])
@@ -89,6 +93,7 @@ static func write(game) -> void:
 		"decor": decor,
 		"hazards": hazards,
 		"webs": webs,
+		"doors": doors,
 		"explored": explored,
 		"monsters": monsters,
 		"items": items,

@@ -60,6 +60,7 @@ var traps := {}                 ## cell -> trap id
 var chest = null                ## {cell, mimic, opened}
 var shops: Array = []           ## {cell, kind}
 var stairs_locked := false
+var doors := {}                  ## cell -> true when open
 var webs := {}                   ## cell -> a widow's web, walked into once
 var hazards := {}               ## cell -> a standing danger, in plain sight
 var decor := {}                  ## cell -> a sprite that is only scenery
@@ -319,6 +320,9 @@ func load_run() -> bool:
 	var up: Variant = save.get("up_stairs", null)
 	up_stairs = Vector2i(int(up[0]), int(up[1])) if up != null else Vector2i(player.x, player.y)
 	stairs_locked = bool(save["stairs_locked"])
+	doors.clear()
+	for entry in save.get("doors", []):
+		doors[Vector2i(int(entry[0]), int(entry[1]))] = bool(entry[2])
 	webs.clear()
 	for entry in save.get("webs", []):
 		webs[Vector2i(int(entry[0]), int(entry[1]))] = true
@@ -602,6 +606,11 @@ func _populate() -> void:
 					monsters.append(keeper)
 					chest["guarded"] = true
 
+	# Doors on the ways into rooms, before anything else is put down: a
+	# shut door is a wall for the moment, and every later placement asks
+	# what is reachable.
+	_hang_doors(spawn_rooms)
+
 	# Standing hazards: visible from the moment the tile is, so they are
 	# something to walk around rather than something to discover. That is
 	# the whole difference from a trap.
@@ -793,6 +802,9 @@ func _free_cell(where: Array, within := {}) -> Variant:
 ## Every cell the hero can walk to, with `blocked` treated as solid.
 ## Used before putting a shopkeeper down: theirs is a tile nobody can
 ## pass, so it must never be the only way through.
+## Every cell the hero can get to. A shut door does not count as a
+## wall here: it can be opened, so a room behind one is reachable -
+## and every placement check in the game asks this question.
 func reachable_from(start: Vector2i, blocked := {}) -> Dictionary:
 	var seen := {start: true}
 	var stack: Array[Vector2i] = [start]
@@ -802,7 +814,9 @@ func reachable_from(start: Vector2i, blocked := {}) -> Dictionary:
 			var step: Vector2i = cell + offset
 			if seen.has(step) or blocked.has(step):
 				continue
-			if not Dungeon.is_walkable(grid, step.x, step.y) or blocks(step):
+			if not Dungeon.is_walkable(grid, step.x, step.y):
+				continue
+			if blocks(step) and not door_shut(step):
 				continue
 			seen[step] = true
 			stack.append(step)
@@ -855,7 +869,7 @@ func taken(cell: Vector2i) -> bool:
 		return true
 	if shrine != null and shrine == cell:
 		return true
-	if decor.has(cell) or hazards.has(cell) or webs.has(cell):
+	if decor.has(cell) or hazards.has(cell) or webs.has(cell) or doors.has(cell):
 		return true
 	return shop_at(cell) != null
 
@@ -928,7 +942,12 @@ func _line_clear(from: Vector2i, to: Vector2i) -> bool:
 	for i in range(1, steps):
 		var at := Vector2(from) + Vector2(to - from) * (float(i) / float(steps))
 		var cell := Vector2i(roundi(at.x), roundi(at.y))
-		if cell != from and cell != to and not Dungeon.is_walkable(grid, cell.x, cell.y):
+		if cell == from or cell == to:
+			continue
+		# A shut door and a stacked crate stop the eye as well as the
+		# foot. Without this you can see straight through a closed door,
+		# which makes opening one pointless.
+		if not Dungeon.is_walkable(grid, cell.x, cell.y) or blocks(cell):
 			return false
 	return true
 
@@ -978,6 +997,9 @@ func try_move(step: Vector2i) -> void:
 	elif target == stairs and stairs_locked and boss_alive():
 		say("Der Weg nach unten ist verriegelt. Der Boss hält den Schlüssel.")
 		return
+	elif door_shut(target):
+		_open_door(target)
+		return
 	elif blocks(target):
 		return
 	elif Dungeon.is_walkable(grid, target.x, target.y):
@@ -1015,11 +1037,72 @@ func try_move(step: Vector2i) -> void:
 	paint()
 
 
+## Hangs doors in the ways into rooms.
+##
+## An entrance is a floor cell just outside a room that touches the room
+## - that is what a corridor mouth looks like from the inside. Only some
+## of them get a door: a floor where every room is sealed is a floor
+## spent opening doors.
+func _hang_doors(where: Array) -> void:
+	doors.clear()
+	for room in where:
+		for cell in _entrances(room):
+			if rng.randf() >= Data.DOOR_CHANCE:
+				continue
+			if cell == stairs or cell == up_stairs or cell == Vector2i(player.x, player.y):
+				continue
+			if doors.has(cell):
+				continue
+			doors[cell] = false
+
+
+## The floor cells immediately outside a room that touch it.
+func _entrances(room) -> Array:
+	var found: Array[Vector2i] = []
+	for x in range(room.x1 - 1, room.x2 + 1):
+		for y in [room.y1 - 1, room.y2]:
+			var cell := Vector2i(x, y)
+			if Dungeon.is_walkable(grid, cell.x, cell.y) and _touches_room(cell, room):
+				found.append(cell)
+	for y in range(room.y1 - 1, room.y2 + 1):
+		for x in [room.x1 - 1, room.x2]:
+			var cell := Vector2i(x, y)
+			if Dungeon.is_walkable(grid, cell.x, cell.y) and _touches_room(cell, room):
+				found.append(cell)
+	return found
+
+
+func _touches_room(cell: Vector2i, room) -> bool:
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var beside: Vector2i = cell + offset
+		if beside.x >= room.x1 and beside.x < room.x2 \
+				and beside.y >= room.y1 and beside.y < room.y2:
+			return true
+	return false
+
+
+## A closed door is a wall you can talk to: walking into it opens it and
+## costs the turn, which is the whole point - it is a moment of noise
+## and a moment of exposure, not a lock.
+func _open_door(cell: Vector2i) -> void:
+	doors[cell] = true
+	audio.play("stairs")
+	say("Du öffnest die Tür.")
+	_tick_buffs()
+	enemy_turn()
+	recompute_fov()
+	paint()
+
+
+func door_shut(cell: Vector2i) -> bool:
+	return doors.has(cell) and not doors[cell]
+
+
 ## Whether something standing on this cell closes it to walking. Kept
 ## apart from Dungeon.is_walkable because the map is the map: what is
 ## put on top of it changes from floor to floor.
 func blocks(cell: Vector2i) -> bool:
-	return decor.get(cell, "") in Data.BLOCKING_DECOR
+	return decor.get(cell, "") in Data.BLOCKING_DECOR or door_shut(cell)
 
 func _attack_monster(monster) -> void:
 	var damage: int = maxi(1, int(round((player.power() - monster.defense_now())
@@ -2134,6 +2217,8 @@ func paint() -> void:
 		_place_prop(cell, Data.HAZARDS[hazards[cell]]["tile"])
 	for cell in webs:
 		_place_prop(cell, "wall_goo")
+	for cell in doors:
+		_place_prop(cell, "doors_leaf_open" if doors[cell] else "doors_leaf_closed")
 	for cell in decor:
 		_place_prop(cell, decor[cell])
 	if shrine != null:
