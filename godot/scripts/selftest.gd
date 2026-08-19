@@ -74,6 +74,7 @@ func _process(_delta: float) -> bool:
 	_check_traps()
 	_check_elements()
 	_check_up_stairs()
+	_check_boss_phases()
 
 	for turn in _turns:
 		if _game.dead:
@@ -835,4 +836,23 @@ func _settle() -> void:
 	_game.close_shop()
 	_game.dead = false
 	_game.player.hp = maxi(1, _game.player.hp)
+
+
+## A wounded boss has to hit harder than a fresh one, and a healed one
+## has to calm down again - the phase is read from health, not latched.
+func _check_boss_phases() -> void:
+	_settle()
+	var fresh := Data.boss_phase(100, 100)
+	if not fresh.is_empty():
+		_complain("frischer Boss ist schon in einer Phase", str(fresh))
+	var hurt := Data.boss_phase(60, 100)
+	var cornered := Data.boss_phase(20, 100)
+	if hurt.is_empty() or cornered.is_empty():
+		_complain("Boss erreicht seine Phasen nicht")
+		return
+	if float(cornered["power"]) <= float(hurt["power"]):
+		_complain("verzweifelter Boss schlägt nicht härter",
+			"%.2f gegen %.2f" % [float(cornered["power"]), float(hurt["power"])])
+	if not Data.boss_phase(100, 100).is_empty():
+		_complain("geheilter Boss bleibt wütend")
 

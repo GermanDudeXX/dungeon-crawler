@@ -211,6 +211,7 @@ class Monster extends Actor:
 	var stun_turns := 0             ## does not act at all
 	var regen := 0                  ## heals this much at the end of its turn
 	var is_elite := false
+	var phase_said := ""            ## the boss phase already announced
 
 	func _init(kind_id: String, tier_mult: float, difficulty_id := Data.DEFAULT_DIFFICULTY) -> void:
 		kind = kind_id

@@ -908,7 +908,19 @@ func _step_monster(monster, step: Vector2i) -> void:
 
 
 func _monster_attacks(monster) -> void:
-	var damage: int = maxi(1, monster.power - player.defense())
+	var hits_for: int = monster.power
+	if monster.is_boss:
+		# A cornered boss swings harder. Announced once per phase, not
+		# once per swing, or the log is nothing but rage.
+		var phase := Data.boss_phase(monster.hp, monster.max_hp)
+		if not phase.is_empty():
+			hits_for = int(round(hits_for * float(phase["power"])))
+			if monster.phase_said != phase["name"]:
+				monster.phase_said = phase["name"]
+				audio.play("boss")
+				say("%s ist %s und schlägt wilder zu." % [
+					monster.display_name, phase["name"]])
+	var damage: int = maxi(1, hits_for - player.defense())
 	damage = maxi(1, int(round(damage * (1.0 - player.damage_reduction))))
 	audio.play("player_hurt")
 	# A ward soaks the blow before hit points do, and what it cannot

@@ -524,3 +524,25 @@ static func pick_element(level: int, rng: RandomNumberGenerator) -> String:
 	var ids: Array = ELEMENTS.keys()
 	return ids[rng.randi() % ids.size()]
 
+
+# --- Bossphasen -----------------------------------------------------------
+# A boss hits harder as it goes down. Read from its current health
+# rather than latched when it crosses a line, so healing it - an elite
+# regenerating, say - puts it back into the calmer phase instead of
+# leaving it permanently enraged at full health.
+const BOSS_PHASES := [
+	{"at": 0.66, "name": "verwundet", "power": 1.15},
+	{"at": 0.33, "name": "verzweifelt", "power": 1.35},
+]
+
+
+## The phase a boss at this health is in, or an empty dictionary while
+## it is still fresh.
+static func boss_phase(hp: int, max_hp: int) -> Dictionary:
+	var ratio := float(hp) / float(maxi(1, max_hp))
+	var current := {}
+	for phase in BOSS_PHASES:
+		if ratio <= float(phase["at"]):
+			current = phase
+	return current
+
