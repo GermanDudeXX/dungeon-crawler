@@ -716,15 +716,18 @@ func _populate() -> void:
 		if spot != null:
 			shops.append({"cell": spot, "kind": "smith", "stock": []})
 
-	_furnish_theme(spawn_rooms)
-
-	# Loot goes last, and only where the hero can reach: the
+	# Everything left goes only where the hero can actually reach: the
 	# shopkeepers are standing by now, and each of them is a tile that
-	# never opens.
+	# never opens. The themed room needs this as much as the ordinary
+	# loot does - a library nobody can walk into is a library of
+	# scrolls nobody ever reads.
 	var blocked := {}
 	for shop in shops:
 		blocked[shop["cell"]] = true
 	var open_cells := reachable_from(Vector2i(player.x, player.y), blocked)
+
+	_furnish_theme(spawn_rooms, open_cells)
+
 	for _i in range(2 + depth / 3):
 		var cell: Variant = _free_cell(spawn_rooms, open_cells)
 		if cell == null:
@@ -786,8 +789,15 @@ func _swarm_around(monster, cell: Vector2i, room_left: int) -> int:
 ## Checking only the stairs was not enough: a crate can seal the chest
 ## into a dead-end and leave the floor perfectly finishable, which is
 ## how a run loses its treasure without anything looking wrong.
-func _seals_something() -> bool:
-	var open_cells := reachable_from(Vector2i(player.x, player.y))
+func _seals_something(blocked := {}) -> bool:
+	# Every shopkeeper already standing counts as a wall, always. A
+	# crate on its own seals nothing and a keeper on its own seals
+	# nothing - the two together seal a room, and asking about only
+	# one of them at a time never finds that.
+	var shut := blocked.duplicate()
+	for shop in shops:
+		shut[shop["cell"]] = true
+	var open_cells := reachable_from(Vector2i(player.x, player.y), shut)
 	if not open_cells.has(stairs):
 		return true
 	if chest != null and not open_cells.has(chest["cell"]):
@@ -800,11 +810,19 @@ func _seals_something() -> bool:
 	for monster in monsters:
 		if monster.is_boss and not open_cells.has(monster.cell()):
 			return true
+	# A keeper you cannot walk up to is a shop that does not exist.
 	for shop in shops:
+		if shut.has(shop["cell"]) and not blocked.has(shop["cell"]):
+			continue
 		if not open_cells.has(shop["cell"]):
 			return true
 	for item in items:
 		if not open_cells.has(item["cell"]):
+			return true
+	# The boss holds the key to the stairs; walling it in ends the
+	# run on this floor.
+	for monster in monsters:
+		if monster.is_boss and not open_cells.has(monster.cell()):
 			return true
 	return false
 
@@ -861,28 +879,15 @@ func _shopkeeper_spot(where: Array) -> Variant:
 		var cell = _free_cell(where)
 		if cell == null:
 			return null
-		# Blocked by every keeper already standing, and by this
-		# candidate. Checking only the stairs was not enough: a keeper
-		# can seal the chest into a dead-end just as easily, and then
-		# the floor is finishable but the chest is gone for good.
+		# A keeper is a tile that never opens, so putting one down is the
+		# same question as putting a crate down: does the floor still hold
+		# together with it there? Asked by the same function, so the two
+		# cannot drift apart - and they did: the crate check learned about
+		# loot long before this one did.
 		var blocked := {cell: true}
 		for shop in shops:
 			blocked[shop["cell"]] = true
-		var open_cells := reachable_from(Vector2i(player.x, player.y), blocked)
-		if not open_cells.has(stairs):
-			continue
-		if chest != null and not open_cells.has(chest["cell"]):
-			continue
-		if shrine != null and not open_cells.has(shrine):
-			continue
-		# And the boss, for the same reason a crate may not wall it in:
-		# it holds the key, and a keeper is a tile that never opens.
-		var sealed_boss := false
-		for monster in monsters:
-			if monster.is_boss and not open_cells.has(monster.cell()):
-				sealed_boss = true
-				break
-		if sealed_boss:
+		if _seals_something(blocked):
 			continue
 		return cell
 	return null            ## rather no shop than a floor nobody can finish
@@ -1157,7 +1162,7 @@ func _settle_quest() -> void:
 ## laboratory, a bone house. The room keeps its normal contents - this
 ## is added on top, so a themed room is worth the detour rather than
 ## being the only room with anything in it.
-func _furnish_theme(where: Array) -> void:
+func _furnish_theme(where: Array, within: Dictionary) -> void:
 	theme = {}
 	if where.is_empty() or rng.randf() >= Data.ROOM_THEME_CHANCE:
 		return
@@ -1170,7 +1175,7 @@ func _furnish_theme(where: Array) -> void:
 
 	var span: Array = chosen["amount"]
 	for _i in rng.randi_range(int(span[0]), int(span[1])):
-		var cell: Variant = _free_cell([room])
+		var cell: Variant = _free_cell([room], within)
 		if cell == null:
 			continue
 		var loot := {"cell": cell, "kind": chosen["loot"],
@@ -1183,7 +1188,7 @@ func _furnish_theme(where: Array) -> void:
 
 	# A little scenery of its own, so the room reads as one from the door.
 	for _i in 3:
-		var spot: Variant = _free_cell([room])
+		var spot: Variant = _free_cell([room], within)
 		if spot == null:
 			continue
 		decor[spot] = chosen["decor"]
@@ -1195,7 +1200,7 @@ func _furnish_theme(where: Array) -> void:
 		return
 	var guards: Array = chosen["guards"]
 	for _i in rng.randi_range(int(guards[0]), int(guards[1])):
-		var post: Variant = _free_cell([room])
+		var post: Variant = _free_cell([room], within)
 		if post == null:
 			continue
 		var guard := Entities.Monster.new(str(chosen.get("guard_kind", "skeleton")),
