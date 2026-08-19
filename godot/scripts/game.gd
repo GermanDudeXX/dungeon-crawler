@@ -30,6 +30,12 @@ const MINIMAP_SCALE := 4
 # How much dungeon should be on screen at once, in tiles across.
 const TILES_ACROSS := 30.0
 
+# How long one step takes. The glide between tiles is given exactly
+# this long, so a held direction produces one continuous movement
+# instead of step, wait, step - that pause is most of what reads as
+# "stuck to a grid", even though the sprites were already sliding.
+const STEP_TIME := 0.14
+
 # Scenery only, no rules: what a floor is dressed with.
 const DECOR := ["crate", "skull", "wall_banner_red", "wall_banner_blue",
 	"wall_banner_green", "wall_banner_yellow", "column"]
@@ -89,6 +95,7 @@ var _dead_text: Label
 var _sound_button: Button
 var _difficulty_button: Button
 var _flash_button: Button
+var _pad_button: Button
 var _record_label: Label
 var _hint_label: Label
 var _update_button: Button
@@ -116,6 +123,8 @@ var _perk_buttons: Array = []
 var perk_choices: Array = []      ## the three on offer right now
 var _music_button: Button
 var _held := Vector2i.ZERO
+var _stick: Stick
+var _pad_buttons: Array[Button] = []
 var _haste_flip := false
 var _step_cooldown := 0.0
 
@@ -926,6 +935,17 @@ func try_move(step: Vector2i) -> void:
 	if _bag_panel != null and _bag_panel.visible:
 		return
 	var target := Vector2i(player.x + step.x, player.y + step.y)
+	# No squeezing through the gap between two wall corners. The step
+	# itself would be legal - the tile is free - but it looks like
+	# walking through the join, and a monster cannot follow you
+	# through it either.
+	if step.x != 0 and step.y != 0:
+		var sideways := Vector2i(player.x + step.x, player.y)
+		var upright := Vector2i(player.x, player.y + step.y)
+		var blocked_x: bool = not Dungeon.is_walkable(grid, sideways.x, sideways.y)
+		var blocked_y: bool = not Dungeon.is_walkable(grid, upright.x, upright.y)
+		if blocked_x and blocked_y:
+			return
 	if step.x != 0:
 		player.facing = 1 if step.x > 0 else -1
 
@@ -1004,7 +1024,7 @@ func _attack_monster(monster) -> void:
 		# Hitstop: the next step waits a moment longer. In a turn-based
 		# game there is no frame to freeze, but a held direction still
 		# hesitates - which is what makes a big hit feel big.
-		_step_cooldown = maxf(_step_cooldown, 0.12)
+		_step_cooldown = maxf(_step_cooldown, STEP_TIME * 0.9)
 	else:
 		_sparks(monster.cell(), Color(0.95, 0.85, 0.80), 4)
 	var leech := player.buff_total("lifesteal")
@@ -1212,6 +1232,16 @@ func _step_monster(monster, step: Vector2i) -> bool:
 		# into. The pygame build learned that one the hard way.
 		if candidate == Vector2i(player.x, player.y) or occupied(candidate):
 			continue
+		# And no squeezing between two wall corners, the same rule the hero
+		# follows. A monster that can take a shortcut the player cannot is a
+		# monster that appears out of a wall.
+		var away: Vector2i = candidate - monster.cell()
+		if away.x != 0 and away.y != 0:
+			var open_x: bool = Dungeon.is_walkable(grid, monster.x + away.x, monster.y)
+			var open_y: bool = Dungeon.is_walkable(grid, monster.x, monster.y + away.y)
+			if not open_x and not open_y:
+				continue
+
 		monster.x = candidate.x
 		monster.y = candidate.y
 		return true
@@ -2197,11 +2227,25 @@ func _build_hud() -> void:
 
 	var pad := 28.0
 	var size := 120.0
+	# The thumbstick owns the left of the screen and appears wherever
+	# the thumb lands: held in landscape there is no one corner that
+	# suits every hand. The four-button pad is still there for anyone
+	# who prefers it, but off by default - four directions is most of
+	# what makes a game feel nailed to a grid.
+	_stick = Stick.new()
+	# Anchored down the left edge and given a width by offset rather
+	# than by size: a control with opposite anchors that disagree has
+	# its size overwritten after _ready, and Godot says so every run.
+	_stick.set_anchors_preset(Control.PRESET_LEFT_WIDE)
+	_stick.offset_right = 620
+	_play_ui.add_child(_stick)
+
 	var origin := Vector2(pad + size, -pad - size * 2.0)
 	_button("^", origin + Vector2(0, -size), size, Vector2i(0, -1))
 	_button("v", origin, size, Vector2i(0, 1))
 	_button("<", origin + Vector2(-size, -size * 0.5), size, Vector2i(-1, 0))
 	_button(">", origin + Vector2(size, -size * 0.5), size, Vector2i(1, 0))
+	_apply_control_style()
 
 	# Two buttons, because there are thirty kinds of flask now: one
 	# drinks what is selected, the other walks through what is carried.
@@ -2443,7 +2487,7 @@ func _glide(delta: float) -> void:
 		_camera.position = _camera.position.move_toward(_camera_to, TILE * 10.0 * delta)
 	if _gliding.is_empty():
 		return
-	var speed := TILE * 8.0 * delta
+	var speed := (float(TILE) / STEP_TIME) * delta
 	for sprite in _gliding.keys():
 		if not is_instance_valid(sprite):
 			_gliding.erase(sprite)
@@ -3005,6 +3049,12 @@ func _build_settings(column: VBoxContainer) -> void:
 	awards.add_theme_font_size_override("font_size", 24)
 	awards.pressed.connect(open_awards)
 	row.add_child(awards)
+
+	_pad_button = Button.new()
+	_pad_button.custom_minimum_size = Vector2(250, 54)
+	_pad_button.add_theme_font_size_override("font_size", 24)
+	_pad_button.pressed.connect(toggle_pad)
+	row.add_child(_pad_button)
 	_refresh_settings()
 
 
@@ -3018,7 +3068,30 @@ func _refresh_settings() -> void:
 		_difficulty_button.tooltip_text = level_of_play["desc"]
 	if _flash_button != null:
 		_flash_button.text = "Roter Blitz: %s" % ("AN" if settings.get("flash", true) else "AUS")
+	if _pad_button != null:
+		_pad_button.text = "Steuerung: %s" % ("Kreuz" if settings.get("pad", false) else "Stick")
 	_music_button.text = "Musik: %s" % ("AN" if settings["music"] else "AUS")
+
+
+## Shows whichever control the player asked for. They are deliberately
+## one or the other: with both on, the pad sits in front of the stick and
+## swallows every touch that lands on it.
+func _apply_control_style() -> void:
+	var use_pad: bool = settings.get("pad", false)
+	if _stick != null:
+		_stick.visible = not use_pad
+		_stick.mouse_filter = (Control.MOUSE_FILTER_IGNORE if use_pad
+			else Control.MOUSE_FILTER_STOP)
+	for button in _pad_buttons:
+		button.visible = use_pad
+
+
+func toggle_pad() -> void:
+	settings["pad"] = not settings.get("pad", false)
+	Settings.write(settings)
+	_apply_control_style()
+	_refresh_settings()
+	audio.play("equip")
 
 
 ## Walks through the four levels of play. Only settable from the title
@@ -3325,25 +3398,41 @@ func _button(label: String, where: Vector2, size: float, step: Vector2i) -> void
 		if _held == step:
 			_held = Vector2i.ZERO)
 	_play_ui.add_child(button)
+	_pad_buttons.append(button)
 
 
 func _process(delta: float) -> void:
 	_glide(delta)
 	_step_cooldown -= delta
-	if _held == Vector2i.ZERO:
-		for pair in [[KEY_D, Vector2i(1, 0)], [KEY_RIGHT, Vector2i(1, 0)],
-				[KEY_A, Vector2i(-1, 0)], [KEY_LEFT, Vector2i(-1, 0)],
-				[KEY_S, Vector2i(0, 1)], [KEY_DOWN, Vector2i(0, 1)],
-				[KEY_W, Vector2i(0, -1)], [KEY_UP, Vector2i(0, -1)]]:
-			if Input.is_key_pressed(pair[0]):
-				_held = pair[1]
-				break
+	# Keys are added up rather than taken one at a time, so holding two
+	# walks diagonally. Eight directions instead of four is the other half
+	# of not feeling nailed to a grid.
+	var keyed := Vector2i.ZERO
+	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
+		keyed.x += 1
+	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
+		keyed.x -= 1
+	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
+		keyed.y += 1
+	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
+		keyed.y -= 1
+	if keyed != Vector2i.ZERO:
+		_held = keyed
+	elif _stick != null and _stick.direction() != Vector2i.ZERO:
+		_held = _stick.direction()
+
 	# Steps run on a clock, not per frame, so the hero does not walk
 	# faster the smoother it runs - which is the number being measured.
 	if _held != Vector2i.ZERO and _step_cooldown <= 0.0:
 		try_move(_held)
-		_step_cooldown = 0.16
-		if not Input.is_anything_pressed():
+		# A diagonal covers a longer distance, so it is given proportionally
+		# longer - otherwise walking at an angle is quietly forty per cent
+		# faster than walking straight.
+		var diagonal: bool = _held.x != 0 and _held.y != 0
+		_step_cooldown = STEP_TIME * (sqrt(2.0) if diagonal else 1.0)
+		if _stick != null and _stick.direction() != Vector2i.ZERO:
+			_held = _stick.direction()
+		elif not Input.is_anything_pressed():
 			_held = Vector2i.ZERO
 
 	var line := "%s  Ebene %d     HP %d/%d" % [

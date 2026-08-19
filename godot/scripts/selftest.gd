@@ -76,6 +76,7 @@ func _process(_delta: float) -> bool:
 	_check_difficulty()
 	_check_scrolls()
 	_check_traps()
+	_check_diagonals()
 	_check_elements()
 	_check_up_stairs()
 	_check_boss_phases()
@@ -1523,4 +1524,66 @@ func _check_updater() -> void:
 		_complain("Build kennt seine eigene Version nicht", mine)
 	if Updater.newer(mine, mine):
 		_complain("Build hält sich selbst für veraltet", mine)
+
+
+## Eight directions, and the one diagonal that must not work: the gap
+## between two wall corners. The tile beyond it is free, so the step
+## looks legal - but taking it walks through the join of two walls, and
+## nothing can follow through there either.
+func _check_diagonals() -> void:
+	_settle()
+	var p = _game.player
+
+	# Somewhere with room in every direction, so a plain diagonal works.
+	var open_spot: Variant = null
+	for y in range(2, 23):
+		for x in range(2, 38):
+			var free := true
+			for dy in [-1, 0, 1]:
+				for dx in [-1, 0, 1]:
+					if not Dungeon.is_walkable(_game.grid, x + dx, y + dy):
+						free = false
+			if free and not _game.occupied(Vector2i(x, y)):
+				open_spot = Vector2i(x, y)
+				break
+		if open_spot != null:
+			break
+	if open_spot == null:
+		_notes.append("kein offenes Feld für den Diagonaltest - übersprungen")
+		return
+
+	var cell: Vector2i = open_spot
+	for step in [Vector2i(1, 1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(-1, -1)]:
+		p.x = cell.x
+		p.y = cell.y
+		_game.try_move(step)
+		if Vector2i(p.x, p.y) != cell + step:
+			_complain("Diagonalschritt geht nicht", str(step))
+
+	# And now a corner: walls beside the hero, free beyond.
+	var corner: Variant = null
+	for y in range(1, 24):
+		for x in range(1, 39):
+			var here := Vector2i(x, y)
+			if not Dungeon.is_walkable(_game.grid, x, y):
+				continue
+			for step in [Vector2i(1, 1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(-1, -1)]:
+				var beyond: Vector2i = here + step
+				var walled: bool = not Dungeon.is_walkable(_game.grid, x + step.x, y) \
+					and not Dungeon.is_walkable(_game.grid, x, y + step.y)
+				if walled and Dungeon.is_walkable(_game.grid, beyond.x, beyond.y):
+					corner = [here, step]
+					break
+			if corner != null:
+				break
+		if corner != null:
+			break
+	if corner == null:
+		return
+	p.x = corner[0].x
+	p.y = corner[0].y
+	_game.try_move(corner[1])
+	if Vector2i(p.x, p.y) != corner[0]:
+		_complain("Held quetscht sich durch die Wandecke",
+			"%s mit %s" % [str(corner[0]), str(corner[1])])
 

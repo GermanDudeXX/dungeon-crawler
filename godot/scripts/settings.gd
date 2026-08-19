@@ -13,6 +13,7 @@ const DEFAULTS := {
 	"music": true,
 	"difficulty": "normal",
 	"flash": true,
+	"pad": false,
 }
 
 
