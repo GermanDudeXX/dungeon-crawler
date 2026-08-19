@@ -727,3 +727,19 @@ static func pick_theme(level: int, rng: RandomNumberGenerator) -> Dictionary:
 			return theme
 	return pool[-1]
 
+
+# --- Aufträge -------------------------------------------------------------
+# One optional goal per floor, paid out on the way down. Optional on
+# purpose: a floor is finished by finding the stairs, and a goal that has
+# to be met is a chore rather than a reason to look around. "needs" names
+# what the floor must contain for the goal to make sense at all.
+const QUESTS := [
+	{"id": "clear", "name": "Räume die Ebene", "gold": 20, "potion": 0},
+	{"id": "chest", "name": "Öffne die Truhe", "needs": "chest", "gold": 15, "potion": 1},
+	{"id": "shrine", "name": "Berühre den Schrein", "needs": "shrine", "gold": 15, "potion": 0},
+	{"id": "dry", "name": "Steig ab, ohne zu trinken", "gold": 25, "potion": 1},
+	{"id": "unhurt", "name": "Steig ab, ohne Schaden zu nehmen", "gold": 35, "potion": 1},
+	{"id": "boss", "name": "Erschlage den Anführer", "needs": "boss", "gold": 40, "potion": 1},
+]
+const QUEST_CHANCE := 0.7
+

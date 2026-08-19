@@ -60,6 +60,9 @@ var traps := {}                 ## cell -> trap id
 var chest = null                ## {cell, mimic, opened}
 var shops: Array = []           ## {cell, kind}
 var stairs_locked := false
+var quest := {}                  ## this floor's optional goal
+var drank_here := false          ## a flask was opened on this floor
+var hurt_here := false           ## something got through on this floor
 var theme := {}                  ## this floor's themed room, if it has one
 var doors := {}                  ## cell -> true when open
 var webs := {}                   ## cell -> a widow's web, walked into once
@@ -325,6 +328,14 @@ func load_run() -> bool:
 	# from a file has 2.0 where it had 2. Nothing breaks - every use
 	# goes through int() - but the run is then not quite the run that
 	# was saved, and a comparison of the two says so.
+	quest = {}
+	var order: Dictionary = save.get("quest", {})
+	if not order.is_empty():
+		quest = {"id": str(order["id"]), "name": str(order["name"]),
+			"done": bool(order["done"]), "gold": int(order["gold"]),
+			"potion": int(order["potion"])}
+	drank_here = bool(save.get("drank_here", false))
+	hurt_here = bool(save.get("hurt_here", false))
 	theme = {}
 	var stored: Dictionary = save.get("theme", {})
 	if not stored.is_empty():
@@ -471,6 +482,8 @@ func new_level() -> void:
 	# escape a bad floor - the floor above is regenerated too - it is
 	# there so a staircase reads as a staircase in both directions.
 	up_stairs = start
+	drank_here = false
+	hurt_here = false
 	_populate()
 	recompute_fov()
 	paint()
@@ -481,6 +494,8 @@ func new_level() -> void:
 		_announce.clear()
 	elif depth > 1 and Data.tier_for(depth)["id"] != Data.tier_for(depth - 1)["id"]:
 		banner(tier.get("name", ""), tier.get("tint", Color.WHITE))
+
+	_set_quest()
 
 	# The floor is the natural checkpoint: it is the one moment where
 	# the whole level is settled and nothing is half-resolved.
@@ -1029,6 +1044,7 @@ func try_move(step: Vector2i) -> void:
 		if dead:
 			return
 		if target == stairs:
+			_settle_quest()
 			depth += 1
 			audio.play("stairs")
 			say("Du steigst hinab - Ebene %d." % depth)
@@ -1050,6 +1066,87 @@ func try_move(step: Vector2i) -> void:
 	enemy_turn()
 	recompute_fov()
 	paint()
+
+
+## Picks this floor's optional goal, from the ones the floor can
+## actually satisfy: an order to open a chest on a floor without one is
+## not a goal, it is a bug with a reward attached.
+func _set_quest() -> void:
+	quest = {}
+	if rng.randf() >= Data.QUEST_CHANCE:
+		return
+	var pool: Array = []
+	for entry in Data.QUESTS:
+		match entry.get("needs", ""):
+			"chest":
+				if chest == null:
+					continue
+			"shrine":
+				if shrine == null:
+					continue
+			"boss":
+				if not boss_alive():
+					continue
+		pool.append(entry)
+	if pool.is_empty():
+		return
+	var picked: Dictionary = pool[rng.randi() % pool.size()]
+	quest = {"id": picked["id"], "name": picked["name"], "done": false,
+		"gold": int(picked["gold"]), "potion": int(picked["potion"])}
+
+
+## Called whenever something happens that a goal might be about. Cheap,
+## and it keeps every condition next to the thing it watches instead of
+## in one place that has to know about all of them.
+func _quest_progress() -> void:
+	if quest.is_empty() or quest.get("done", false):
+		return
+	var met := false
+	match quest["id"]:
+		"clear":
+			met = true
+			for monster in monsters:
+				if monster.is_alive():
+					met = false
+					break
+		"chest":
+			met = chest != null and chest["opened"]
+		"shrine":
+			met = shrine == null
+		"boss":
+			met = not boss_alive()
+		"dry", "unhurt":
+			# These two can only be settled on the stairs: they are about
+			# what did not happen, and the floor is not over yet.
+			return
+	if not met:
+		return
+	quest["done"] = true
+	audio.play("levelup")
+	banner("Auftrag erfüllt", Color(0.55, 0.85, 0.98))
+	say("Auftrag erfüllt: %s." % quest["name"])
+
+
+## Paid out on the way down - and the two "without" goals are decided
+## here, since only now is it certain nothing happened.
+func _settle_quest() -> void:
+	if quest.is_empty():
+		return
+	match quest["id"]:
+		"dry":
+			quest["done"] = not drank_here
+		"unhurt":
+			quest["done"] = not hurt_here
+	if not quest.get("done", false):
+		say("Auftrag verfehlt: %s." % quest["name"])
+		return
+	var gold: int = int(quest["gold"]) + depth * 3
+	player.gold += gold
+	var flasks: int = int(quest["potion"])
+	if flasks > 0:
+		player.add_potion(Data.pick_potion(depth, rng, false), flasks)
+	audio.play("coin")
+	say("Belohnung: %d Gold%s." % [gold, " und ein Trank" if flasks > 0 else ""])
 
 
 ## Turns one room on the floor into something: a library, an armoury, a
@@ -1367,6 +1464,7 @@ func _kill(monster) -> void:
 		_actor_nodes[monster].queue_free()
 		_actor_nodes.erase(monster)
 	monsters.erase(monster)
+	_quest_progress()
 
 ## Two halves beside the cell the thing died on.
 func _split(monster) -> void:
@@ -1608,6 +1706,7 @@ func _monster_attacks(monster) -> void:
 			_retaliate(monster)
 			return
 	player.hp -= damage
+	hurt_here = true
 	# Some things feed on what they take.
 	if monster.drains > 0.0 and monster.hp < monster.max_hp:
 		var drawn: int = maxi(1, int(round(damage * monster.drains)))
@@ -1846,6 +1945,7 @@ func _open_chest(cell: Vector2i) -> void:
 		# total left the hero holding a flask that was not any kind.
 		player.add_potion(Data.pick_potion(depth, rng))
 		say("Die Truhe enthält %d Gold und einen Trank." % gold)
+		_quest_progress()
 		return
 	# Beside the chest, never on it: a chest is opened by walking
 	# onto it, so the hero is standing there - and a monster sharing
@@ -2000,6 +2100,7 @@ func drink() -> void:
 		return
 
 	player.add_potion(id, -1)
+	drank_here = true
 	# One flask is enough to lose it - that is the whole point of
 	# the achievement.
 	potion_free = false
@@ -2087,6 +2188,7 @@ func _touch_shrine(cell: Vector2i) -> void:
 	if shrine == null or shrine != cell:
 		return
 	shrine = null
+	_quest_progress()
 	var id := Data.pick_shrine(rng)
 	match id:
 		"vitality":
@@ -3742,6 +3844,9 @@ func _process(delta: float) -> void:
 		tier.get("name", ""), depth, player.hp, player.max_hp]
 	if player.shield > 0:
 		line += " +%d Schild" % player.shield
+	if not quest.is_empty():
+		line += "     [%s%s]" % [quest["name"],
+			" ✓" if quest.get("done", false) else ""]
 	line += "     Stufe %d (%d/%d XP)     %d Gold" % [
 		player.level, player.xp, player.xp_to_next, player.gold]
 	# What is in your hands, by name, on a line of its own: a rarity

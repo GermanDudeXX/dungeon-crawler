@@ -79,6 +79,7 @@ func _process(_delta: float) -> bool:
 	_check_diagonals()
 	_check_doors()
 	_check_themes()
+	_check_quests()
 	_check_elements()
 	_check_up_stairs()
 	_check_boss_phases()
@@ -519,6 +520,8 @@ func _fingerprint() -> String:
 		"Buffs=%s Rollen=%s" % [_stable(p.buffs), _stable(p.scrolls)],
 		"Schrein=%s" % str(_game.shrine),
 		"Thema=%s" % _stable(_game.theme),
+		"Auftrag=%s trocken=%s heil=%s" % [_stable(_game.quest),
+			str(_game.drank_here), str(_game.hurt_here)],
 		"Angriff=%d Verteidigung=%d Krit=%.3f Minderung=%.3f Gold x%.2f" % [
 			p.base_power, p.base_defense, p.bonus_crit, p.damage_reduction, p.gold_mult],
 		"Regen=%d/%d offen=%d" % [p.regen_counter, p.regen_interval, p.pending_perks],
@@ -1864,4 +1867,62 @@ func _check_themes() -> void:
 	_game._enter_theme(middle)
 	if not _game.theme.get("seen", false):
 		_complain("Themenraum meldet sich nicht, wenn man drin steht")
+
+
+## Floor orders: they must only ask for things the floor holds, they
+## must notice when the thing happens, and they must pay out on the way
+## down. An order to open a chest on a floor without one is not a goal,
+## it is a bug with a reward attached.
+func _check_quests() -> void:
+	_settle()
+	var kinds := {}
+	for _try in 30:
+		_game.depth = 4 + (_try % 8)
+		_game.new_level()
+		if _game.quest.is_empty():
+			continue
+		kinds[_game.quest["id"]] = true
+		if _game.quest.get("done", true):
+			_complain("Auftrag gilt sofort als erfüllt", str(_game.quest["id"]))
+		match _game.quest["id"]:
+			"chest":
+				if _game.chest == null:
+					_complain("Auftrag verlangt eine Truhe, die es nicht gibt")
+			"shrine":
+				if _game.shrine == null:
+					_complain("Auftrag verlangt einen Schrein, den es nicht gibt")
+			"boss":
+				if not _game.boss_alive():
+					_complain("Auftrag verlangt einen Boss, den es nicht gibt")
+	if kinds.is_empty():
+		_complain("in dreißig Ebenen kein einziger Auftrag")
+		return
+
+	# "Räume die Ebene" has to notice when the last one falls.
+	for _try in 40:
+		_game.depth = 5
+		_game.new_level()
+		if not _game.quest.is_empty() and _game.quest["id"] == "clear":
+			break
+	if _game.quest.is_empty() or _game.quest["id"] != "clear":
+		return
+	for monster in _game.monsters.duplicate():
+		_game.monsters.erase(monster)
+	_game._quest_progress()
+	if not _game.quest.get("done", false):
+		_complain("geräumte Ebene erfüllt den Auftrag nicht")
+
+	# And the reward arrives on the stairs.
+	var gold_before: int = _game.player.gold
+	_game._settle_quest()
+	if _game.player.gold <= gold_before:
+		_complain("erfüllter Auftrag zahlt nichts aus")
+
+	# A failed one pays nothing.
+	_game.quest = {"id": "clear", "name": "Prüfung", "done": false, "gold": 20, "potion": 1}
+	gold_before = _game.player.gold
+	_game._settle_quest()
+	if _game.player.gold != gold_before:
+		_complain("verfehlter Auftrag zahlt trotzdem")
+	_settle()
 
