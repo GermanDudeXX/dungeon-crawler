@@ -39,7 +39,7 @@ static func write(game) -> void:
 			"poisons": m.poisons, "flees_below": m.flees_below,
 			"awake": m.awake, "boss": m.is_boss, "mimic": m.is_mimic,
 			"burn": m.burn_turns, "slow": m.slow_turns, "stun": m.stun_turns,
-			"regen": m.regen, "elite": m.is_elite,
+			"regen": m.regen, "elite": m.is_elite, "generation": m.generation,
 			"weaken": m.weaken_turns, "venom": m.venom_turns, "bleed": m.bleed_turns,
 		})
 

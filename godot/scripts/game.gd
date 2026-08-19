@@ -332,6 +332,9 @@ func load_run() -> bool:
 		monster.venom_turns = int(entry.get("venom", 0))
 		monster.bleed_turns = int(entry.get("bleed", 0))
 		monster.is_elite = bool(entry.get("elite", false))
+		# Without this a half-slime that was saved comes back able to
+		# split twice more.
+		monster.generation = int(entry.get("generation", 0))
 		monster.snap()
 		monsters.append(monster)
 

@@ -448,7 +448,8 @@ func _fingerprint() -> String:
 	var alive: Array[String] = []
 	for m in _game.monsters:
 		if m.is_alive():
-			alive.append("%s@%d,%d %d/%d" % [m.kind, m.x, m.y, m.hp, m.max_hp])
+			alive.append("%s@%d,%d %d/%d g%d%s" % [m.kind, m.x, m.y, m.hp, m.max_hp,
+				m.generation, "E" if m.is_elite else ""])
 	alive.sort()
 	parts.append("Monster=[%s]" % ", ".join(alive))
 	var walls := 0
