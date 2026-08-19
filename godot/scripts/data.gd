@@ -278,6 +278,11 @@ const CLASSES := [
 		# Starts with the short bow, which is the whole character: the
 		# first hit lands before anything is next to you.
 		"weapon": 2, "armour": 0,
+		# And can still shoot after picking up a sword. Tying the only
+		# ranged attack to one item meant a ranger who found a better
+		# weapon stopped being a ranger, which is a strange way to punish
+		# someone for finding treasure.
+		"reach": 4,
 		"shade": Color(0.80, 1.0, 0.72),
 		"blurb": "Trifft, bevor es dich erreicht - im Nahkampf dünn.",
 	},

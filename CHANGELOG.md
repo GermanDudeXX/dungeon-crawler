@@ -1,13 +1,248 @@
 # Changelog
 
 Alle nennenswerten Änderungen an Dungeon Crawler. Neueste zuerst.
+Nichts wird hier ausgelassen — das Spiel ist quelloffen, und was drin
+steht, steht auch hier.
 
-Die Build-Nummern stehen im Spiel unter **Einstellungen → Version** und
-zählen auf PC und Android getrennt hoch.
+Das Spiel gibt es in zwei Fassungen:
+
+* **Godot-Fassung** — die aktuelle, seit dem 18.08.2026. Android *und*
+  Windows, gebaut mit Godot 4.7.1. Versionen wie `1.5.0`, im Spiel unter
+  **Menü → Nach Update suchen** sichtbar.
+* **pygame-Fassung** — die ursprüngliche. Eingefroren bei Android
+  Build 90; sie bekommt keine Änderungen mehr, wird aber nicht gelöscht.
+  Ihr Verlauf steht [weiter unten](#pygame-fassung-eingefroren).
 
 ---
 
-## Aktuell — PC Build 73
+# Godot-Fassung
+
+## 1.5.0 — Karte, Anzeige und eine Windows-Fassung, die sich installiert
+
+Ein Stapel aus zwölf gemeldeten Fehlern und zwei neuen Windows-Wünschen.
+
+### Karte
+
+- **Wände neben Türen fehlten.** Sicht wird zur Mitte jeder Kachel
+  gezogen, und eine Wand, die diese Linie nur streift, blieb dunkel — der
+  Raumrand bekam Löcher, durch die der Gang dahinter schien. Am
+  schlimmsten an Türen, weil deren Rahmen genau die zwei gestreiften
+  Kacheln sind: Türen standen in der Luft. Jetzt ist jede Wand neben
+  einer sichtbaren Kachel ebenfalls sichtbar.
+- **Banner lagen auf dem Boden** statt an der Wand zu hängen. Sie werden
+  jetzt nur noch dort abgelegt, wo eine Wand dahinter steht, und einen
+  halben Kachelrand höher gezeichnet.
+- **Kisten standen in Türrahmen.** Blockierendes Dekor wird nicht mehr
+  auf oder direkt vor eine Tür gesetzt.
+- **Diagonal an einer Ecke vorbei** ging bisher, solange nur *eine* Seite
+  Wand war. Damit lief man an geschlossenen Türen vorbei, ohne sie je zu
+  öffnen. Eine blockierte Seite reicht jetzt, damit der Schritt abgelehnt
+  wird — für Spieler und Gegner gleichermaßen.
+- **Die Treppe nach unten** bekommt einen pulsierenden Rahmen, sobald man
+  sie gesehen hat. Rot, solange der Boss den Schlüssel hält.
+
+### Anzeige
+
+- **Lebensbalken über Gegnern** sitzen jetzt auf dem Kopf statt darüber
+  zu schweben: die Sprites haben oben durchsichtigen Rand, und der wurde
+  mitgemessen. Dazu eine dunkle Spur dahinter, damit man auch sieht, was
+  *fehlt*, und ein Balken für Bosse und Elite ab dem ersten Schlag.
+- Balken werden nicht mehr vom Licht eingefärbt — ein Balken, den man im
+  Dunkeln nicht lesen kann, ist genau da nutzlos, wo er gebraucht wird.
+- **Der Schatten hängt nicht mehr nach.** Er wurde auf die Zielkachel
+  gesetzt, während die Figur noch unterwegs war; jetzt hängt er am
+  Sprite.
+- Die Boss-Leiste liegt nicht mehr unter den Knöpfen oben rechts.
+
+### Steuerung & Klassen
+
+- **Der WARTEN-Knopf sagt jetzt, dass er etwas tut.** Er tat es vorher
+  auch — ein Zug verging, Gift und Regeneration liefen weiter —, nur war
+  auf einer leeren Ebene nichts davon zu sehen. Jetzt mit Einblendung und
+  einem kurzen Ton. Das Pausenzeichen (zwei Striche) sitzt auf dem
+  MENÜ-Knopf, denn in einem zugbasierten Spiel ist das Menü das Einzige,
+  was wirklich pausiert.
+- **Der Jäger kann schießen, auch ohne Bogen.** Reichweite hängt jetzt an
+  der Klasse, nicht mehr nur am Gegenstand — wer ein besseres Schwert
+  findet, hört nicht auf, Jäger zu sein.
+- **Lautstärke in Zehnerschritten** statt nur an/aus, für Ton und Musik
+  getrennt, mit ausgeschriebener Zahl.
+
+### Windows
+
+- **Das Spiel installiert sich.** Die heruntergeladene .exe fragt beim
+  ersten Start, ob sie nach
+  `%LOCALAPPDATA%\Programs\Dungeon Crawler` umziehen soll, legt
+  Verknüpfungen auf den Desktop und ins Startmenü und startet von dort
+  neu. Keine Administratorrechte, der Spielstand bleibt liegen, wo er
+  liegt.
+- **Das In-App-Update lud auf Windows eine .apk.** Es nahm einfach die
+  erste Datei des Releases. Jetzt wählt es nach System: `.apk` auf
+  Android, `.exe` auf Windows. Unter Windows kann sich ein laufendes
+  Programm nicht selbst überschreiben, also übernimmt das eine kleine
+  Batchdatei: auf das Ende des Spiels warten, Datei tauschen, neu
+  starten, sich selbst löschen.
+
+### Geprüft
+
+- Selbsttest um Prüfungen für Türen, automatisches Schießen und
+  Stockwerk-Gedächtnis erweitert; läuft über mehrere Startwerte je 800
+  bis 2000 Züge.
+- Gegner-Verfolgung nachgemessen (Abstand 7 → 5 → 3 → 1, dann Angriff):
+  sie funktionierte bereits, ein Gegner steht nur still, solange er
+  schläft — und er schläft, bis Licht auf ihn fällt.
+
+## 1.4.1 — Türen führen irgendwohin, und Leben ist ein Balken
+
+- **Türen mitten im Gang.** Ein Gang, der neben einem Raum entlangläuft,
+  sah an jeder Stelle wie ein Durchgang aus. Jetzt muss eine der beiden
+  offenen Seiten *im Raum* liegen, und hinter beiden Seiten müssen
+  mindestens fünf Felder Boden liegen — sonst führt die Tür ins Nichts.
+  Gemessen über 120 Ebenen: von 1597 Türplätzen nach alter Regel bleiben
+  1241, gut ein Fünftel war Unsinn.
+- **Lebensbalken statt „HP 7/24"**: grün, ab 55 % bernstein, ab 28 % rot,
+  mit nachlaufendem hellem Streifen für den letzten Treffer, Schild in
+  Hellblau dahinter, XP-Balken darunter, und eine breite Leiste für Bosse.
+
+## 1.4.0 — Stockwerke bleiben, Fernkämpfer schießen selbst
+
+- **Ebene runter und wieder hoch** führte in ein neu ausgewürfeltes
+  Stockwerk. Jetzt wird jede verlassene Ebene beiseitegelegt und
+  unverändert wieder aufgebaut — dieselben Wände, dieselbe Beute,
+  dieselben Toten. Wird mitgespeichert.
+- **Doppelschritt auf dem PC:** die Tastenwiederholung setzte nach 0,14 s
+  ein, schneller als man loslässt. Jetzt 0,34 s.
+- **Türen standen nebeneinander** und mitten im Raum.
+- **Händler und Türen waren im Dunkeln sichtbar.** Deko und Läden nur
+  noch im Licht, Beute nur als gedimmte Erinnerung.
+- **Magier und Jäger schießen von selbst**, sobald etwas Waches in
+  Reichweite steht und die Linie frei ist. Nie auf etwas direkt daneben,
+  nie statt eines Schritts, nie auf Schlafendes. Abschaltbar.
+- Sichtbarer Schuss in Waffenfarbe, Funken am Ziel, Schatten unter allem,
+  weißes Aufblitzen bei jedem Treffer.
+
+## 1.3.1 — Pausenmenü und die erste Windows-Fassung
+
+- Pausenmenü im Spiel mit Ton, Musik, Steuerung und Update-Knopf.
+- **Windows-Fassung** als einzelne .exe (122 MB, nichts zu entpacken).
+- Ein Händler konnte hinter einem anderen eingemauert werden.
+
+## 1.3.0 — Das Update lädt und installiert sich in der App
+
+- **In-App-Update**: fragt GitHub nach der neuesten Version, lädt sie und
+  übergibt sie dem Installer. Browser-Link als Rückfalllösung, falls das
+  Gerät die Übergabe verweigert.
+- Android-Berechtigung `REQUEST_INSTALL_PACKAGES`, im gebauten Paket
+  nachgeprüft.
+- TLS-Prüfung bleibt unangetastet: Wer die Frage „welche Datei installierst
+  du als Nächstes" ungeprüft beantworten lässt, lässt jemand anderen die
+  Datei aussuchen.
+
+## 0.13.0 — Gefangene, Fallen, Elite
+
+- Gefangene, die man befreien kann.
+- Vier weitere Fallen, vier Schreinausgänge, drei neue Elite-Arten.
+- **Der Jäger** als vierte Klasse, und Bögen als eigene Waffenart mit
+  Reichweite.
+
+## 0.12.0 — Bestiarium, Punktzahl, Warten
+
+- Bestiarium: was man getroffen hat, mit Zahlen; Unbekanntes bleibt
+  sichtbar als Lücke.
+- Punktzahl am Ende eines Laufs, fünf weitere Erfolge.
+- Ein Zug, in dem man absichtlich nichts tut.
+
+## 0.11.0 — Themenräume und Aufträge
+
+- **Themenräume**: Bibliothek, Waffenkammer, Alchemistenstube, Beinhaus.
+- **Ein Auftrag pro Ebene** mit Belohnung.
+- Vier weitere Abschnitte (Versunkene Hallen, Aschewüste, Pilzgärten, Die
+  Leere), drei Rollen, drei Gaben.
+- Eine einzige Regel für alles, was den Weg versperrt — vorher konnten
+  Kisten, Händler und Blitzreisen jeweils eigene Sackgassen bauen.
+
+## 0.10.0 — Türen, tiefere Gegner, Daumenstick
+
+- Türen an den Zugängen der Räume.
+- Sieben tiefere Gegnerarten, jede mit eigener Gewohnheit (Fallen legen,
+  Netze spinnen, beschwören, sich teilen, aus der Ferne schießen).
+- **Daumenstick**: acht Richtungen, lückenloses Gleiten, überall auf der
+  linken Bildhälfte bedienbar.
+
+## 0.9.0 — Update-Knopf, Läden, größere Sicht
+
+- Update-Knopf auf dem Titelbildschirm.
+- Zoom richtet sich nach dem Bildschirm.
+- Elite-Gegner sind sichtbar anders, Schriftrollen beim Händler.
+- Spielstand-Prüfung deckt die ganze Ebene ab.
+
+## 0.8.0 — Bewachte Truhen und ein Schmied, der verzaubert
+
+- Bewachte Truhen: erst das, was davorsteht, dann der Deckel.
+- Schmied, der aufwertet, verzaubert und umschmiedet.
+- Erfolge.
+- Funken und eine kurze Pause beim Treffer.
+
+## 0.7.0 — Tasche, Banner, und ein Boss, der stehen bleibt
+
+- Trankbeutel mit allen Sorten, Wirkung und Anzahl.
+- Ereignis-Banner in der Bildmitte.
+- Schwärme zählen zum Gegner-Budget, statt obendrauf zu kommen.
+- **Ein Boss, der wegläuft, ist eine Sackgasse**: Bosse weichen nicht
+  mehr zurück, und niemand weicht mehr als drei Schritte am Stück.
+
+## 0.6.0 — Eigenarten, Gefahren, Superboss
+
+- Jedes Monster mit eigener Eigenart.
+- Stehende Gefahren (Feuer, Säure, Dornen), festes Dekor, ein Superboss.
+- Weiches Laufen, Lebensbalken, schlafende Gegner erkennbar.
+- Startausrüstung je Klasse.
+
+## 0.5.0 — Bossphasen, Minikarte, Rückweg
+
+- Bossphasen.
+- Treppe nach oben und Minikarte.
+- Schadenszahlen, Trefferblitz, Kamerawackeln.
+- Elementarwaffen und Blutungen.
+
+## 0.4.0 — Alle 31 Tränke, Rollen, Schreine, Seltenheiten
+
+- Alle 31 Tränke, Buffs, Schild.
+- Schriftrollen, Schreine, Elitegegner, Mini-Bosse, Schatzkammer.
+- Seltenheitsstufen für Waffen und Rüstungen.
+- Vier Schwierigkeitsgrade, dauerhafte Statistik.
+
+## 0.3.0 — Stufenaufstieg mit Wahl
+
+- Stufenaufstieg mit Auswahl aus drei Gaben, kritische Treffer.
+- Ein Feld, ein Ding: nichts liegt mehr übereinander.
+
+## 0.2.0 — Klassen, Titelbildschirm, Speichern
+
+- Drei Klassen, Titelbildschirm, Speichern und Fortsetzen.
+- Ton, Musik, Todesbildschirm.
+- Truhen und Läden sichtbar, Sprites in der richtigen Größe.
+
+## 0.1.0 — Der Port
+
+- Die pygame-Fassung in Godot 4.7 neu gebaut: dieselbe Kartenerzeugung
+  Zeile für Zeile, damit derselbe Startwert denselben Dungeon legt und
+  der Port gegen das laufende Spiel geprüft werden kann statt gegen ein
+  Gefühl.
+- Grund für den Umzug: auf dem Handy lief die pygame-Fassung mit 6 bis 17
+  Bildern pro Sekunde, die Godot-Fassung mit 120.
+
+---
+
+<a name="pygame-fassung-eingefroren"></a>
+
+# pygame-Fassung (eingefroren)
+
+Steht bei Android Build 90. Bekommt keine Änderungen mehr — die
+Godot-Fassung oben hat sie abgelöst. Der Verlauf bleibt hier stehen, weil
+er zum Spiel gehört.
+
+## Zuletzt — PC Build 73
 
 ### Karte & Grafik
 - **Echte Dungeon-Grafik!** Steinböden, Ziegelwände und massiver Fels statt
@@ -91,7 +326,7 @@ zählen auf PC und Android getrennt hoch.
 
 ---
 
-## Aktuell — PC Build 56 · Android Build 53
+## PC Build 56 · Android Build 53
 
 ### Musik
 - Drei Dungeon-Synth-Tracks, wechseln mit dem Dungeon-Thema

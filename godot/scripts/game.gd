@@ -115,6 +115,10 @@ var _dead_text: Label
 var _sound_button: Button
 var _difficulty_button: Button
 var _flash_button: Button
+var _volume_label: Label
+var _setup_panel: PanelContainer  ## the Windows "shall I move in?" offer
+var _setup_text: Label
+var _music_label: Label
 var _pad_button: Button
 var _record_label: Label
 var _hint_label: Label
@@ -159,6 +163,8 @@ var _minimap_at := Vector2i(-1, -1)
 var _seen_items := {}            ## loot that has been in the light once
 var _shadows := {}               ## sprite -> the smudge it stands on
 var _shadow_art: Texture2D
+var _art_rects := {}             ## texture -> the part of it that is not empty
+var _stairs_mark: Line2D          ## the frame drawn round the way down
 var _gliding := {}               ## sprite -> where it is walking to
 var _camera_to := Vector2.ZERO
 var _scroll_buttons: Array = []
@@ -186,6 +192,8 @@ func _ready() -> void:
 	audio = Audio.new()
 	add_child(audio)
 	audio.enabled = settings["sound"]
+	audio.set_volume(float(settings.get("volume", 0.75)))
+	audio.set_music_volume(float(settings.get("music_volume", 0.55)))
 	audio.music_enabled = settings["music"]
 	difficulty = str(settings.get("difficulty", Data.DEFAULT_DIFFICULTY))
 	_build_world()
@@ -196,6 +204,11 @@ func _ready() -> void:
 	# kit is right from the first turn.
 	new_run()
 	show_title()
+	# On Windows, once, before anything else is touched: the game is a
+	# single file sitting wherever it was downloaded, and it can move into
+	# a folder of its own if that is wanted.
+	if Setup.worth_offering() and not settings.get("install_asked", false):
+		_setup_panel.visible = true
 
 
 # --- scene ----------------------------------------------------------------
@@ -786,6 +799,19 @@ func _populate() -> void:
 		if spot == null:
 			continue
 		var piece: String = DECOR[rng.randi() % DECOR.size()]
+		# A banner hangs on a wall. Dropped on open floor it is a flag
+		# lying in the middle of a room, which is what it looked like -
+		# so one only goes down where there is a wall behind it to hang
+		# from, and it is drawn half a tile up, against that wall.
+		if piece.begins_with("wall_banner") \
+				and Dungeon.is_walkable(grid, spot.x, spot.y - 1):
+			continue
+		# And nothing solid in a doorway. A crate in front of a door
+		# does not seal the floor off - there is always a way round -
+		# but it does turn the door into furniture, and standing in a
+		# doorway is the one place scenery has no business being.
+		if piece in Data.BLOCKING_DECOR and _beside_a_door(spot):
+			continue
 		decor[spot] = piece
 		if piece in Data.BLOCKING_DECOR and _seals_something():
 			decor.erase(spot)
@@ -1111,6 +1137,31 @@ func recompute_fov() -> void:
 				lit[cell] = true
 				explored[cell] = true
 
+	# The wall a lit tile touches is lit as well.
+	#
+	# Sight is traced to the middle of each cell, so a wall the line
+	# only grazes stays dark - and a room then has holes along its edge
+	# where the wall should be, with the floor of the corridor behind
+	# showing through. Worst at a door: the frame it hangs in is
+	# exactly the pair of tiles the line grazes, so doors were standing
+	# in mid-air. A wall next to something you can see is something you
+	# can see.
+	var edges := {}
+	for cell in lit:
+		if not Dungeon.is_walkable(grid, cell.x, cell.y):
+			continue
+		for dy in [-1, 0, 1]:
+			for dx in [-1, 0, 1]:
+				var beside: Vector2i = cell + Vector2i(dx, dy)
+				if beside.x < 0 or beside.y < 0 or beside.x >= MAP_W or beside.y >= MAP_H:
+					continue
+				if Dungeon.is_walkable(grid, beside.x, beside.y):
+					continue
+				edges[beside] = true
+	for cell in edges:
+		lit[cell] = true
+		explored[cell] = true
+
 
 func _line_clear(from: Vector2i, to: Vector2i) -> bool:
 	var steps := maxi(absi(to.x - from.x), absi(to.y - from.y))
@@ -1129,6 +1180,28 @@ func _line_clear(from: Vector2i, to: Vector2i) -> bool:
 
 # --- the turn -------------------------------------------------------------
 
+## Whether a diagonal step would cut a corner.
+##
+## The old rule only refused the step when *both* neighbouring tiles
+## were wall - the case of squeezing through the join between two
+## corners. One wall is enough, though: sliding diagonally past a corner
+## means passing through ground that is not there. Past a shut door it
+## is worse, because the door is then never opened at all: it stands
+## there as decoration while everything walks around it.
+##
+## Blocking scenery counts as wall here for the same reason a crate
+## counts as wall everywhere else - it is a solid object, and it reads
+## as one.
+func _corner_cut(from: Vector2i, step: Vector2i) -> bool:
+	if step.x == 0 or step.y == 0:
+		return false
+	for beside in [Vector2i(from.x + step.x, from.y),
+			Vector2i(from.x, from.y + step.y)]:
+		if not Dungeon.is_walkable(grid, beside.x, beside.y) or blocks(beside):
+			return true
+	return false
+
+
 func try_move(step: Vector2i) -> void:
 	# Caught in a web: the turn is spent tearing free instead of
 	# moving, and the monsters get their turn anyway.
@@ -1142,17 +1215,8 @@ func try_move(step: Vector2i) -> void:
 	if busy() or step == Vector2i.ZERO:
 		return
 	var target := Vector2i(player.x + step.x, player.y + step.y)
-	# No squeezing through the gap between two wall corners. The step
-	# itself would be legal - the tile is free - but it looks like
-	# walking through the join, and a monster cannot follow you
-	# through it either.
-	if step.x != 0 and step.y != 0:
-		var sideways := Vector2i(player.x + step.x, player.y)
-		var upright := Vector2i(player.x, player.y + step.y)
-		var blocked_x: bool = not Dungeon.is_walkable(grid, sideways.x, sideways.y)
-		var blocked_y: bool = not Dungeon.is_walkable(grid, upright.x, upright.y)
-		if blocked_x and blocked_y:
-			return
+	if _corner_cut(Vector2i(player.x, player.y), step):
+		return
 	if step.x != 0:
 		player.facing = 1 if step.x > 0 else -1
 
@@ -1468,6 +1532,16 @@ func _pocket_behind(doorway: Vector2i, from: Vector2i) -> int:
 			seen[next] = true
 			queue.append(next)
 	return seen.size()
+
+
+## Whether this cell is a door or stands directly in front of one.
+func _beside_a_door(cell: Vector2i) -> bool:
+	if doors.has(cell):
+		return true
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		if doors.has(cell + offset):
+			return true
+	return false
 
 
 ## The floor cells immediately outside a room that touch it.
@@ -1855,15 +1929,10 @@ func _step_monster(monster, step: Vector2i) -> bool:
 		# into. The pygame build learned that one the hard way.
 		if candidate == Vector2i(player.x, player.y) or occupied(candidate):
 			continue
-		# And no squeezing between two wall corners, the same rule the hero
-		# follows. A monster that can take a shortcut the player cannot is a
-		# monster that appears out of a wall.
-		var away: Vector2i = candidate - monster.cell()
-		if away.x != 0 and away.y != 0:
-			var open_x: bool = Dungeon.is_walkable(grid, monster.x + away.x, monster.y)
-			var open_y: bool = Dungeon.is_walkable(grid, monster.x, monster.y + away.y)
-			if not open_x and not open_y:
-				continue
+		# The same rule the hero follows. A monster that can take a shortcut
+		# the player cannot is a monster that appears out of a wall.
+		if _corner_cut(monster.cell(), candidate - monster.cell()):
+			continue
 
 		monster.x = candidate.x
 		monster.y = candidate.y
@@ -2927,6 +2996,12 @@ func wait_a_turn() -> void:
 	if busy():
 		return
 	say("Du wartest.")
+	# Said out loud as well as written down. On an empty floor a passed
+	# turn changes nothing that can be seen - no step, no damage, often
+	# not even a point of health - so the button looked broken, and was
+	# reported as broken. It was doing exactly what it was asked to.
+	banner("Warten …", Color(0.72, 0.80, 0.94))
+	audio.play("wait")
 	_tick_poison()
 	_tick_regen()
 	_tick_buffs()
@@ -2996,6 +3071,10 @@ func paint() -> void:
 				else Color(0.52, 0.52, 0.66))
 	for cell in decor:
 		_place_prop(cell, decor[cell])
+		if decor[cell].begins_with("wall_banner"):
+			var cloth: Sprite2D = _item_nodes.get("prop:%s" % str(cell))
+			if cloth != null:
+				cloth.position.y -= TILE * 0.5
 	if captive != null:
 		_place_prop(captive, "knight_m_idle_anim_f0")
 	if shrine != null:
@@ -3155,9 +3234,22 @@ func _place_monster(monster) -> void:
 		# Without it a fight is a guess: the log says numbers, but
 		# whether the thing in front of you is nearly dead is the one
 		# thing you actually want to know.
+		# Two rectangles: the dark one is the whole bar, so what is
+		# missing can be seen as well as what is left. Both are drawn
+		# unshaded - a health bar that goes dark with the room is a
+		# health bar that cannot be read in the only place it matters.
+		var unlit := CanvasItemMaterial.new()
+		unlit.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+		var track := ColorRect.new()
+		track.name = "healthtrack"
+		track.color = Color(0.06, 0.05, 0.06, 0.85)
+		track.material = unlit
+		track.visible = false
+		node.add_child(track)
 		var bar := ColorRect.new()
 		bar.name = "health"
 		bar.color = Color(0.85, 0.25, 0.25)
+		bar.material = unlit
 		bar.visible = false
 		node.add_child(bar)
 	var sprite: Sprite2D = _actor_nodes[monster]
@@ -3171,29 +3263,48 @@ func _place_monster(monster) -> void:
 	# Asleep is pale; an elite wears a tint of its own so a familiar
 	# silhouette that is about to hit twice as hard looks different from
 	# the one that is not.
+	# self_modulate, not modulate: the second one runs down into the
+	# health bar as well, and a sleeping monster would hand its own bar
+	# the same pale wash that says "asleep".
 	if not monster.awake:
-		sprite.modulate = Color(0.62, 0.62, 0.78)
+		sprite.self_modulate = Color(0.62, 0.62, 0.78)
 	elif monster.is_boss:
-		sprite.modulate = Color(1.0, 0.80, 0.70)
+		sprite.self_modulate = Color(1.0, 0.80, 0.70)
 	elif monster.is_keeper:
-		sprite.modulate = Color(0.85, 0.95, 1.0)
+		sprite.self_modulate = Color(0.85, 0.95, 1.0)
 	elif monster.is_elite:
-		sprite.modulate = Color(1.0, 0.92, 0.55)
+		sprite.self_modulate = Color(1.0, 0.92, 0.55)
 	else:
-		sprite.modulate = monster.tint
+		sprite.self_modulate = monster.tint
 
 	var bar: ColorRect = sprite.get_node_or_null("health")
-	if bar != null:
-		var hurt: bool = monster.hp < monster.max_hp
-		bar.visible = hurt
-		if hurt:
+	var track: ColorRect = sprite.get_node_or_null("healthtrack")
+	if bar != null and track != null:
+		# Shown once something is hurt, and always for a boss or an
+		# elite: with those, knowing how far along the fight is matters
+		# from the first swing.
+		var shown: bool = monster.hp < monster.max_hp or monster.is_boss or monster.is_elite
+		bar.visible = shown
+		track.visible = shown
+		if shown:
 			# In the sprite's own coordinates, so the scale that makes a
-			# boss large makes its bar wide to match.
-			var span := float(sprite.texture.get_width())
-			var left := float(monster.hp) / float(maxi(1, monster.max_hp))
-			bar.position = Vector2(0, -6.0 / sprite.scale.y)
-			bar.size = Vector2(span * left, 3.0 / sprite.scale.y)
-			bar.color = Color(0.85, 0.25, 0.25) if left < 0.35 else Color(0.90, 0.62, 0.20)
+			# boss large makes its bar wide to match. Sitting on the head
+			# rather than floating over it: at three tiles tall a bar six
+			# pixels up is a hand's breadth of empty air.
+			var art: Rect2 = _art_rect(sprite.texture)
+			var span: float = art.size.x
+			var left: float = clampf(float(monster.hp) / float(maxi(1, monster.max_hp)), 0.0, 1.0)
+			var thick: float = (4.0 if monster.is_boss else 3.0) / sprite.scale.y
+			var top: float = art.position.y - thick - 2.0 / sprite.scale.y
+			var edge := Vector2(1.0 / sprite.scale.x, 1.0 / sprite.scale.y)
+			track.position = Vector2(art.position.x - edge.x, top - edge.y)
+			track.size = Vector2(span + edge.x * 2.0, thick + edge.y * 2.0)
+			bar.position = Vector2(art.position.x, top)
+			bar.size = Vector2(span * left, thick)
+			if monster.is_boss:
+				bar.color = Color(1.0, 0.45, 0.25)
+			else:
+				bar.color = Color(0.86, 0.26, 0.24) if left < 0.35 else Color(0.88, 0.55, 0.22)
 
 
 # --- the panel ------------------------------------------------------------
@@ -3228,12 +3339,12 @@ func _build_hud() -> void:
 		label.add_theme_constant_override("outline_size", 5)
 		label.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
 		_play_ui.add_child(label)
-	_play_ui.get_node("stats").position = Vector2(14, 8)
+	_play_ui.get_node("stats").position = Vector2(14, 4)
 	# Two lines, because one did not fit: at 1280 wide the gear names
 	# pushed the buff row off the right-hand edge, where a player has no
 	# way to know it exists.
-	_play_ui.get_node("gear").position = Vector2(14, 78)
-	_play_ui.get_node("fps").position = Vector2(14, 106)
+	_play_ui.get_node("gear").position = Vector2(14, 84)
+	_play_ui.get_node("fps").position = Vector2(14, 112)
 
 	var log_label: Label = _play_ui.get_node("log")
 	log_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
@@ -3328,12 +3439,16 @@ func _build_hud() -> void:
 		_scroll_buttons.append({"node": button, "id": scroll["id"]})
 		at += 1
 
+	# The two bars are the pause sign everyone knows. The button they
+	# belong on is this one: in a game that waits for your move, the menu
+	# is the only thing that pauses anything - "warten" spends a turn on
+	# purpose, which is the opposite.
 	var again := Button.new()
-	again.text = "MENÜ"
+	again.text = "▮▮ MENÜ"
 	again.custom_minimum_size = Vector2(size, size * 0.6)
 	again.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	again.position = Vector2(-pad - size, pad)
-	again.add_theme_font_size_override("font_size", 26)
+	again.add_theme_font_size_override("font_size", 20)
 	again.pressed.connect(open_pause)
 	_play_ui.add_child(again)
 
@@ -3358,6 +3473,7 @@ func _build_hud() -> void:
 	_build_shop_panel()
 	_build_perk_panel()
 	_build_dead_panel()
+	_build_setup_panel()
 	_build_title_panel()
 
 
@@ -3403,33 +3519,33 @@ func _gauge_label(at: Vector2, span: Vector2, size: int, top := false) -> Label:
 ## it is there for the same reason - the moment before a level is worth
 ## knowing, and it was buried in a row of figures.
 func _build_gauges() -> void:
-	_hp_frame = _plate(Vector2(12, 30), Vector2(GAUGE_W + 4, GAUGE_H + 4), Color(0, 0, 0, 0.80))
-	_plate(Vector2(14, 32), Vector2(GAUGE_W, GAUGE_H), Color(0.13, 0.09, 0.11, 0.92))
+	_hp_frame = _plate(Vector2(12, 36), Vector2(GAUGE_W + 4, GAUGE_H + 4), Color(0, 0, 0, 0.80))
+	_plate(Vector2(14, 38), Vector2(GAUGE_W, GAUGE_H), Color(0.13, 0.09, 0.11, 0.92))
 	# The pale strip is the damage that has just landed. It drains away
 	# over about a second, so a hit is visible as a loss and not only as a
 	# smaller bar.
-	_hp_ghost = _plate(Vector2(14, 32), Vector2(GAUGE_W, GAUGE_H), Color(0.96, 0.86, 0.58, 0.50))
-	_hp_fill = _plate(Vector2(14, 32), Vector2(GAUGE_W, GAUGE_H), Color(0.35, 0.72, 0.35))
+	_hp_ghost = _plate(Vector2(14, 38), Vector2(GAUGE_W, GAUGE_H), Color(0.96, 0.86, 0.58, 0.50))
+	_hp_fill = _plate(Vector2(14, 38), Vector2(GAUGE_W, GAUGE_H), Color(0.35, 0.72, 0.35))
 	# A shield is not health: it sits past the end of the bar, in its own
 	# colour, and goes first.
-	_hp_guard = _plate(Vector2(14, 32), Vector2(0, GAUGE_H), Color(0.48, 0.78, 1.0, 0.88))
-	_hp_text = _gauge_label(Vector2(14, 32), Vector2(GAUGE_W, GAUGE_H), 20)
+	_hp_guard = _plate(Vector2(14, 38), Vector2(0, GAUGE_H), Color(0.48, 0.78, 1.0, 0.88))
+	_hp_text = _gauge_label(Vector2(14, 38), Vector2(GAUGE_W, GAUGE_H), 20)
 
-	_plate(Vector2(12, 60), Vector2(GAUGE_W + 4, 12), Color(0, 0, 0, 0.80))
-	_plate(Vector2(14, 62), Vector2(GAUGE_W, 8), Color(0.10, 0.10, 0.14, 0.92))
-	_xp_fill = _plate(Vector2(14, 62), Vector2(0, 8), Color(0.62, 0.55, 0.95))
+	_plate(Vector2(12, 66), Vector2(GAUGE_W + 4, 12), Color(0, 0, 0, 0.80))
+	_plate(Vector2(14, 68), Vector2(GAUGE_W, 8), Color(0.10, 0.10, 0.14, 0.92))
+	_xp_fill = _plate(Vector2(14, 68), Vector2(0, 8), Color(0.62, 0.55, 0.95))
 
 	# A boss gets the top of the screen. Something with four hundred hit
 	# points needs a bar you can watch from across the room, and a name -
 	# otherwise the only sign that this one is different is that it is not
 	# dying.
-	_boss_frame = _plate(Vector2(-BOSS_W * 0.5 - 3, 61), Vector2(BOSS_W + 6, 26),
+	_boss_frame = _plate(Vector2(-BOSS_W * 0.5 - 3, 105), Vector2(BOSS_W + 6, 26),
 		Color(0, 0, 0, 0.80), true)
-	_boss_track = _plate(Vector2(-BOSS_W * 0.5, 64), Vector2(BOSS_W, 20),
+	_boss_track = _plate(Vector2(-BOSS_W * 0.5, 108), Vector2(BOSS_W, 20),
 		Color(0.14, 0.08, 0.08, 0.92), true)
-	_boss_fill = _plate(Vector2(-BOSS_W * 0.5, 64), Vector2(BOSS_W, 20),
+	_boss_fill = _plate(Vector2(-BOSS_W * 0.5, 108), Vector2(BOSS_W, 20),
 		Color(0.86, 0.26, 0.20), true)
-	_boss_text = _gauge_label(Vector2(-BOSS_W * 0.5, 64), Vector2(BOSS_W, 20), 19, true)
+	_boss_text = _gauge_label(Vector2(-BOSS_W * 0.5, 108), Vector2(BOSS_W, 20), 19, true)
 	_boss_text.add_theme_color_override("font_color", Color(1.0, 0.92, 0.86))
 
 
@@ -3659,6 +3775,8 @@ func _glide(delta: float) -> void:
 		_torch.energy = 1.75 + sin(_flicker * 5.3) * 0.06 + sin(_flicker * 2.1) * 0.05
 	if _camera != null and _camera.position != _camera_to:
 		_camera.position = _camera.position.move_toward(_camera_to, TILE * 10.0 * delta)
+	_follow_shadows()
+	_mark_stairs(delta)
 	if _gliding.is_empty():
 		return
 	var speed := (float(TILE) / STEP_TIME) * delta
@@ -3670,6 +3788,40 @@ func _glide(delta: float) -> void:
 		sprite.position = sprite.position.move_toward(where, speed)
 		if sprite.position.is_equal_approx(where):
 			_gliding.erase(sprite)
+
+## Draws a frame round the way down.
+##
+## The staircase is one tile of art in a floor made of tiles of art, and
+## at arm's length on a phone it is genuinely hard to find - it is easy
+## to cross the whole level twice looking for it. A pulsing outline is
+## not subtle, which is the point: this is the tile everyone is looking
+## for. Red while the boss still holds the key, so the reason the stairs
+## will not open is visible at the stairs and not only in the log.
+func _mark_stairs(_delta: float) -> void:
+	if _stairs_mark == null:
+		_stairs_mark = Line2D.new()
+		_stairs_mark.width = 2.5
+		_stairs_mark.z_index = 3
+		var unlit := CanvasItemMaterial.new()
+		unlit.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+		_stairs_mark.material = unlit
+		add_child(_stairs_mark)
+	if choosing or dead or not explored.has(stairs):
+		_stairs_mark.visible = false
+		return
+	_stairs_mark.visible = true
+	var corner := Vector2(stairs) * TILE
+	var inset := 2.5
+	var near := corner + Vector2(inset, inset)
+	var far := corner + Vector2(TILE - inset, TILE - inset)
+	# The first corner again at the end, rather than the closed flag: this
+	# is one loop of four sides and it should stay drawable on any build.
+	_stairs_mark.points = PackedVector2Array([near, Vector2(far.x, near.y),
+		far, Vector2(near.x, far.y), near])
+	_stairs_mark.default_color = (Color(0.95, 0.35, 0.30)
+		if stairs_locked and boss_alive() else Color(0.55, 0.92, 1.0))
+	_stairs_mark.modulate.a = 0.45 + 0.35 * sin(_flicker * 3.0)
+
 
 ## Keys, for playing on the machine this is built on. The phone has
 ## buttons for all of it; a keyboard should not need them.
@@ -4077,6 +4229,15 @@ func _update_pressed() -> void:
 ## a dead end with no way forward would be worse than one extra tap.
 func _install_update() -> void:
 	if updater.install(_update_file):
+		if OS.get_name() == "Windows":
+			# The file that has to be replaced is the one running this line,
+			# so the swap waits for this process to end. Ending it is the
+			# last thing left to do.
+			_update_label.text = "Wird ersetzt - das Spiel startet gleich neu."
+			save_run()
+			await get_tree().create_timer(1.0).timeout
+			get_tree().quit()
+			return
 		_update_label.text = "Android fragt jetzt nach der Installation."
 		return
 	_update_label.text = "Installer ließ sich nicht öffnen - im Browser laden."
@@ -4436,11 +4597,57 @@ func _shadow_for(sprite: Sprite2D, cell: Vector2i, width: float) -> void:
 	# cover the whole smudge and it may as well not be there - which
 	# is exactly how the first attempt looked.
 	shadow.scale = Vector2(width / 64.0, width * 0.34 / 64.0)
-	# Follows the sprite rather than the cell, so it slides along with a
-	# step instead of jumping ahead of it.
-	shadow.position = Vector2(sprite.position.x + sprite.get_rect().size.x
-		* sprite.scale.x * 0.5, float(cell.y + 1) * TILE - 1.0)
 	shadow.visible = sprite.visible
+	_follow_shadow(sprite, shadow)
+
+
+## The part of a picture that has something in it.
+##
+## Every sprite in the set is a square tile with the figure drawn
+## somewhere inside it and transparent space around it - so anything
+## placed against the edge of the picture is placed against nothing. It
+## showed on the health bars, which floated a hand's breadth over the
+## head of whatever they belonged to, and under the shadows.
+##
+## Worked out once per picture and remembered: reading the pixels back
+## is not something to do sixty times a second.
+func _art_rect(texture: Texture2D) -> Rect2:
+	if _art_rects.has(texture):
+		return _art_rects[texture]
+	var whole := Rect2(Vector2.ZERO, texture.get_size())
+	var image: Image = texture.get_image()
+	if image != null:
+		var used := image.get_used_rect()
+		if used.size.x > 0 and used.size.y > 0:
+			whole = Rect2(used)
+	_art_rects[texture] = whole
+	return whole
+
+
+## Puts one shadow under the feet of its sprite.
+##
+## Read off the sprite and not off the cell, because the sprite is
+## still sliding: a shadow placed on the tile is already standing
+## where the hero is going while the hero is still on the way, and it
+## looked exactly like that - the shadow arriving first and the
+## figure catching up.
+func _follow_shadow(sprite: Sprite2D, shadow: Sprite2D) -> void:
+	if sprite.texture == null:
+		return
+	var art: Rect2 = _art_rect(sprite.texture)
+	shadow.position = Vector2(
+		sprite.position.x + (art.position.x + art.size.x * 0.5) * sprite.scale.x,
+		sprite.position.y + (art.position.y + art.size.y) * sprite.scale.y - 2.0)
+
+
+## Every shadow, once a frame, for the same reason.
+func _follow_shadows() -> void:
+	for sprite in _shadows:
+		var shadow: Sprite2D = _shadows[sprite]
+		if not is_instance_valid(sprite) or not is_instance_valid(shadow):
+			continue
+		shadow.visible = sprite.visible
+		_follow_shadow(sprite, shadow)
 
 
 ## A short white flare over something that has just been hit. The damage
@@ -4450,10 +4657,10 @@ func _flash_monster(monster) -> void:
 	var sprite: Sprite2D = _actor_nodes.get(monster)
 	if sprite == null or not is_instance_valid(sprite):
 		return
-	var was: Color = sprite.modulate
-	sprite.modulate = Color(2.2, 2.2, 2.2)
+	var was: Color = sprite.self_modulate
+	sprite.self_modulate = Color(2.2, 2.2, 2.2)
 	var back := create_tween()
-	back.tween_property(sprite, "modulate", was, 0.16)
+	back.tween_property(sprite, "self_modulate", was, 0.16)
 
 
 ## A number that floats off a cell and fades. The cheapest way to make a
@@ -4543,6 +4750,91 @@ func _build_dead_panel() -> void:
 	column.add_child(menu)
 
 
+## The offer to move into a proper folder, shown once on Windows.
+##
+## A single downloaded exe sitting in the Downloads folder is not an
+## installed game: no shortcut, no name in the start menu, and the next
+## version lands beside it as a second copy. This copies the executable
+## into the user's own program folder, puts a shortcut on the desktop
+## and in the start menu, and starts again from there.
+##
+## Asked, not done silently: a program that moves itself somewhere
+## without saying so is a program nobody trusts. The answer is
+## remembered either way, and the save file lives elsewhere entirely,
+## so nothing is lost whichever button is pressed.
+func _build_setup_panel() -> void:
+	_setup_panel = PanelContainer.new()
+	_setup_panel.custom_minimum_size = Vector2(760, 380)
+	_setup_panel.visible = false
+	_solid_panel(_setup_panel)
+	_hud.add_child(_centred(_setup_panel))
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 14)
+	_setup_panel.add_child(column)
+
+	var heading := Label.new()
+	heading.text = "Spiel installieren?"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 38)
+	heading.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
+	column.add_child(heading)
+
+	_setup_text = Label.new()
+	_setup_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_setup_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_setup_text.custom_minimum_size = Vector2(700, 0)
+	_setup_text.add_theme_font_size_override("font_size", 22)
+	_setup_text.add_theme_color_override("font_color", Color(0.80, 0.80, 0.88))
+	_setup_text.text = ("Das Spiel liegt gerade als einzelne Datei da, wo du sie"
+		+ " heruntergeladen hast.\n\nIch kann es nach\n%s\nkopieren und dir eine"
+		+ " Verknüpfung auf den Desktop und ins Startmenü legen. Keine"
+		+ " Administratorrechte nötig, dein Spielstand bleibt.") % (
+			Setup.install_dir().replace("/", "\\"))
+	column.add_child(_setup_text)
+
+	var yes := Button.new()
+	yes.text = "INSTALLIEREN"
+	yes.custom_minimum_size = Vector2(0, 72)
+	yes.add_theme_font_size_override("font_size", 28)
+	yes.pressed.connect(_do_install)
+	column.add_child(yes)
+
+	var no := Button.new()
+	no.text = "NUR STARTEN"
+	no.custom_minimum_size = Vector2(0, 62)
+	no.add_theme_font_size_override("font_size", 24)
+	no.pressed.connect(_skip_install)
+	column.add_child(no)
+
+
+## Copies the game into place and starts the copy that landed there.
+func _do_install() -> void:
+	_setup_text.text = "Kopiere ..."
+	settings["install_asked"] = true
+	Settings.write(settings)
+	# Two frames, because copying a hundred and twenty megabytes blocks
+	# everything: the line above has to be on the screen before the freeze,
+	# not queued behind it.
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var done: Dictionary = Setup.install()
+	_setup_text.text = done["note"]
+	if not done["ok"]:
+		return
+	if Setup.launch(done["exe"]):
+		await get_tree().create_timer(0.8).timeout
+		get_tree().quit()
+	else:
+		_setup_text.text = done["note"] + "\nStarten hat nicht geklappt - bitte selbst öffnen."
+
+
+func _skip_install() -> void:
+	settings["install_asked"] = true
+	Settings.write(settings)
+	_setup_panel.visible = false
+
+
 ## Called the moment the hero dies, from wherever killed them.
 func _show_death() -> void:
 	if _dead_panel == null:
@@ -4628,6 +4920,62 @@ func _build_settings(column: VBoxContainer) -> void:
 	_pad_button.add_theme_font_size_override("font_size", 24)
 	_pad_button.pressed.connect(toggle_pad)
 	row_two.add_child(_pad_button)
+
+	# Loudness in tenths rather than on and off.
+	#
+	# A switch has two settings and neither of them is "quiet enough to
+	# play in the same room as somebody else". Minus and plus move by
+	# ten per cent and the number is written out, so the setting can be
+	# put back exactly where it was.
+	var row_three := HBoxContainer.new()
+	row_three.alignment = BoxContainer.ALIGNMENT_CENTER
+	row_three.add_theme_constant_override("separation", 10)
+	column.add_child(row_three)
+	_volume_label = _volume_row(row_three, "Ton", nudge_sound)
+	_music_label = _volume_row(row_three, "Musik", nudge_music)
+	_refresh_settings()
+
+
+## One minus, one number, one plus.
+func _volume_row(row: HBoxContainer, name: String, nudge: Callable) -> Label:
+	var less := Button.new()
+	less.text = "−"
+	less.custom_minimum_size = Vector2(64, 54)
+	less.add_theme_font_size_override("font_size", 26)
+	less.pressed.connect(nudge.bind(-0.1))
+	row.add_child(less)
+
+	var shown := Label.new()
+	shown.custom_minimum_size = Vector2(190, 54)
+	shown.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	shown.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	shown.add_theme_font_size_override("font_size", 24)
+	shown.text = name
+	row.add_child(shown)
+
+	var more := Button.new()
+	more.text = "+"
+	more.custom_minimum_size = Vector2(64, 54)
+	more.add_theme_font_size_override("font_size", 26)
+	more.pressed.connect(nudge.bind(0.1))
+	row.add_child(more)
+	return shown
+
+
+## Ten per cent at a time, and never past either end.
+func nudge_sound(step: float) -> void:
+	settings["volume"] = clampf(float(settings.get("volume", 0.75)) + step, 0.0, 1.0)
+	audio.set_volume(settings["volume"])
+	Settings.write(settings)
+	_refresh_settings()
+	audio.play("pickup")
+
+
+func nudge_music(step: float) -> void:
+	settings["music_volume"] = clampf(
+		float(settings.get("music_volume", 0.55)) + step, 0.0, 1.0)
+	audio.set_music_volume(settings["music_volume"])
+	Settings.write(settings)
 	_refresh_settings()
 
 
@@ -4652,6 +5000,10 @@ func _refresh_settings() -> void:
 	if _pad_button != null:
 		_pad_button.text = "Steuerung: %s" % ("Kreuz" if settings.get("pad", false) else "Stick")
 	_music_button.text = "Musik: %s" % ("AN" if settings["music"] else "AUS")
+	if _volume_label != null:
+		_volume_label.text = "Ton %d %%" % roundi(float(settings.get("volume", 0.75)) * 100.0)
+		_music_label.text = "Musik %d %%" % roundi(
+			float(settings.get("music_volume", 0.55)) * 100.0)
 
 
 ## Shows whichever control the player asked for. They are deliberately

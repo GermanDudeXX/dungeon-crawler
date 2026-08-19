@@ -33,10 +33,16 @@ const TONES := {
 	"trap": [[220.0, 90.0, 0.18, 0.38, true]],
 	"coin": [[700.0, 1200.0, 0.10, 0.28, true]],
 	"denied": [[180.0, 180.0, 0.10, 0.30, true]],
+	# A turn spent standing still. Quiet on purpose - it is the sound of
+	# nothing happening - but there has to be one, or waiting is
+	# indistinguishable from a button that does not work.
+	"wait": [[300.0, 210.0, 0.07, 0.18, true]],
 }
 
 var enabled := true
 var music_enabled := true
+var volume := 0.75              ## 0 to 1, in tenths, set by the player
+var music_volume := 0.55
 
 var _streams := {}
 var _voices: Array[AudioStreamPlayer] = []
@@ -53,17 +59,33 @@ func _ready() -> void:
 	# in this game is most turns: you hit, it dies, gold drops.
 	for _i in 6:
 		var voice := AudioStreamPlayer.new()
-		voice.volume_db = linear_to_db(MASTER)
+		voice.volume_db = linear_to_db(MASTER * volume)
 		add_child(voice)
 		_voices.append(voice)
 
 	_music = AudioStreamPlayer.new()
-	_music.volume_db = linear_to_db(MASTER * 0.55)
+	_music.volume_db = linear_to_db(MASTER * music_volume)
 	add_child(_music)
 
 
+## Sets how loud everything is, in the same tenths the settings screen
+## shows. Zero is silence rather than a very quiet game: linear_to_db(0)
+## is negative infinity, which some drivers do not take kindly to.
+func set_volume(level: float) -> void:
+	volume = clampf(level, 0.0, 1.0)
+	for voice in _voices:
+		voice.volume_db = -80.0 if volume <= 0.0 else linear_to_db(MASTER * volume)
+
+
+func set_music_volume(level: float) -> void:
+	music_volume = clampf(level, 0.0, 1.0)
+	if _music != null:
+		_music.volume_db = (-80.0 if music_volume <= 0.0
+			else linear_to_db(MASTER * music_volume))
+
+
 func play(name: String) -> void:
-	if not enabled or not _streams.has(name):
+	if not enabled or volume <= 0.0 or not _streams.has(name):
 		return
 	var voice: AudioStreamPlayer = _voices[_next_voice]
 	_next_voice = (_next_voice + 1) % _voices.size()

@@ -11,10 +11,19 @@ const PATH := "user://settings.json"
 const DEFAULTS := {
 	"sound": true,
 	"music": true,
+	# Kept as fractions rather than whole per cent, because JSON has no
+	# integers: a 70 written to the file reads back as 70.0, and the
+	# type check below would then throw the setting away.
+	"volume": 0.75,
+	"music_volume": 0.55,
 	"difficulty": "normal",
 	"flash": true,
 	"pad": false,
 	"auto_shoot": true,
+	# Asked once, on Windows, whether the game should move itself into a
+	# proper folder. Remembered either way: an offer that comes back every
+	# single launch is not an offer, it is nagging.
+	"install_asked": false,
 }
 
 

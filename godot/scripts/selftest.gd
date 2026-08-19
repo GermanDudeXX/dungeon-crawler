@@ -790,7 +790,13 @@ func _check_potions() -> void:
 		var effect: Dictionary = potion["effect"]
 		var p = _game.player
 
-		# A clean slate, and hurt enough that a heal has room to work.
+		# A clean slate in every sense. Drinking ends the turn, so the
+		# monsters get theirs - and a thrown vial that kills one of them
+		# still leaves the others swinging. On one seed the hero died to
+		# that around the twenty-sixth flask, and every flask after it was
+		# then correctly refused, which the test read as five broken
+		# potions. The game was right; the setup was not.
+		_settle()
 		p.buffs.clear()
 		p.shield = 0
 		# Poisoned and bleeding only where the flask claims to cure it.

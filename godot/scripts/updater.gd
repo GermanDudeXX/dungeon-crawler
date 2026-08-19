@@ -95,19 +95,25 @@ func _answered(result: int, code: int, _headers: PackedStringArray,
 		var version := version_of(tag)
 		if version == "" or not newer(version, best_version):
 			continue
-		var apk := ""
+		var want := wanted_suffix()
+		if want == "":
+			continue
+		var package := ""
 		for asset in entry.get("assets", []):
 			var file: String = str(asset.get("name", ""))
-			if file.ends_with(".apk"):
-				apk = str(asset.get("browser_download_url", ""))
+			if file.ends_with(want):
+				package = str(asset.get("browser_download_url", ""))
 				break
-		if apk == "":
+		if package == "":
 			continue
 		best_version = version
-		best_url = apk
+		best_url = package
 
 	if best_version == "":
-		checked.emit(false, "", "", "Keine Version auf GitHub gefunden.")
+		if wanted_suffix() == "":
+			checked.emit(false, "", "", "Für dieses System gibt es hier kein Paket.")
+		else:
+			checked.emit(false, "", "", "Keine Version auf GitHub gefunden.")
 		return
 	if not newer(best_version, running_version()):
 		checked.emit(false, best_version, best_url,
@@ -146,10 +152,28 @@ static func newer(version: String, than: String) -> bool:
 	return false
 
 
-## Where a downloaded build is kept. One fixed name: the old one is
-## worthless the moment a newer exists, and two copies of a forty-megabyte
-## APK on a phone is rude.
-const APK_PATH := "user://update.apk"
+## The kind of file this machine can actually install.
+##
+## A release carries both packages - the APK for the phone and the
+## single-file exe for Windows - and the first asset in the list was
+## being taken whatever it was. On Windows that meant downloading forty
+## megabytes of Android package and then handing it to Windows, which
+## has nothing to open it with. It looked like the update was broken; it
+## was the wrong file all along.
+static func wanted_suffix() -> String:
+	match OS.get_name():
+		"Android":
+			return ".apk"
+		"Windows":
+			return ".exe"
+	return ""
+
+
+## Where a downloaded build is kept. One fixed name per platform: the
+## old one is worthless the moment a newer exists, and two copies of a
+## forty-megabyte package on a phone is rude.
+static func download_path() -> String:
+	return "user://update" + (wanted_suffix() if wanted_suffix() != "" else ".bin")
 
 
 ## Fetches the APK. Progress arrives through `fetched`.
@@ -157,10 +181,19 @@ func download(url: String) -> void:
 	if _download != null:
 		return
 	_download = HTTPRequest.new()
-	_download.download_file = APK_PATH
+	_download.download_file = download_path()
 	# Big chunks: this is forty megabytes, not a handful of JSON.
 	_download.download_chunk_size = 1 << 20
-	_download.timeout = 120.0
+	# Ten minutes, not two: the Windows build is a hundred and twenty
+	# megabytes, and two minutes of that is a megabyte a second - a rate
+	# plenty of connections do not manage.
+	_download.timeout = 600.0
+	# An older build kept its download under a different name. Left alone
+	# it would sit there for ever, forty megabytes of a version nobody can
+	# install any more.
+	for stale in ["user://update.apk", "user://update.exe", "user://update.bin"]:
+		if stale != download_path() and FileAccess.file_exists(stale):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(stale))
 	add_child(_download)
 	_download.request_completed.connect(_downloaded)
 	if not _download.is_inside_tree():
@@ -198,17 +231,17 @@ func _downloaded(result: int, code: int, _headers: PackedStringArray,
 	# A file that is far too small is not an APK - a redirect page, an
 	# error, half a download. Installing it would only produce a confusing
 	# refusal from Android.
-	if not FileAccess.file_exists(APK_PATH):
+	if not FileAccess.file_exists(download_path()):
 		fetched.emit(true, "", "Die Datei ist nicht angekommen.")
 		return
-	var file := FileAccess.open(APK_PATH, FileAccess.READ)
+	var file := FileAccess.open(download_path(), FileAccess.READ)
 	var size: int = file.get_length() if file != null else 0
 	if file != null:
 		file.close()
 	if size < 1048576:
 		fetched.emit(true, "", "Die geladene Datei ist zu klein (%d Bytes)." % size)
 		return
-	fetched.emit(true, APK_PATH, "Geladen (%.1f MB). Installieren?" % (size / 1048576.0))
+	fetched.emit(true, download_path(), "Geladen (%.1f MB). Installieren?" % (size / 1048576.0))
 
 
 func _forget() -> void:
@@ -217,13 +250,61 @@ func _forget() -> void:
 		_download = null
 
 
-## Hands the downloaded file to Android. Returns whether the handover was
-## even attempted - whether the installer then appears is up to the
-## device and the permission, which is why the caller keeps the browser
-## link ready.
+## Installs what was downloaded. Returns whether the handover was even
+## attempted - what happens next is up to the system, which is why the
+## caller keeps the browser link ready.
 func install(path: String) -> bool:
 	if not FileAccess.file_exists(path):
 		return false
 	var full := ProjectSettings.globalize_path(path)
+	if OS.get_name() == "Windows":
+		return _swap_windows_build(full)
 	var error := OS.shell_open("file://" + full)
 	return error == OK
+
+
+## Replaces the running Windows build with the one just downloaded.
+##
+## A program cannot overwrite its own executable while it is running,
+## so the work is handed to a small batch file: wait for this process
+## to end, move the new file over the old one, start it again, and
+## delete itself. The caller quits immediately afterwards, which is
+## what the batch file is waiting for.
+##
+## Everything is written with the rights the player already has - the
+## game installs itself under the user's own AppData, so replacing it
+## needs no administrator and no prompt.
+## Batch files want carriage returns. Named, because a literal one in
+## the middle of the script below is unreadable.
+const BAT_NL := "
+"
+
+
+## The batch file, as text. Kept apart from writing it so it can be read
+## and checked without starting anything - a script that waits for a
+## process and then moves a file over another one is not something to
+## test by running it.
+static func swap_script(pid: int, fresh: String, running: String) -> String:
+	return ("@echo off" + BAT_NL
+		+ ":wait" + BAT_NL
+		+ "tasklist /FI \"PID eq %d\" | find \"%d\" >nul" % [pid, pid] + BAT_NL
+		+ "if not errorlevel 1 (" + BAT_NL
+		+ "  ping -n 2 127.0.0.1 >nul" + BAT_NL
+		+ "  goto wait" + BAT_NL
+		+ ")" + BAT_NL
+		+ "move /y \"%s\" \"%s\" >nul" % [fresh, running] + BAT_NL
+		+ "start \"\" \"%s\"" % running + BAT_NL
+		+ "del \"%~f0\"" + BAT_NL)
+
+
+func _swap_windows_build(fresh: String) -> bool:
+	var running := OS.get_executable_path().replace("/", "\\")
+	var new_file := fresh.replace("/", "\\")
+	var script := "user://swap.bat"
+	var file := FileAccess.open(script, FileAccess.WRITE)
+	if file == null:
+		return false
+	file.store_string(swap_script(OS.get_process_id(), new_file, running))
+	file.close()
+	var batch := ProjectSettings.globalize_path(script).replace("/", "\\")
+	return OS.create_process("cmd.exe", ["/c", batch]) != -1
