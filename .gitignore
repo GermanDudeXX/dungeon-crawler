@@ -20,3 +20,4 @@ godot/android/
 
 # Screenshots taken by scripts/shot.gd - looked at, not kept.
 godot/*.png
+godot/*.png.import
