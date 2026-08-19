@@ -683,6 +683,15 @@ func _check_placement() -> void:
 	if _game.chest != null and not open_cells.has(_game.chest["cell"]):
 		_complain("Truhe von Anfang an unerreichbar",
 			"Ebene %d, Truhe %s" % [_game.depth, str(_game.chest["cell"])])
+	for shop in _game.shops:
+		var others := {}
+		for other in _game.shops:
+			if other["cell"] != shop["cell"]:
+				others[other["cell"]] = true
+		if not _game.reachable_from(Vector2i(_game.player.x, _game.player.y),
+				others).has(shop["cell"]):
+			_complain("Ladenbesitzer selbst unerreichbar",
+				"Ebene %d, %s auf %s" % [_game.depth, shop["kind"], str(shop["cell"])])
 	for item in _game.items:
 		if not open_cells.has(item["cell"]):
 			_complain("Beute unerreichbar abgelegt",
@@ -2061,6 +2070,7 @@ func _check_more() -> void:
 			_complain("Beben wirft niemanden zu Boden")
 		_game.monsters.erase(standing)
 
+	_settle()
 	# Blessing: a favour, and never a curse.
 	p.buffs.clear()
 	for _try in 12:
@@ -2082,6 +2092,7 @@ func _check_more() -> void:
 	if keen.gain_xp(20) < gained or keen.xp <= plain.xp:
 		_complain("Jägerblut bringt keine zusätzliche Erfahrung")
 
+	_settle()
 	p.potion_mult = 2.0
 	p.max_hp = 300
 	p.hp = 100
@@ -2101,6 +2112,7 @@ func _check_more() -> void:
 		_complain("Alchemie macht Tränke nicht stärker",
 			"%d gegen %d" % [strong, plainly])
 
+	_settle()
 	p.scholar = 1.0
 	p.scrolls["reveal"] = 1
 	_game.read_scroll("reveal")
@@ -2181,6 +2193,31 @@ func _check_bestiary_and_waiting() -> void:
 		_complain("Warten läuft trotz offener Tasche")
 	p.buffs.clear()
 	_game.close_bag()
+
+	# The pause menu has to stop the game too, and its switches have to
+	# be the same switches as on the title screen - two sets of settings
+	# that drift apart is worse than one set in an awkward place.
+	_game.open_pause()
+	if not _game._pause_panel.visible:
+		_complain("Pausenmenü öffnet nicht")
+	var was := Vector2i(p.x, p.y)
+	p.buffs["strength"] = 3
+	_game.try_move(Vector2i(1, 0))
+	_game.wait_a_turn()
+	if Vector2i(p.x, p.y) != was or int(p.buffs.get("strength", 0)) != 3:
+		_complain("Spiel läuft trotz Pause weiter")
+	var was_music: bool = _game.settings["music"]
+	_game.toggle_music()
+	if _game.settings["music"] == was_music:
+		_complain("Schalter im Pausenmenü tut nichts")
+	if _game.settings["music"] != Settings.read()["music"]:
+		_complain("Pausenmenü schreibt die Einstellung nicht")
+	_game.toggle_music()
+	p.buffs.clear()
+	_game.close_pause()
+	if _game._pause_panel.visible:
+		_complain("Pausenmenü schließt nicht")
+
 	_settle()
 
 

@@ -118,6 +118,11 @@ var _kin_panel: PanelContainer
 var _kin_list: VBoxContainer
 var _drink_button: Button
 var _shoot_button: Button
+var _pause_panel: PanelContainer
+var _pause_sound: Button
+var _pause_music: Button
+var _pause_flash: Button
+var _pause_pad: Button
 var _bag_panel: PanelContainer
 var _bag_list: VBoxContainer
 var _bag_stats: Label
@@ -911,9 +916,18 @@ func _shopkeeper_spot(where: Array) -> Variant:
 		# together with it there? Asked by the same function, so the two
 		# cannot drift apart - and they did: the crate check learned about
 		# loot long before this one did.
-		var blocked := {cell: true}
+		var others := {}
 		for shop in shops:
-			blocked[shop["cell"]] = true
+			others[shop["cell"]] = true
+		# The keeper has to be reachable themselves, with the keepers
+		# already standing counted as walls. _seals_something cannot ask
+		# this: to it every keeper is a wall, including the one being
+		# asked about, so a shop placed behind another shop looked fine
+		# and could never be walked to.
+		if not reachable_from(Vector2i(player.x, player.y), others).has(cell):
+			continue
+		var blocked := others.duplicate()
+		blocked[cell] = true
 		if _seals_something(blocked):
 			continue
 		return cell
@@ -1031,11 +1045,7 @@ func try_move(step: Vector2i) -> void:
 		recompute_fov()
 		paint()
 		return
-	if dead or choosing or step == Vector2i.ZERO or shop_open != null:
-		return
-	if player.pending_perks > 0 and _perk_panel != null and _perk_panel.visible:
-		return
-	if _bag_panel != null and _bag_panel.visible:
+	if busy() or step == Vector2i.ZERO:
 		return
 	var target := Vector2i(player.x + step.x, player.y + step.y)
 	# No squeezing through the gap between two wall corners. The step
@@ -2199,7 +2209,7 @@ func _spend(cost: int) -> bool:
 ## an effect nobody handles would be a potion that costs a turn and does
 ## nothing, which is worse than not having it.
 func drink() -> void:
-	if dead or choosing or player.potions <= 0:
+	if busy() or player.potions <= 0:
 		return
 	var id: String = player.selected_potion
 	if not player.potion_counts.has(id):
@@ -2416,7 +2426,7 @@ func _ambush() -> void:
 ## on a phone, and asking for a target would mean a targeting mode for
 ## three scrolls.
 func read_scroll(id: String) -> void:
-	if dead or choosing or int(player.scrolls.get(id, 0)) <= 0:
+	if busy() or int(player.scrolls.get(id, 0)) <= 0:
 		return
 	var scroll := Data.scroll_by_id(id)
 	if player.scholar > 0.0 and rng.randf() < player.scholar:
@@ -2607,11 +2617,7 @@ func _blink() -> void:
 ## than a swing, and needs a moment before the next one - otherwise a bow
 ## is simply a sword that also works at range.
 func shoot() -> void:
-	if dead or choosing or shop_open != null or player.reach() <= 0:
-		return
-	if _bag_panel != null and _bag_panel.visible:
-		return
-	if player.pending_perks > 0 and _perk_panel != null and _perk_panel.visible:
+	if busy() or player.reach() <= 0:
 		return
 	if player.shot_cooldown > 0:
 		audio.play("denied")
@@ -2669,6 +2675,24 @@ func shoot() -> void:
 	paint()
 
 
+## Whether the game is currently taking orders at all.
+##
+## Every action asked this question for itself, and every new window -
+## the shop, the bag, the gift panel, the pause menu - had to be added to
+## each of them by hand. Waiting and shooting were each missed once. One
+## function, asked by all of them, cannot be half-updated.
+func busy() -> bool:
+	if dead or choosing or shop_open != null:
+		return true
+	if _bag_panel != null and _bag_panel.visible:
+		return true
+	if _pause_panel != null and _pause_panel.visible:
+		return true
+	if _perk_panel != null and _perk_panel.visible and player.pending_perks > 0:
+		return true
+	return false
+
+
 ## Stand still for a turn.
 ##
 ## Sounds like nothing and is not: regeneration, poison, burning and
@@ -2676,11 +2700,7 @@ func shoot() -> void:
 ## way to heal up before opening a door, and a Potion of Regeneration
 ## can only be drunk while running away.
 func wait_a_turn() -> void:
-	if dead or choosing or shop_open != null:
-		return
-	if _bag_panel != null and _bag_panel.visible:
-		return
-	if player.pending_perks > 0 and _perk_panel != null and _perk_panel.visible:
+	if busy():
 		return
 	say("Du wartest.")
 	_tick_poison()
@@ -3056,12 +3076,12 @@ func _build_hud() -> void:
 		at += 1
 
 	var again := Button.new()
-	again.text = "NEU"
+	again.text = "MENÜ"
 	again.custom_minimum_size = Vector2(size, size * 0.6)
 	again.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	again.position = Vector2(-pad - size, pad)
 	again.add_theme_font_size_override("font_size", 26)
-	again.pressed.connect(show_title)
+	again.pressed.connect(open_pause)
 	_play_ui.add_child(again)
 
 	_banner = Label.new()
@@ -3077,6 +3097,7 @@ func _build_hud() -> void:
 
 	_build_minimap()
 	_build_bag_panel()
+	_build_pause_panel()
 	_build_awards_panel()
 	_build_kin_panel()
 	_build_shop_panel()
@@ -3276,7 +3297,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	match key:
 		KEY_ESCAPE:
 			if not close_topmost():
-				show_title()
+				open_pause()
 		KEY_G:
 			drink()
 		KEY_T:
@@ -3299,6 +3320,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 ## Shuts the topmost thing that is open and says whether there was one.
 ## The order is the order they sit in front of each other.
 func close_topmost() -> bool:
+	if _pause_panel != null and _pause_panel.visible:
+		close_pause()
+		return true
 	if _kin_panel != null and _kin_panel.visible:
 		close_kin()
 		return true
@@ -3316,6 +3340,79 @@ func close_topmost() -> bool:
 		# keeps Escape from dropping the run instead.
 		return true
 	return false
+
+
+## The pause menu.
+##
+## The switches already exist on the title screen, but getting there
+## means leaving the run - and the two things anyone wants to change are
+## exactly the ones you notice while playing: the music, and whether the
+## stick or the pad is under your thumb. So they are here too, working on
+## the same settings.
+func _build_pause_panel() -> void:
+	_pause_panel = PanelContainer.new()
+	_pause_panel.custom_minimum_size = Vector2(560, 440)
+	_pause_panel.visible = false
+	_solid_panel(_pause_panel)
+	_hud.add_child(_centred(_pause_panel))
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 12)
+	_pause_panel.add_child(column)
+
+	var heading := Label.new()
+	heading.text = "Pause"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 32)
+	heading.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
+	column.add_child(heading)
+
+	_pause_sound = _pause_button(column, toggle_sound)
+	_pause_music = _pause_button(column, toggle_music)
+	_pause_flash = _pause_button(column, toggle_flash)
+	_pause_pad = _pause_button(column, toggle_pad)
+
+	var back := Button.new()
+	back.text = "WEITER"
+	back.custom_minimum_size = Vector2(0, 70)
+	back.add_theme_font_size_override("font_size", 28)
+	back.pressed.connect(close_pause)
+	column.add_child(back)
+
+	var leave := Button.new()
+	leave.text = "ZUM TITELBILDSCHIRM"
+	leave.custom_minimum_size = Vector2(0, 62)
+	leave.add_theme_font_size_override("font_size", 24)
+	# The run is saved on every finished floor, so leaving here loses at
+	# most the floor in progress - and the title screen offers it back.
+	leave.pressed.connect(func() -> void:
+		close_pause()
+		show_title())
+	column.add_child(leave)
+
+
+func _pause_button(column: VBoxContainer, action: Callable) -> Button:
+	var button := Button.new()
+	button.custom_minimum_size = Vector2(0, 56)
+	button.add_theme_font_size_override("font_size", 24)
+	button.pressed.connect(action)
+	column.add_child(button)
+	return button
+
+
+func open_pause() -> void:
+	if dead or choosing or _pause_panel == null:
+		return
+	_refresh_settings()
+	var holder := _pause_panel.get_parent()
+	if holder != null:
+		holder.move_to_front()
+	_pause_panel.visible = true
+
+
+func close_pause() -> void:
+	if _pause_panel != null:
+		_pause_panel.visible = false
 
 
 ## The bag: everything carried, on one screen, each line a button.
@@ -3994,6 +4091,11 @@ func _refresh_settings() -> void:
 		_difficulty_button.tooltip_text = level_of_play["desc"]
 	if _flash_button != null:
 		_flash_button.text = "Roter Blitz: %s" % ("AN" if settings.get("flash", true) else "AUS")
+	if _pause_sound != null:
+		_pause_sound.text = "Ton: %s" % ("AN" if settings["sound"] else "AUS")
+		_pause_music.text = "Musik: %s" % ("AN" if settings["music"] else "AUS")
+		_pause_flash.text = "Roter Blitz: %s" % ("AN" if settings.get("flash", true) else "AUS")
+		_pause_pad.text = "Steuerung: %s" % ("Kreuz" if settings.get("pad", false) else "Stick")
 	if _pad_button != null:
 		_pad_button.text = "Steuerung: %s" % ("Kreuz" if settings.get("pad", false) else "Stick")
 	_music_button.text = "Musik: %s" % ("AN" if settings["music"] else "AUS")
@@ -4174,6 +4276,7 @@ Treppe hinab = tiefer. Tasche zeigt Tränke und Rollen."
 ## the choice is never made against the corpse of the last run.
 func show_title() -> void:
 	choosing = true
+	close_pause()
 	close_bag()
 	if _perk_panel != null:
 		_perk_panel.visible = false
@@ -4214,6 +4317,7 @@ func continue_run() -> void:
 
 func choose_class(id: String) -> void:
 	hero_class = id
+	close_pause()
 	close_awards()
 	close_bag()
 	if _perk_panel != null:
