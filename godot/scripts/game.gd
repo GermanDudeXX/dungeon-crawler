@@ -68,6 +68,7 @@ var doors := {}                  ## cell -> true when open
 var webs := {}                   ## cell -> a widow's web, walked into once
 var hazards := {}               ## cell -> a standing danger, in plain sight
 var decor := {}                  ## cell -> a sprite that is only scenery
+var captive = null               ## somebody chained up down here
 var shrine = null                ## the cell holding this floor's shrine, or null
 var shop_open = null            ## the shop the hero is standing in
 var dead := false
@@ -364,6 +365,9 @@ func load_run() -> bool:
 	decor.clear()
 	for entry in save.get("decor", []):
 		decor[Vector2i(int(entry[0]), int(entry[1]))] = str(entry[2])
+	captive = null
+	if save.get("captive", null) != null:
+		captive = Vector2i(int(save["captive"][0]), int(save["captive"][1]))
 	shrine = null
 	if save.get("shrine", null) != null:
 		shrine = Vector2i(int(save["shrine"][0]), int(save["shrine"][1]))
@@ -685,6 +689,13 @@ func _populate() -> void:
 			decor.erase(spot)
 
 
+	# Somebody chained up. Placed like the shrine - only where the hero
+	# can actually walk - because a prisoner nobody can reach is just a
+	# prisoner.
+	captive = null
+	if depth >= Data.CAPTIVE_MIN_LEVEL and rng.randf() < Data.CAPTIVE_CHANCE:
+		captive = _free_cell(spawn_rooms, reachable_from(Vector2i(player.x, player.y)))
+
 	# A shrine, at most one, stepped on like a trap - but this one can
 	# be worth stepping on.
 	shrine = null
@@ -815,6 +826,8 @@ func _seals_something(blocked := {}) -> bool:
 		return true
 	if shrine != null and not open_cells.has(shrine):
 		return true
+	if captive != null and not open_cells.has(captive):
+		return true
 	# The boss above all: it holds the key to the stairs, so a crate
 	# that walls it in ends the run on this floor. Ordinary monsters
 	# may be shut away - that is just a fight you get to skip.
@@ -917,6 +930,8 @@ func taken(cell: Vector2i) -> bool:
 	if chest != null and chest["cell"] == cell:
 		return true
 	if shrine != null and shrine == cell:
+		return true
+	if captive != null and captive == cell:
 		return true
 	if decor.has(cell) or hazards.has(cell) or webs.has(cell) or doors.has(cell):
 		return true
@@ -1046,6 +1061,13 @@ func try_move(step: Vector2i) -> void:
 	elif target == stairs and stairs_locked and boss_alive():
 		say("Der Weg nach unten ist verriegelt. Der Boss hält den Schlüssel.")
 		return
+	elif captive != null and captive == target:
+		_free_captive(target)
+		_tick_buffs()
+		enemy_turn()
+		recompute_fov()
+		paint()
+		return
 	elif door_shut(target):
 		_open_door(target)
 		return
@@ -1104,6 +1126,9 @@ func _set_quest() -> void:
 			"shrine":
 				if shrine == null:
 					continue
+			"captive":
+				if captive == null:
+					continue
 			"boss":
 				if not boss_alive():
 					continue
@@ -1133,6 +1158,8 @@ func _quest_progress() -> void:
 			met = chest != null and chest["opened"]
 		"shrine":
 			met = shrine == null
+		"captive":
+			met = captive == null
 		"boss":
 			met = not boss_alive()
 		"dry", "unhurt":
@@ -2268,6 +2295,24 @@ func _apply_effect(effect: Dictionary) -> void:
 		_burst(effect)
 
 
+## Frees whoever is chained up on this floor.
+##
+## Walking into them does it, like a shopkeeper - so they are a tile you
+## cannot walk through, which is why they are placed where a shopkeeper
+## would be allowed to stand.
+func _free_captive(cell: Vector2i) -> void:
+	if captive == null or captive != cell:
+		return
+	captive = null
+	var purse: int = 20 + depth * 5
+	player.gold += purse
+	player.add_potion(Data.pick_potion(depth, rng, false))
+	audio.play("levelup")
+	banner("Befreit", Color(0.55, 0.85, 0.98))
+	say("Der Gefangene dankt dir: %d Gold und ein Trank." % purse)
+	_quest_progress()
+
+
 ## The shrine, triggered by walking onto it. Two of the five outcomes
 ## are bad, which is the point: a tile you always want to step on is not
 ## a decision.
@@ -2694,6 +2739,8 @@ func paint() -> void:
 		_place_prop(cell, "doors_leaf_open" if doors[cell] else "doors_leaf_closed")
 	for cell in decor:
 		_place_prop(cell, decor[cell])
+	if captive != null:
+		_place_prop(captive, "knight_m_idle_anim_f0")
 	if shrine != null:
 		# A column: the only thing in the tileset that reads as
 		# something built rather than dropped.

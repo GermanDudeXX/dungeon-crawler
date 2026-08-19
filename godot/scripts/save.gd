@@ -90,6 +90,7 @@ static func write(game) -> void:
 		"up_stairs": [game.up_stairs.x, game.up_stairs.y],
 		"stairs_locked": game.stairs_locked,
 		"shrine": null if game.shrine == null else [game.shrine.x, game.shrine.y],
+		"captive": null if game.captive == null else [game.captive.x, game.captive.y],
 		"decor": decor,
 		"hazards": hazards,
 		"webs": webs,

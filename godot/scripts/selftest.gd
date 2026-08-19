@@ -85,6 +85,7 @@ func _process(_delta: float) -> bool:
 	_check_more()
 	_check_bestiary_and_waiting()
 	_check_bow()
+	_check_captive()
 	_check_elements()
 	_check_up_stairs()
 	_check_boss_phases()
@@ -228,8 +229,13 @@ func _process(_delta: float) -> bool:
 				loot_key = key
 				loot_cell = cell
 
+		# Somebody chained up is worth the detour: it costs one step and
+		# pays gold and a flask.
+		if _game.captive != null:
+			target = _game.captive
+			what = "Gefangener"
 		# A shrine is a coin flip worth taking, so a player takes it.
-		if _game.shrine != null:
+		elif _game.shrine != null:
 			target = _game.shrine
 			what = "Schrein"
 		# Nobody walks past an unopened chest either.
@@ -539,7 +545,7 @@ func _fingerprint() -> String:
 			p.shield, p.bleed_turns],
 		"Traenke=%s gewaehlt=%s" % [_stable(p.potion_counts), p.selected_potion],
 		"Buffs=%s Rollen=%s" % [_stable(p.buffs), _stable(p.scrolls)],
-		"Schrein=%s" % str(_game.shrine),
+		"Schrein=%s Gefangener=%s" % [str(_game.shrine), str(_game.captive)],
 		"Thema=%s" % _stable(_game.theme),
 		"Auftrag=%s trocken=%s heil=%s" % [_stable(_game.quest),
 			str(_game.drank_here), str(_game.hurt_here)],
@@ -691,6 +697,8 @@ func _check_placement() -> void:
 		things.append([_game.chest["cell"], "Truhe"])
 	if _game.shrine != null:
 		things.append([_game.shrine, "Schrein"])
+	if _game.captive != null:
+		things.append([_game.captive, "Gefangener"])
 	for cell in _game.traps:
 		things.append([cell, "Falle"])
 	for cell in _game.hazards:
@@ -2243,14 +2251,23 @@ func _check_bow() -> void:
 		_complain("Schuss ins Leere kostet trotzdem einen Zug")
 
 	# Something in range, in the open: it takes the hit from a distance.
+	# Three tiles away with a clear line - walkable is not enough, an
+	# arrow does not go round corners.
 	var mark = Entities.Monster.new("orc", 8.0, "easy")
-	mark.x = spot.x + 3
-	mark.y = spot.y
-	if not Dungeon.is_walkable(_game.grid, mark.x, mark.y):
-		mark.x = spot.x
-		mark.y = spot.y + 3
-	if not Dungeon.is_walkable(_game.grid, mark.x, mark.y):
-		_game.monsters.erase(mark)
+	var aimed := false
+	for offset in [Vector2i(3, 0), Vector2i(-3, 0), Vector2i(0, 3), Vector2i(0, -3),
+			Vector2i(2, 0), Vector2i(-2, 0), Vector2i(0, 2), Vector2i(0, -2)]:
+		var at: Vector2i = spot + offset
+		if not Dungeon.is_walkable(_game.grid, at.x, at.y) or _game.blocks(at):
+			continue
+		if not _game._line_clear(spot, at):
+			continue
+		mark.x = at.x
+		mark.y = at.y
+		aimed = true
+		break
+	if not aimed:
+		_notes.append("keine freie Schusslinie für den Bogentest - übersprungen")
 		return
 	mark.snap()
 	_game.monsters.append(mark)
@@ -2285,5 +2302,54 @@ func _check_bow() -> void:
 		_game.depth = level
 		if int(Data.WEAPONS[_game._weapon_find()].get("reach", 0)) > 0:
 			_complain("Nahkämpfer findet Bögen", "Ebene %d" % level)
+	_settle()
+
+
+## The captive: reachable, freed by walking into them, and paying out
+## once. Anything you can walk into instead of onto is the same shape as
+## a shopkeeper, and shopkeepers are how floors got sealed off twice.
+func _check_captive() -> void:
+	_settle()
+	var p = _game.player
+	var found := false
+	for _try in 40:
+		_game.depth = 5 + (_try % 5)
+		_game.new_level()
+		if _game.captive == null:
+			continue
+		found = true
+		if not _game.reachable_from(Vector2i(p.x, p.y)).has(_game.captive):
+			_complain("Gefangener ist nicht erreichbar", str(_game.captive))
+			continue
+		break
+	if not found:
+		_complain("in vierzig Ebenen kein Gefangener")
+		return
+
+	var cell: Vector2i = _game.captive
+	var beside := Vector2i.ZERO
+	var next_to := false
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		beside = cell + offset
+		if Dungeon.is_walkable(_game.grid, beside.x, beside.y) and not _game.blocks(beside):
+			next_to = true
+			break
+	if not next_to:
+		return
+	for other in _game.monsters.duplicate():
+		if other.cell() == cell or other.cell() == beside:
+			_game.monsters.erase(other)
+	p.x = beside.x
+	p.y = beside.y
+	p.hp = p.max_hp
+	var gold_before: int = p.gold
+	var flasks_before: int = p.potions
+	_game.try_move(cell - beside)
+	if Vector2i(p.x, p.y) != beside:
+		_complain("Held läuft durch den Gefangenen hindurch")
+	if _game.captive != null:
+		_complain("Gefangener bleibt gefangen")
+	if p.gold <= gold_before or p.potions <= flasks_before:
+		_complain("Befreiung bringt nichts ein")
 	_settle()
 

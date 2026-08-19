@@ -480,6 +480,11 @@ static func scroll_by_id(id: String) -> Dictionary:
 # One per level at most, stepped on rather than opened: risk and reward
 # in a single tile. Weights from constants.py SHRINE_EVENTS.
 const SHRINE_CHANCE := 0.3
+
+# Somebody else got this far and did not get out. Walking into them
+# frees them; what they give back is what they still had on them.
+const CAPTIVE_CHANCE := 0.25
+const CAPTIVE_MIN_LEVEL := 3
 const SHRINES := [
 	{"id": "vitality", "name": "Segen der Lebenskraft", "weight": 3.0},
 	{"id": "power", "name": "Segen der Macht", "weight": 2.0},
@@ -797,6 +802,8 @@ const QUESTS := [
 	{"id": "dry", "name": "Steig ab, ohne zu trinken", "gold": 25, "potion": 1},
 	{"id": "unhurt", "name": "Steig ab, ohne Schaden zu nehmen", "gold": 35, "potion": 1},
 	{"id": "boss", "name": "Erschlage den Anführer", "needs": "boss", "gold": 40, "potion": 1},
+	{"id": "captive", "name": "Befreie den Gefangenen", "needs": "captive",
+		"gold": 25, "potion": 1},
 ]
 const QUEST_CHANCE := 0.7
 
