@@ -78,6 +78,7 @@ func _process(_delta: float) -> bool:
 	_check_traps()
 	_check_diagonals()
 	_check_doors()
+	_check_themes()
 	_check_elements()
 	_check_up_stairs()
 	_check_boss_phases()
@@ -517,6 +518,7 @@ func _fingerprint() -> String:
 		"Traenke=%s gewaehlt=%s" % [_stable(p.potion_counts), p.selected_potion],
 		"Buffs=%s Rollen=%s" % [_stable(p.buffs), _stable(p.scrolls)],
 		"Schrein=%s" % str(_game.shrine),
+		"Thema=%s" % _stable(_game.theme),
 		"Angriff=%d Verteidigung=%d Krit=%.3f Minderung=%.3f Gold x%.2f" % [
 			p.base_power, p.base_defense, p.bonus_crit, p.damage_reduction, p.gold_mult],
 		"Regen=%d/%d offen=%d" % [p.regen_counter, p.regen_interval, p.pending_perks],
@@ -631,7 +633,9 @@ func _check_placement() -> void:
 	# boss or mini-boss and a vault full of guards. Anything beyond that
 	# is a leak - the swarms once tripled the population of the first
 	# floor, and the game quietly became unwinnable.
-	var allowed: int = Data.monster_count(_game.depth) + 1 + Data.VAULT_GUARDS[1]
+	# Plus the deliberate extras: a boss, a vault full of guards, and
+	# whatever a themed room keeps.
+	var allowed: int = Data.monster_count(_game.depth) + 1 + Data.VAULT_GUARDS[1] + 3
 	if _game.monsters.size() > allowed:
 		_complain("zu viele Monster auf einer Ebene",
 			"Ebene %d: %d, erlaubt %d" % [_game.depth, _game.monsters.size(), allowed])
@@ -1043,6 +1047,9 @@ func _settle() -> void:
 	_game.close_shop()
 	_game.dead = false
 	_game.player.hp = maxi(1, _game.player.hp)
+	# A web left over from an earlier check eats the first move of
+	# the next one, which then reads as "the door does not open".
+	_game.player.webbed = 0
 
 
 ## A wounded boss has to hit harder than a fresh one, and a healed one
@@ -1786,6 +1793,12 @@ func _check_doors() -> void:
 			break
 	if not found:
 		return
+	# Nothing standing in the doorway: walking into a monster is an
+	# attack, not a door, and that is correct - it just measures
+	# something else than this check is about.
+	for other in _game.monsters.duplicate():
+		if other.cell() == cell:
+			_game.monsters.erase(other)
 	p.x = beside.x
 	p.y = beside.y
 	p.hp = p.max_hp
@@ -1793,7 +1806,8 @@ func _check_doors() -> void:
 	if Vector2i(p.x, p.y) != beside:
 		_complain("Held läuft durch die geschlossene Tür")
 	if _game.door_shut(cell):
-		_complain("Tür lässt sich nicht öffnen", str(cell))
+		_complain("Tür lässt sich nicht öffnen",
+			"Tür %s, Held (%d, %d)" % [str(cell), p.x, p.y])
 	if _game.blocks(cell):
 		_complain("offene Tür blockiert weiter", str(cell))
 
@@ -1803,4 +1817,51 @@ func _check_doors() -> void:
 		_game.doors[door] = false
 	if not _game.reachable_from(Vector2i(p.x, p.y)).has(_game.stairs):
 		_complain("Treppe hinter verschlossenen Türen unerreichbar")
+
+
+## Themed rooms: they have to turn up, hold what they promise, and
+## announce themselves when the hero is standing in them - not when the
+## floor is built, since a banner about a room nobody can see yet is a
+## banner about nothing.
+func _check_themes() -> void:
+	_settle()
+	var seen_ids := {}
+	var with_loot := 0
+	for _try in 40:
+		_game.depth = 6 + (_try % 6)
+		_game.new_level()
+		if _game.theme.is_empty():
+			continue
+		seen_ids[_game.theme["id"]] = true
+		var inside := 0
+		for item in _game.items:
+			var cell: Vector2i = item["cell"]
+			var in_x: bool = cell.x >= int(_game.theme["x1"]) \
+				and cell.x < int(_game.theme["x2"])
+			var in_y: bool = cell.y >= int(_game.theme["y1"]) \
+				and cell.y < int(_game.theme["y2"])
+			if in_x and in_y:
+				inside += 1
+		if inside > 0:
+			with_loot += 1
+		if _game.theme.get("seen", true):
+			_complain("Themenraum gilt als gesehen, bevor jemand drin war")
+	if seen_ids.is_empty():
+		_complain("in vierzig Ebenen kein einziger Themenraum")
+		return
+	if with_loot == 0:
+		_complain("Themenräume sind leer")
+
+	# Standing in one announces it, once.
+	for _try in 20:
+		_game.depth = 8
+		_game.new_level()
+		if not _game.theme.is_empty():
+			break
+	if _game.theme.is_empty():
+		return
+	var middle := Vector2i(int(_game.theme["x1"]), int(_game.theme["y1"]))
+	_game._enter_theme(middle)
+	if not _game.theme.get("seen", false):
+		_complain("Themenraum meldet sich nicht, wenn man drin steht")
 

@@ -60,6 +60,7 @@ var traps := {}                 ## cell -> trap id
 var chest = null                ## {cell, mimic, opened}
 var shops: Array = []           ## {cell, kind}
 var stairs_locked := false
+var theme := {}                  ## this floor's themed room, if it has one
 var doors := {}                  ## cell -> true when open
 var webs := {}                   ## cell -> a widow's web, walked into once
 var hazards := {}               ## cell -> a standing danger, in plain sight
@@ -320,6 +321,17 @@ func load_run() -> bool:
 	var up: Variant = save.get("up_stairs", null)
 	up_stairs = Vector2i(int(up[0]), int(up[1])) if up != null else Vector2i(player.x, player.y)
 	stairs_locked = bool(save["stairs_locked"])
+	# Rebuilt field by field: JSON has no integers, so a theme read back
+	# from a file has 2.0 where it had 2. Nothing breaks - every use
+	# goes through int() - but the run is then not quite the run that
+	# was saved, and a comparison of the two says so.
+	theme = {}
+	var stored: Dictionary = save.get("theme", {})
+	if not stored.is_empty():
+		theme = {"id": str(stored["id"]), "name": str(stored["name"]),
+			"x1": int(stored["x1"]), "y1": int(stored["y1"]),
+			"x2": int(stored["x2"]), "y2": int(stored["y2"]),
+			"seen": bool(stored["seen"])}
 	doors.clear()
 	for entry in save.get("doors", []):
 		doors[Vector2i(int(entry[0]), int(entry[1]))] = bool(entry[2])
@@ -685,6 +697,8 @@ func _populate() -> void:
 		if spot != null:
 			shops.append({"cell": spot, "kind": "smith", "stock": []})
 
+	_furnish_theme(spawn_rooms)
+
 	# Loot goes last, and only where the hero can reach: the
 	# shopkeepers are standing by now, and each of them is a tile that
 	# never opens.
@@ -1009,6 +1023,7 @@ func try_move(step: Vector2i) -> void:
 		_open_chest(target)
 		_spring_trap(target)
 		_step_in_web(target)
+		_enter_theme(target)
 		_step_in_hazard(target)
 		_touch_shrine(target)
 		if dead:
@@ -1035,6 +1050,74 @@ func try_move(step: Vector2i) -> void:
 	enemy_turn()
 	recompute_fov()
 	paint()
+
+
+## Turns one room on the floor into something: a library, an armoury, a
+## laboratory, a bone house. The room keeps its normal contents - this
+## is added on top, so a themed room is worth the detour rather than
+## being the only room with anything in it.
+func _furnish_theme(where: Array) -> void:
+	theme = {}
+	if where.is_empty() or rng.randf() >= Data.ROOM_THEME_CHANCE:
+		return
+	var chosen := Data.pick_theme(depth, rng)
+	if chosen.is_empty():
+		return
+	var room = where[rng.randi() % where.size()]
+	theme = {"id": chosen["id"], "name": chosen["name"],
+		"x1": room.x1, "y1": room.y1, "x2": room.x2, "y2": room.y2, "seen": false}
+
+	var span: Array = chosen["amount"]
+	for _i in rng.randi_range(int(span[0]), int(span[1])):
+		var cell: Variant = _free_cell([room])
+		if cell == null:
+			continue
+		var loot := {"cell": cell, "kind": chosen["loot"],
+			"amount": rng.randi_range(15, 30 + depth * 4)}
+		if chosen["loot"] == "potion":
+			loot["potion"] = Data.pick_potion(depth, rng)
+		elif chosen["loot"] == "scroll":
+			loot["scroll"] = Data.SCROLLS[rng.randi() % Data.SCROLLS.size()]["id"]
+		items.append(loot)
+
+	# A little scenery of its own, so the room reads as one from the door.
+	for _i in 3:
+		var spot: Variant = _free_cell([room])
+		if spot == null:
+			continue
+		decor[spot] = chosen["decor"]
+		if chosen["decor"] in Data.BLOCKING_DECOR and _seals_something():
+			decor.erase(spot)
+
+	# And whatever guards it.
+	if not chosen.has("guards"):
+		return
+	var guards: Array = chosen["guards"]
+	for _i in rng.randi_range(int(guards[0]), int(guards[1])):
+		var post: Variant = _free_cell([room])
+		if post == null:
+			continue
+		var guard := Entities.Monster.new(str(chosen.get("guard_kind", "skeleton")),
+			tier["mult"], difficulty)
+		guard.x = post.x
+		guard.y = post.y
+		guard.snap()
+		monsters.append(guard)
+
+
+## Announced the first time the hero stands in it, not when the floor is
+## built: a banner about a room you cannot see yet is a banner about
+## nothing.
+func _enter_theme(cell: Vector2i) -> void:
+	if theme.is_empty() or theme.get("seen", false):
+		return
+	if cell.x < int(theme["x1"]) or cell.x >= int(theme["x2"]):
+		return
+	if cell.y < int(theme["y1"]) or cell.y >= int(theme["y2"]):
+		return
+	theme["seen"] = true
+	banner(str(theme["name"]), Color(0.72, 0.85, 1.0))
+	say("Du betrittst: %s." % theme["name"])
 
 
 ## Hangs doors in the ways into rooms.

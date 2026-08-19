@@ -685,3 +685,45 @@ static func pick_boss_kind(level: int, rng: RandomNumberGenerator) -> String:
 		return pick_kind(level, rng)
 	return pool[rng.randi() % pool.size()]
 
+
+# --- Themenräume ----------------------------------------------------------
+# One room on a floor can be about something: a library holds scrolls, an
+# armoury holds gear, a laboratory holds flasks, an ossuary holds the
+# dead and what they were buried with. It is the cheapest way to make two
+# floors of the same tier read differently, and it gives a reason to walk
+# into a room that is not on the way to the stairs.
+const ROOM_THEMES := [
+	{"id": "library", "name": "Bibliothek", "min_level": 3, "weight": 2.0,
+		"decor": "column", "loot": "scroll", "amount": [2, 3]},
+	{"id": "armoury", "name": "Waffenkammer", "min_level": 2, "weight": 2.0,
+		"decor": "crate", "loot": "weapon", "amount": [2, 3]},
+	{"id": "laboratory", "name": "Alchemistenstube", "min_level": 2, "weight": 2.0,
+		"decor": "crate", "loot": "potion", "amount": [3, 4]},
+	{"id": "ossuary", "name": "Beinhaus", "min_level": 4, "weight": 1.5,
+		"decor": "skull", "loot": "gold", "amount": [2, 3], "guards": [2, 3],
+		"guard_kind": "skeleton"},
+	{"id": "hoard", "name": "Kammer des Geizes", "min_level": 6, "weight": 1.0,
+		"decor": "column", "loot": "gold", "amount": [4, 6], "guards": [1, 2],
+		"guard_kind": "bone_mage"},
+]
+const ROOM_THEME_CHANCE := 0.55
+
+
+## A theme this depth has unlocked, or an empty dictionary.
+static func pick_theme(level: int, rng: RandomNumberGenerator) -> Dictionary:
+	var pool: Array = []
+	var total := 0.0
+	for theme in ROOM_THEMES:
+		if int(theme["min_level"]) > level:
+			continue
+		pool.append(theme)
+		total += float(theme["weight"])
+	if pool.is_empty():
+		return {}
+	var roll := rng.randf() * total
+	for theme in pool:
+		roll -= float(theme["weight"])
+		if roll <= 0.0:
+			return theme
+	return pool[-1]
+

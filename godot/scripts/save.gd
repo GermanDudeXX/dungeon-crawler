@@ -94,6 +94,7 @@ static func write(game) -> void:
 		"hazards": hazards,
 		"webs": webs,
 		"doors": doors,
+		"theme": game.theme,
 		"explored": explored,
 		"monsters": monsters,
 		"items": items,
