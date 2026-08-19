@@ -34,6 +34,10 @@ const TILES_ACROSS := 30.0
 # this long, so a held direction produces one continuous movement
 # instead of step, wait, step - that pause is most of what reads as
 # "stuck to a grid", even though the sprites were already sliding.
+const GAUGE_W := 340.0           ## the health and experience bars
+const GAUGE_H := 26.0
+const BOSS_W := 520.0
+const DOOR_POCKET := 4           ## fewer floor tiles than this behind a door is nothing
 const STEP_TIME := 0.14
 # How long a held direction waits before it starts walking by itself.
 const REPEAT_DELAY := 0.34
@@ -126,6 +130,16 @@ var _kin_panel: PanelContainer
 var _kin_list: VBoxContainer
 var _drink_button: Button
 var _shoot_button: Button
+var _hp_frame: ColorRect         ## the gauges, top left
+var _hp_ghost: ColorRect
+var _hp_fill: ColorRect
+var _hp_guard: ColorRect
+var _hp_text: Label
+var _xp_fill: ColorRect
+var _boss_frame: ColorRect       ## and the one across the top, for a boss
+var _boss_track: ColorRect
+var _boss_fill: ColorRect
+var _boss_text: Label
 var _pause_panel: PanelContainer
 var _pause_sound: Button
 var _pause_music: Button
@@ -1388,17 +1402,72 @@ func _hang_doors(where: Array) -> void:
 					break
 			if crowded:
 				continue
-			# And only in an actual doorway: floor on two opposite sides, wall
-			# on the other two. A door in the middle of a room is a frame
-			# around nothing.
-			var open_x: bool = Dungeon.is_walkable(grid, cell.x - 1, cell.y) \
-				and Dungeon.is_walkable(grid, cell.x + 1, cell.y)
-			var open_y: bool = Dungeon.is_walkable(grid, cell.x, cell.y - 1) \
-				and Dungeon.is_walkable(grid, cell.x, cell.y + 1)
-			if open_x == open_y:
+			if not _is_doorway(cell, room):
 				continue
 			doors[cell] = false
 
+
+
+## Is this cell a doorway into that room, or just a tile a door would
+## be standing on?
+##
+## Three things have to hold, and each of them was a door on the map
+## that made no sense:
+##
+## The cell is a passage: floor on two opposite sides, wall on the other
+## two. A door in open ground is a frame around nothing.
+##
+## The passage runs *into* the room - one of those two sides is inside
+## it, the other is not. This is the one that was missing. A corridor
+## carved along a room's edge touches it for its whole length and looks
+## like a passage at every step, so doors were being hung in the middle
+## of corridors with the room lying wide open beside them.
+##
+## And there is something on both sides. A door onto three tiles of
+## nothing is worse than no door.
+func _is_doorway(cell: Vector2i, room) -> bool:
+	var open_x: bool = Dungeon.is_walkable(grid, cell.x - 1, cell.y) \
+		and Dungeon.is_walkable(grid, cell.x + 1, cell.y)
+	var open_y: bool = Dungeon.is_walkable(grid, cell.x, cell.y - 1) \
+		and Dungeon.is_walkable(grid, cell.x, cell.y + 1)
+	if open_x == open_y:
+		return false
+	var sides: Array = ([Vector2i(-1, 0), Vector2i(1, 0)] if open_x
+		else [Vector2i(0, -1), Vector2i(0, 1)])
+	var inside := 0
+	for offset in sides:
+		var beside: Vector2i = cell + offset
+		if beside.x >= room.x1 and beside.x < room.x2 \
+				and beside.y >= room.y1 and beside.y < room.y2:
+			inside += 1
+	if inside != 1:
+		return false
+	for offset in sides:
+		if _pocket_behind(cell, cell + offset) <= DOOR_POCKET:
+			return false
+	return true
+
+
+## How much floor lies behind a cell if the doorway is treated as a wall.
+## Counted no further than it takes to decide - a corridor that carries
+## on is a corridor, and the exact number stops mattering long before
+## then.
+func _pocket_behind(doorway: Vector2i, from: Vector2i) -> int:
+	var seen := {from: true}
+	var queue: Array[Vector2i] = [from]
+	var head := 0
+	while head < queue.size() and seen.size() <= DOOR_POCKET:
+		var at: Vector2i = queue[head]
+		head += 1
+		for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next: Vector2i = at + offset
+			if next == doorway or seen.has(next):
+				continue
+			if not Dungeon.is_walkable(grid, next.x, next.y):
+				continue
+			seen[next] = true
+			queue.append(next)
+	return seen.size()
 
 
 ## The floor cells immediately outside a room that touch it.
@@ -3163,8 +3232,8 @@ func _build_hud() -> void:
 	# Two lines, because one did not fit: at 1280 wide the gear names
 	# pushed the buff row off the right-hand edge, where a player has no
 	# way to know it exists.
-	_play_ui.get_node("gear").position = Vector2(14, 36)
-	_play_ui.get_node("fps").position = Vector2(14, 64)
+	_play_ui.get_node("gear").position = Vector2(14, 78)
+	_play_ui.get_node("fps").position = Vector2(14, 106)
 
 	var log_label: Label = _play_ui.get_node("log")
 	log_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
@@ -3279,6 +3348,7 @@ func _build_hud() -> void:
 	_banner.modulate.a = 0.0
 	_play_ui.add_child(_banner)
 
+	_build_gauges()
 	_build_vignette()
 	_build_minimap()
 	_build_bag_panel()
@@ -3289,6 +3359,132 @@ func _build_hud() -> void:
 	_build_perk_panel()
 	_build_dead_panel()
 	_build_title_panel()
+
+
+## A flat rectangle of colour, positioned by hand.
+##
+## The HUD is built in code rather than in a scene, so a bar is four of
+## these stacked: a dark frame, the empty track, what is left, and the
+## number over the top. Nothing here reacts to the theme - a health bar
+## that changes colour with the floor is a health bar nobody trusts.
+func _plate(at: Vector2, span: Vector2, shade: Color, top := false) -> ColorRect:
+	var rect := ColorRect.new()
+	if top:
+		rect.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	rect.position = at
+	rect.size = span
+	rect.color = shade
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_play_ui.add_child(rect)
+	return rect
+
+
+func _gauge_label(at: Vector2, span: Vector2, size: int, top := false) -> Label:
+	var label := Label.new()
+	if top:
+		label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	label.position = at
+	label.size = span
+	label.custom_minimum_size = span
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.add_theme_font_size_override("font_size", size)
+	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	label.add_theme_constant_override("outline_size", 5)
+	_play_ui.add_child(label)
+	return label
+
+
+## Health as a bar rather than as two numbers.
+##
+## "HP 7/24" is something you read; a bar a quarter full is something you
+## see, and in a fight there is no time to read. The experience bar under
+## it is there for the same reason - the moment before a level is worth
+## knowing, and it was buried in a row of figures.
+func _build_gauges() -> void:
+	_hp_frame = _plate(Vector2(12, 30), Vector2(GAUGE_W + 4, GAUGE_H + 4), Color(0, 0, 0, 0.80))
+	_plate(Vector2(14, 32), Vector2(GAUGE_W, GAUGE_H), Color(0.13, 0.09, 0.11, 0.92))
+	# The pale strip is the damage that has just landed. It drains away
+	# over about a second, so a hit is visible as a loss and not only as a
+	# smaller bar.
+	_hp_ghost = _plate(Vector2(14, 32), Vector2(GAUGE_W, GAUGE_H), Color(0.96, 0.86, 0.58, 0.50))
+	_hp_fill = _plate(Vector2(14, 32), Vector2(GAUGE_W, GAUGE_H), Color(0.35, 0.72, 0.35))
+	# A shield is not health: it sits past the end of the bar, in its own
+	# colour, and goes first.
+	_hp_guard = _plate(Vector2(14, 32), Vector2(0, GAUGE_H), Color(0.48, 0.78, 1.0, 0.88))
+	_hp_text = _gauge_label(Vector2(14, 32), Vector2(GAUGE_W, GAUGE_H), 20)
+
+	_plate(Vector2(12, 60), Vector2(GAUGE_W + 4, 12), Color(0, 0, 0, 0.80))
+	_plate(Vector2(14, 62), Vector2(GAUGE_W, 8), Color(0.10, 0.10, 0.14, 0.92))
+	_xp_fill = _plate(Vector2(14, 62), Vector2(0, 8), Color(0.62, 0.55, 0.95))
+
+	# A boss gets the top of the screen. Something with four hundred hit
+	# points needs a bar you can watch from across the room, and a name -
+	# otherwise the only sign that this one is different is that it is not
+	# dying.
+	_boss_frame = _plate(Vector2(-BOSS_W * 0.5 - 3, 61), Vector2(BOSS_W + 6, 26),
+		Color(0, 0, 0, 0.80), true)
+	_boss_track = _plate(Vector2(-BOSS_W * 0.5, 64), Vector2(BOSS_W, 20),
+		Color(0.14, 0.08, 0.08, 0.92), true)
+	_boss_fill = _plate(Vector2(-BOSS_W * 0.5, 64), Vector2(BOSS_W, 20),
+		Color(0.86, 0.26, 0.20), true)
+	_boss_text = _gauge_label(Vector2(-BOSS_W * 0.5, 64), Vector2(BOSS_W, 20), 19, true)
+	_boss_text.add_theme_color_override("font_color", Color(1.0, 0.92, 0.86))
+
+
+## Moves the bars to where the numbers already are. Called every frame,
+## because the trailing damage strip is the only thing here that is not
+## simply a division.
+func _refresh_gauges(delta: float) -> void:
+	if _hp_fill == null or player == null:
+		return
+	var left: float = clampf(float(player.hp) / float(maxi(1, player.max_hp)), 0.0, 1.0)
+	var want: float = GAUGE_W * left
+	_hp_fill.size.x = want
+	# Green while it does not matter, amber when it starts to, red when it
+	# does. Colour is what an eye that is watching the monster still
+	# notices.
+	if left > 0.55:
+		_hp_fill.color = Color(0.35, 0.72, 0.35)
+	elif left > 0.28:
+		_hp_fill.color = Color(0.90, 0.68, 0.22)
+	else:
+		_hp_fill.color = Color(0.84, 0.22, 0.22)
+	if _hp_ghost.size.x <= want:
+		_hp_ghost.size.x = want
+	else:
+		_hp_ghost.size.x = maxf(want, _hp_ghost.size.x - GAUGE_W * 0.55 * delta)
+	var guard: float = clampf(float(player.shield) / float(maxi(1, player.max_hp)), 0.0, 1.0)
+	_hp_guard.position.x = 14.0 + want
+	_hp_guard.size.x = minf(GAUGE_W - want, GAUGE_W * guard)
+	_hp_text.text = "%d / %d" % [maxi(0, player.hp), player.max_hp]
+	if player.shield > 0:
+		_hp_text.text += "   +%d" % player.shield
+	# Under a quarter left the frame breathes red. Nothing written in the
+	# log has ever caught anyone mid-fight.
+	if left <= 0.25:
+		_hp_frame.color = Color(0.88, 0.16, 0.16, 0.50 + 0.35 * sin(_flicker * 6.0))
+	else:
+		_hp_frame.color = Color(0, 0, 0, 0.80)
+	_xp_fill.size.x = GAUGE_W * clampf(
+		float(player.xp) / float(maxi(1, player.xp_to_next)), 0.0, 1.0)
+
+	var boss = null
+	for monster in monsters:
+		if monster.is_alive() and monster.is_boss and monster.awake \
+				and lit.has(monster.cell()):
+			boss = monster
+			break
+	var showing: bool = boss != null
+	_boss_frame.visible = showing
+	_boss_track.visible = showing
+	_boss_fill.visible = showing
+	_boss_text.visible = showing
+	if showing:
+		_boss_fill.size.x = BOSS_W * clampf(
+			float(boss.hp) / float(maxi(1, boss.max_hp)), 0.0, 1.0)
+		_boss_text.text = "%s   %d / %d" % [boss.display_name, maxi(0, boss.hp), boss.max_hp]
 
 
 ## Hangs a dialog in the middle of the screen and keeps it there.
@@ -4854,15 +5050,12 @@ func _process(delta: float) -> void:
 		_stepped = Vector2i.ZERO
 		_auto_shoot()
 
-	var line := "%s  Ebene %d     HP %d/%d" % [
-		tier.get("name", ""), depth, player.hp, player.max_hp]
-	if player.shield > 0:
-		line += " +%d Schild" % player.shield
+	_refresh_gauges(delta)
+	var line := "%s  ·  Ebene %d" % [tier.get("name", ""), depth]
 	if not quest.is_empty():
 		line += "     [%s%s]" % [quest["name"],
 			" ✓" if quest.get("done", false) else ""]
-	line += "     Stufe %d (%d/%d XP)     %d Gold" % [
-		player.level, player.xp, player.xp_to_next, player.gold]
+	line += "     Stufe %d     %d Gold" % [player.level, player.gold]
 	# What is in your hands, by name, on a line of its own: a rarity
 	# that never appears anywhere is a number nobody can notice.
 	var gear := "%s +%d     %s +%d" % [

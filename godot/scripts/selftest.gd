@@ -410,6 +410,46 @@ func _next_floor() -> void:
 	_game.new_level()
 
 
+
+## Every door has to be a door *into* a room, with floor on both sides
+## and no second door beside it. A corridor running along a room's edge
+## used to satisfy the old shape test at every step, so doors were being
+## hung in the middle of passages with the room lying open beside them.
+func every_door_leads_somewhere(game) -> void:
+	for cell in game.doors:
+		for offset in [Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1), Vector2i(1, -1)]:
+			if game.doors.has(cell + offset):
+				_complain("zwei Türen nebeneinander",
+					"Ebene %d: %s und %s" % [game.depth, str(cell), str(cell + offset)])
+		var open_x: bool = Dungeon.is_walkable(game.grid, cell.x - 1, cell.y) \
+			and Dungeon.is_walkable(game.grid, cell.x + 1, cell.y)
+		var open_y: bool = Dungeon.is_walkable(game.grid, cell.x, cell.y - 1) \
+			and Dungeon.is_walkable(game.grid, cell.x, cell.y + 1)
+		if open_x == open_y:
+			_complain("Tür steht nicht in einem Durchgang",
+				"Ebene %d, %s" % [game.depth, str(cell)])
+			continue
+		var sides: Array = ([Vector2i(-1, 0), Vector2i(1, 0)] if open_x
+			else [Vector2i(0, -1), Vector2i(0, 1)])
+		var threshold := false
+		for room in game.rooms:
+			var inside := 0
+			for offset in sides:
+				var beside: Vector2i = cell + offset
+				if beside.x >= room.x1 and beside.x < room.x2 \
+						and beside.y >= room.y1 and beside.y < room.y2:
+					inside += 1
+			if inside == 1:
+				threshold = true
+				break
+		if not threshold:
+			_complain("Tür führt in keinen Raum",
+				"Ebene %d, %s" % [game.depth, str(cell)])
+		for offset in sides:
+			if game._pocket_behind(cell, cell + offset) <= game.DOOR_POCKET:
+				_complain("Tür führt ins Nichts",
+					"Ebene %d, %s" % [game.depth, str(cell)])
+
 func _complain(what: String, detail: String = "") -> void:
 	_problems[what] = _problems.get(what, 0) + 1
 	if _problems[what] <= 2 and detail != "":
@@ -711,19 +751,9 @@ func _check_placement() -> void:
 	if _game.captive != null:
 		things.append([_game.captive, "Gefangener"])
 
-	# No door beside another door, and every door in a real doorway.
-	for cell in _game.doors:
-		for offset in [Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1), Vector2i(1, -1)]:
-			if _game.doors.has(cell + offset):
-				_complain("zwei Türen nebeneinander",
-					"Ebene %d: %s und %s" % [_game.depth, str(cell), str(cell + offset)])
-		var open_x: bool = Dungeon.is_walkable(_game.grid, cell.x - 1, cell.y) \
-			and Dungeon.is_walkable(_game.grid, cell.x + 1, cell.y)
-		var open_y: bool = Dungeon.is_walkable(_game.grid, cell.x, cell.y - 1) \
-			and Dungeon.is_walkable(_game.grid, cell.x, cell.y + 1)
-		if open_x == open_y:
-			_complain("Tür steht nicht in einem Durchgang",
-				"Ebene %d, %s" % [_game.depth, str(cell)])
+	# Doors: beside no other door, in a real doorway, leading somewhere.
+	every_door_leads_somewhere(_game)
+
 
 	for cell in _game.traps:
 		things.append([cell, "Falle"])
