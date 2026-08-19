@@ -75,6 +75,7 @@ func _process(_delta: float) -> bool:
 	_check_elements()
 	_check_up_stairs()
 	_check_boss_phases()
+	_check_classes()
 
 	for turn in _turns:
 		if _game.dead:
@@ -855,4 +856,35 @@ func _check_boss_phases() -> void:
 			"%.2f gegen %.2f" % [float(cornered["power"]), float(hurt["power"])])
 	if not Data.boss_phase(100, 100).is_empty():
 		_complain("geheilter Boss bleibt wütend")
+
+
+## Each class has to start with what its own table says, and the three
+## have to differ - a class that is only a different number is three of
+## the same character.
+func _check_classes() -> void:
+	var hands := {}
+	for info in Data.CLASSES:
+		var hero = Entities.Player.new(info["id"], "normal")
+		for id in info["potions"]:
+			if int(hero.potion_counts.get(id, 0)) != int(info["potions"][id]):
+				_complain("Starttränke fehlen",
+					"%s: %s" % [info["id"], id])
+		for id in info.get("scrolls", {}):
+			if int(hero.scrolls.get(id, 0)) != int(info["scrolls"][id]):
+				_complain("Startrollen fehlen", "%s: %s" % [info["id"], id])
+		if hero.potions <= 0:
+			_complain("Klasse startet ohne jeden Trank", info["id"])
+		if not hero.potion_counts.has(hero.selected_potion):
+			_complain("gewählter Trank wird nicht getragen",
+				"%s: %s" % [info["id"], hero.selected_potion])
+		if hero.weapon_bonus() < 0 or hero.armour_bonus() < 0:
+			_complain("negative Startausrüstung", info["id"])
+		hands[info["id"]] = "%d/%d/%s/%s" % [
+			hero.max_hp, hero.base_power, str(hero.potion_counts), str(hero.scrolls)]
+	var seen_hands := {}
+	for id in hands:
+		if seen_hands.has(hands[id]):
+			_complain("zwei Klassen starten identisch",
+				"%s und %s" % [id, seen_hands[hands[id]]])
+		seen_hands[hands[id]] = id
 

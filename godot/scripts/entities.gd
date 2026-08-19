@@ -72,8 +72,20 @@ class Player extends Actor:
 		base_defense += int(info["defense"])
 		weapon = int(info["weapon"])
 		armour = int(info["armour"])
-		potions = int(info["potions"])
-		potion_counts = {Data.DEFAULT_POTION: potions}
+		# The opening hand, spelled out per class the way constants.py
+		# spells it: the rogue starts with a way out, the mage with
+		# something to throw. A class that differs only in numbers is
+		# three of the same character.
+		potion_counts = {}
+		for id in info["potions"]:
+			add_potion(id, int(info["potions"][id]))
+		if potion_counts.has(Data.DEFAULT_POTION):
+			selected_potion = Data.DEFAULT_POTION
+		else:
+			selected_potion = next_potion()
+		for id in info.get("scrolls", {}):
+			scrolls[id] = int(info["scrolls"][id])
+		weapon_element = str(info.get("element", ""))
 
 	## What a buff adds up to across everything currently running. Two
 	## buffs that both raise power stack rather than one winning.
