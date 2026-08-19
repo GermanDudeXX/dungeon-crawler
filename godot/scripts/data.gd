@@ -123,6 +123,8 @@ const WEAPONS := [
 ]
 const SHOT_DAMAGE_MULT := 0.75      ## a shot lands for less than a swing
 const SHOT_COOLDOWN := 1            ## turns between shots
+# A mage has no bow; the reach comes from the class itself, which is
+# what "elements answer to you" is supposed to mean in play.
 
 const ARMOURS := [
 	{"name": "Keine", "bonus": 0, "cost": 0},
@@ -265,7 +267,7 @@ const CLASSES := [
 		"hp_mult": 0.8, "power": 0, "defense": 0,
 		"potions": {"healing": 1, "shield": 1},
 		"scrolls": {"fireball": 2, "reveal": 1},
-		"weapon": 0, "armour": 0, "element": "fire",
+		"weapon": 0, "armour": 0, "element": "fire", "reach": 4,
 		"blurb": "Schwach im Nahkampf, aber Rollen und Elemente gehorchen dir.",
 	},
 	{

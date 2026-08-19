@@ -27,7 +27,14 @@ static func wipe() -> void:
 
 
 ## Everything needed to put the run back exactly where it was.
-static func write(game) -> void:
+## One floor as plain data.
+##
+## Used twice: for the floor the hero is standing on, and for every floor
+## they have already been on and could walk back into. One function, so
+## the two cannot drift - a field added for the save and forgotten for
+## the memory would show up as a floor that changes when you return to
+## it, which is the bug this whole thing exists to prevent.
+static func floor_data(game) -> Dictionary:
 	var monsters: Array = []
 	for m in game.monsters:
 		if not m.is_alive():
@@ -37,7 +44,8 @@ static func write(game) -> void:
 			"power": m.power, "defense": m.defense, "xp": m.xp_reward,
 			"name": m.display_name, "sprite": m.sprite, "speed": m.speed,
 			"poisons": m.poisons, "flees_below": m.flees_below,
-			"awake": m.awake, "boss": m.is_boss, "mimic": m.is_mimic, "keeper": m.is_keeper,
+			"awake": m.awake, "boss": m.is_boss, "mimic": m.is_mimic,
+			"keeper": m.is_keeper,
 			"burn": m.burn_turns, "slow": m.slow_turns, "stun": m.stun_turns,
 			"regen": m.regen, "elite": m.is_elite, "generation": m.generation,
 			"summoned": m.summoned, "enraged": m.enraged, "afraid": m.afraid,
@@ -79,13 +87,22 @@ static func write(game) -> void:
 		shops.append({"x": shop["cell"].x, "y": shop["cell"].y, "kind": shop["kind"],
 			"stock": shop.get("stock", []), "scroll": shop.get("scroll", "")})
 
-	var p = game.player
-	var data := {
-		"version": VERSION,
-		"class": p.hero_class,
+	# The rooms are part of the floor too: everything that places
+	# something later - a blink, a scattered purse - picks from them, and
+	# a restored floor with the previous floor's rooms reaches past the
+	# end of the list.
+	var rooms: Array = []
+	for room in game.rooms:
+		rooms.append([room.x1, room.y1, room.x2, room.y2])
+
+	return {
 		"depth": game.depth,
-		"log": game.log_lines,
-		"grid": game.grid,
+		"rooms": rooms,
+		# Copied, not referenced: a remembered floor must not share its map
+		# with the live one. It did, and entering the next floor cleared the
+		# array in place - so the floor you walked back into had no map at
+		# all.
+		"grid": game.grid.duplicate(true),
 		"stairs": [game.stairs.x, game.stairs.y],
 		"up_stairs": [game.up_stairs.x, game.up_stairs.y],
 		"stairs_locked": game.stairs_locked,
@@ -95,8 +112,8 @@ static func write(game) -> void:
 		"hazards": hazards,
 		"webs": webs,
 		"doors": doors,
-		"theme": game.theme,
-		"quest": game.quest,
+		"theme": game.theme.duplicate(),
+		"quest": game.quest.duplicate(),
 		"drank_here": game.drank_here,
 		"hurt_here": game.hurt_here,
 		"explored": explored,
@@ -108,6 +125,19 @@ static func write(game) -> void:
 			"x": game.chest["cell"].x, "y": game.chest["cell"].y,
 			"mimic": game.chest["mimic"], "opened": game.chest["opened"],
 			"guarded": game.chest.get("guarded", false)},
+	}
+
+
+## Everything needed to put the run back where it was.
+static func write(game) -> void:
+	var p = game.player
+	var data := {
+		"version": VERSION,
+		"class": p.hero_class,
+		"log": game.log_lines,
+		# Every floor already visited, so climbing a staircase after a break
+		# leads back to the floor that was left rather than to a fresh roll.
+		"floors": game.floors,
 		"player": {
 			"x": p.x, "y": p.y, "hp": p.hp, "max_hp": p.max_hp,
 			"base_power": p.base_power, "base_defense": p.base_defense,
@@ -117,7 +147,8 @@ static func write(game) -> void:
 			"weapon_element": p.weapon_element,
 			"level": p.level, "xp": p.xp, "xp_to_next": p.xp_to_next,
 			"potions": p.potions, "gold": p.gold, "kills": p.kills,
-			"facing": p.facing, "poison_turns": p.poison_turns, "webbed": p.webbed, "shot_cooldown": p.shot_cooldown,
+			"facing": p.facing, "poison_turns": p.poison_turns,
+			"webbed": p.webbed, "shot_cooldown": p.shot_cooldown,
 			"bonus_crit": p.bonus_crit, "damage_reduction": p.damage_reduction,
 			"gold_mult": p.gold_mult, "xp_mult": p.xp_mult,
 			"potion_mult": p.potion_mult, "scholar": p.scholar,
@@ -128,7 +159,9 @@ static func write(game) -> void:
 			"scrolls": p.scrolls,
 		},
 	}
-
+	# The floor being stood on goes in at the top level, where it always
+	# was, so an older save still reads.
+	data.merge(floor_data(game))
 	var file := FileAccess.open(PATH, FileAccess.WRITE)
 	if file == null:
 		return

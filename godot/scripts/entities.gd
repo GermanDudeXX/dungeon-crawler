@@ -51,6 +51,8 @@ class Player extends Actor:
 	var poison_turns := 0
 	var webbed := 0                 ## turns spent tearing free
 	var shot_cooldown := 0          ## turns before the bow is ready again
+	var class_reach := 0            ## reach the class has without a weapon
+	var auto_shoot := true          ## fire by itself when something is in range
 	var bonus_crit := 0.0
 	var damage_reduction := 0.0
 	var gold_mult := 1.0
@@ -91,6 +93,7 @@ class Player extends Actor:
 		for id in info.get("scrolls", {}):
 			scrolls[id] = int(info["scrolls"][id])
 		weapon_element = str(info.get("element", ""))
+		class_reach = int(info.get("reach", 0))
 
 	## What a buff adds up to across everything currently running. Two
 	## buffs that both raise power stack rather than one winning.
@@ -113,7 +116,9 @@ class Player extends Actor:
 	## How far the equipped weapon reaches, or zero for one that only
 	## swings.
 	func reach() -> int:
-		return int(Data.WEAPONS[weapon].get("reach", 0))
+		# Whichever is longer: what the weapon reaches, or what the
+		# class does on its own.
+		return maxi(int(Data.WEAPONS[weapon].get("reach", 0)), class_reach)
 
 
 	func weapon_bonus() -> int:

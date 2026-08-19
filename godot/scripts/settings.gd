@@ -14,6 +14,7 @@ const DEFAULTS := {
 	"difficulty": "normal",
 	"flash": true,
 	"pad": false,
+	"auto_shoot": true,
 }
 
 

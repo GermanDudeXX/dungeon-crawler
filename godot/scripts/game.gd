@@ -35,6 +35,8 @@ const TILES_ACROSS := 30.0
 # instead of step, wait, step - that pause is most of what reads as
 # "stuck to a grid", even though the sprites were already sliding.
 const STEP_TIME := 0.14
+# How long a held direction waits before it starts walking by itself.
+const REPEAT_DELAY := 0.34
 
 # Scenery only, no rules: what a floor is dressed with.
 const DECOR := ["crate", "skull", "wall_banner_red", "wall_banner_blue",
@@ -61,6 +63,7 @@ var chest = null                ## {cell, mimic, opened}
 var shops: Array = []           ## {cell, kind}
 var stairs_locked := false
 var quest := {}                  ## this floor's optional goal
+var floors := {}                 ## depth -> the floor as it was left
 var drank_here := false          ## a flask was opened on this floor
 var hurt_here := false           ## something got through on this floor
 var theme := {}                  ## this floor's themed room, if it has one
@@ -79,6 +82,11 @@ var rng := RandomNumberGenerator.new()
 
 var _floor_layer: TileMapLayer
 var _dim_layer: TileMapLayer
+var _torch: PointLight2D
+var _stairs_light: PointLight2D
+var _flicker := 0.0
+var _gloom: CanvasModulate
+var _vignette: ColorRect
 var _tile_ids := {}
 var _sprites := {}
 var _actor_nodes := {}
@@ -123,6 +131,7 @@ var _pause_sound: Button
 var _pause_music: Button
 var _pause_flash: Button
 var _pause_pad: Button
+var _pause_auto: Button
 var _bag_panel: PanelContainer
 var _bag_list: VBoxContainer
 var _bag_stats: Label
@@ -133,6 +142,9 @@ var _banner_fade: Tween
 var _announce: Array = []        ## what to shout once the floor is drawn
 var _minimap_drawn := -1
 var _minimap_at := Vector2i(-1, -1)
+var _seen_items := {}            ## loot that has been in the light once
+var _shadows := {}               ## sprite -> the smudge it stands on
+var _shadow_art: Texture2D
 var _gliding := {}               ## sprite -> where it is walking to
 var _camera_to := Vector2.ZERO
 var _scroll_buttons: Array = []
@@ -141,6 +153,7 @@ var _perk_buttons: Array = []
 var perk_choices: Array = []      ## the three on offer right now
 var _music_button: Button
 var _held := Vector2i.ZERO
+var _stepped := Vector2i.ZERO    ## the direction the last step went
 var _stick: Stick
 var _pad_buttons: Array[Button] = []
 var _haste_flip := false
@@ -162,6 +175,7 @@ func _ready() -> void:
 	audio.music_enabled = settings["music"]
 	difficulty = str(settings.get("difficulty", Data.DEFAULT_DIFFICULTY))
 	_build_world()
+	_build_light()
 	_build_hud()
 	# A run starts behind the title screen, not in front of it: the
 	# class is picked before the first floor exists, so the starting
@@ -250,8 +264,10 @@ func _sprite_for(name: String) -> Texture2D:
 # --- a run ----------------------------------------------------------------
 
 func new_run() -> void:
+	floors.clear()
 	potion_free = true
 	player = Entities.Player.new(hero_class, difficulty)
+	player.auto_shoot = settings.get("auto_shoot", true)
 	depth = 1
 	dead = false
 	log_lines.clear()
@@ -262,14 +278,153 @@ func new_run() -> void:
 ## Puts a saved run back on its floor. Everything is rebuilt from the
 ## file rather than regenerated, so the player carries on standing where
 ## they stood, on the map they had uncovered.
+## Puts one floor into place from plain data.
+##
+## The save file and a remembered floor hold the same shape, so a floor
+## read from disk and a floor walked back into go through exactly one
+## piece of code. Two would be two places to forget a field in.
+func _apply_floor(save: Dictionary) -> void:
+	# The log belongs to the run, not to a floor: a remembered floor has
+	# none, and restoring one would rewind what the hero has been told.
+	depth = int(save["depth"])
+	tier = Data.tier_for(depth)
+	audio.play_music(tier.get("music", ""))
+
+	# JSON has no integers, only floats, and no Vector2i at all - every
+	# number and every cell has to be put back into the type the game
+	# expects, or the first comparison against a live value fails.
+	rooms.clear()
+	for entry in save.get("rooms", []):
+		rooms.append(Dungeon.Room.new(int(entry[0]), int(entry[1]),
+			int(entry[2]) - int(entry[0]), int(entry[3]) - int(entry[1])))
+	# Built fresh and then assigned, never cleared in place: the array
+	# being replaced may be the one a remembered floor is holding on to.
+	var rebuilt: Array = []
+	for row in save["grid"]:
+		var line: Array = []
+		for value in row:
+			line.append(int(value))
+		rebuilt.append(line)
+	grid = rebuilt
+	stairs = Vector2i(int(save["stairs"][0]), int(save["stairs"][1]))
+	var up: Variant = save.get("up_stairs", null)
+	up_stairs = Vector2i(int(up[0]), int(up[1])) if up != null else Vector2i(player.x, player.y)
+	stairs_locked = bool(save["stairs_locked"])
+	# Rebuilt field by field: JSON has no integers, so a theme read back
+	# from a file has 2.0 where it had 2. Nothing breaks - every use
+	# goes through int() - but the run is then not quite the run that
+	# was saved, and a comparison of the two says so.
+	quest = {}
+	var order: Dictionary = save.get("quest", {})
+	if not order.is_empty():
+		quest = {"id": str(order["id"]), "name": str(order["name"]),
+			"done": bool(order["done"]), "gold": int(order["gold"]),
+			"potion": int(order["potion"])}
+	drank_here = bool(save.get("drank_here", false))
+	hurt_here = bool(save.get("hurt_here", false))
+	theme = {}
+	var stored: Dictionary = save.get("theme", {})
+	if not stored.is_empty():
+		theme = {"id": str(stored["id"]), "name": str(stored["name"]),
+			"x1": int(stored["x1"]), "y1": int(stored["y1"]),
+			"x2": int(stored["x2"]), "y2": int(stored["y2"]),
+			"seen": bool(stored["seen"])}
+	doors = {}
+	for entry in save.get("doors", []):
+		doors[Vector2i(int(entry[0]), int(entry[1]))] = bool(entry[2])
+	webs = {}
+	for entry in save.get("webs", []):
+		webs[Vector2i(int(entry[0]), int(entry[1]))] = true
+	hazards = {}
+	for entry in save.get("hazards", []):
+		hazards[Vector2i(int(entry[0]), int(entry[1]))] = str(entry[2])
+	decor = {}
+	for entry in save.get("decor", []):
+		decor[Vector2i(int(entry[0]), int(entry[1]))] = str(entry[2])
+	captive = null
+	if save.get("captive", null) != null:
+		captive = Vector2i(int(save["captive"][0]), int(save["captive"][1]))
+	shrine = null
+	if save.get("shrine", null) != null:
+		shrine = Vector2i(int(save["shrine"][0]), int(save["shrine"][1]))
+
+	_clear_level_nodes()
+	explored = {}
+	for cell in save["explored"]:
+		explored[Vector2i(int(cell[0]), int(cell[1]))] = true
+	traps = {}
+	for entry in save["traps"]:
+		traps[Vector2i(int(entry[0]), int(entry[1]))] = str(entry[2])
+	items = []
+	for entry in save["items"]:
+		items.append({"cell": Vector2i(int(entry["x"]), int(entry["y"])),
+			"kind": str(entry["kind"]), "amount": int(entry["amount"]),
+			"potion": str(entry.get("potion", "")),
+			"scroll": str(entry.get("scroll", ""))})
+	shops = []
+	for entry in save["shops"]:
+		var stock: Array = []
+		for id in entry.get("stock", []):
+			stock.append(str(id))
+		shops.append({"cell": Vector2i(int(entry["x"]), int(entry["y"])),
+			"kind": str(entry["kind"]), "stock": stock,
+			"scroll": str(entry.get("scroll", ""))})
+	chest = null
+	if save["chest"] != null:
+		var c: Dictionary = save["chest"]
+		chest = {"cell": Vector2i(int(c["x"]), int(c["y"])),
+			"mimic": bool(c["mimic"]), "opened": bool(c["opened"]),
+			"guarded": bool(c.get("guarded", false))}
+
+	monsters = []
+	for entry in save["monsters"]:
+		var monster := Entities.Monster.new(str(entry["kind"]), 1.0)
+		monster.x = int(entry["x"])
+		monster.y = int(entry["y"])
+		monster.max_hp = int(entry["max_hp"])
+		monster.hp = int(entry["hp"])
+		monster.power = int(entry["power"])
+		monster.defense = int(entry["defense"])
+		monster.xp_reward = int(entry["xp"])
+		monster.display_name = str(entry["name"])
+		monster.sprite = str(entry["sprite"])
+		monster.speed = int(entry["speed"])
+		monster.poisons = bool(entry["poisons"])
+		monster.flees_below = float(entry["flees_below"])
+		monster.awake = bool(entry["awake"])
+		monster.is_boss = bool(entry["boss"])
+		monster.is_mimic = bool(entry["mimic"])
+		monster.is_keeper = bool(entry.get("keeper", false))
+		monster.burn_turns = int(entry.get("burn", 0))
+		monster.slow_turns = int(entry.get("slow", 0))
+		monster.stun_turns = int(entry.get("stun", 0))
+		monster.regen = int(entry.get("regen", 0))
+		monster.weaken_turns = int(entry.get("weaken", 0))
+		monster.venom_turns = int(entry.get("venom", 0))
+		monster.bleed_turns = int(entry.get("bleed", 0))
+		monster.is_elite = bool(entry.get("elite", false))
+		# Without this a half-slime that was saved comes back able to
+		# split twice more.
+		monster.generation = int(entry.get("generation", 0))
+		monster.summoned = int(entry.get("summoned", 0))
+		monster.afraid = int(entry.get("afraid", 0))
+		monster.enraged = bool(entry.get("enraged", false))
+		monster.snap()
+		monsters.append(monster)
+
+
 func load_run() -> bool:
 	var data: Variant = Save.read()
 	if data == null:
 		return false
 	var save: Dictionary = data
 
+	floors.clear()
+	for level in save.get("floors", {}):
+		floors[int(level)] = save["floors"][level]
 	hero_class = save["class"]
 	player = Entities.Player.new(hero_class, difficulty)
+	player.auto_shoot = settings.get("auto_shoot", true)
 	var p: Dictionary = save["player"]
 	player.x = int(p["x"])
 	player.y = int(p["y"])
@@ -321,129 +476,11 @@ func load_run() -> bool:
 			player.buffs[str(id)] = int(p["buffs"][id])
 	player.snap()
 
-	depth = int(save["depth"])
-	tier = Data.tier_for(depth)
-	audio.play_music(tier.get("music", ""))
+	_apply_floor(save)
 	dead = false
 	log_lines.clear()
 	for line in save["log"]:
 		log_lines.append(str(line))
-
-	# JSON has no integers, only floats, and no Vector2i at all - every
-	# number and every cell has to be put back into the type the game
-	# expects, or the first comparison against a live value fails.
-	grid.clear()
-	for row in save["grid"]:
-		var line: Array = []
-		for value in row:
-			line.append(int(value))
-		grid.append(line)
-	stairs = Vector2i(int(save["stairs"][0]), int(save["stairs"][1]))
-	var up: Variant = save.get("up_stairs", null)
-	up_stairs = Vector2i(int(up[0]), int(up[1])) if up != null else Vector2i(player.x, player.y)
-	stairs_locked = bool(save["stairs_locked"])
-	# Rebuilt field by field: JSON has no integers, so a theme read back
-	# from a file has 2.0 where it had 2. Nothing breaks - every use
-	# goes through int() - but the run is then not quite the run that
-	# was saved, and a comparison of the two says so.
-	quest = {}
-	var order: Dictionary = save.get("quest", {})
-	if not order.is_empty():
-		quest = {"id": str(order["id"]), "name": str(order["name"]),
-			"done": bool(order["done"]), "gold": int(order["gold"]),
-			"potion": int(order["potion"])}
-	drank_here = bool(save.get("drank_here", false))
-	hurt_here = bool(save.get("hurt_here", false))
-	theme = {}
-	var stored: Dictionary = save.get("theme", {})
-	if not stored.is_empty():
-		theme = {"id": str(stored["id"]), "name": str(stored["name"]),
-			"x1": int(stored["x1"]), "y1": int(stored["y1"]),
-			"x2": int(stored["x2"]), "y2": int(stored["y2"]),
-			"seen": bool(stored["seen"])}
-	doors.clear()
-	for entry in save.get("doors", []):
-		doors[Vector2i(int(entry[0]), int(entry[1]))] = bool(entry[2])
-	webs.clear()
-	for entry in save.get("webs", []):
-		webs[Vector2i(int(entry[0]), int(entry[1]))] = true
-	hazards.clear()
-	for entry in save.get("hazards", []):
-		hazards[Vector2i(int(entry[0]), int(entry[1]))] = str(entry[2])
-	decor.clear()
-	for entry in save.get("decor", []):
-		decor[Vector2i(int(entry[0]), int(entry[1]))] = str(entry[2])
-	captive = null
-	if save.get("captive", null) != null:
-		captive = Vector2i(int(save["captive"][0]), int(save["captive"][1]))
-	shrine = null
-	if save.get("shrine", null) != null:
-		shrine = Vector2i(int(save["shrine"][0]), int(save["shrine"][1]))
-
-	_clear_level_nodes()
-	explored.clear()
-	for cell in save["explored"]:
-		explored[Vector2i(int(cell[0]), int(cell[1]))] = true
-	traps.clear()
-	for entry in save["traps"]:
-		traps[Vector2i(int(entry[0]), int(entry[1]))] = str(entry[2])
-	items.clear()
-	for entry in save["items"]:
-		items.append({"cell": Vector2i(int(entry["x"]), int(entry["y"])),
-			"kind": str(entry["kind"]), "amount": int(entry["amount"]),
-			"potion": str(entry.get("potion", "")),
-			"scroll": str(entry.get("scroll", ""))})
-	shops.clear()
-	for entry in save["shops"]:
-		var stock: Array = []
-		for id in entry.get("stock", []):
-			stock.append(str(id))
-		shops.append({"cell": Vector2i(int(entry["x"]), int(entry["y"])),
-			"kind": str(entry["kind"]), "stock": stock,
-			"scroll": str(entry.get("scroll", ""))})
-	chest = null
-	if save["chest"] != null:
-		var c: Dictionary = save["chest"]
-		chest = {"cell": Vector2i(int(c["x"]), int(c["y"])),
-			"mimic": bool(c["mimic"]), "opened": bool(c["opened"]),
-			"guarded": bool(c.get("guarded", false))}
-
-	monsters.clear()
-	for entry in save["monsters"]:
-		var monster := Entities.Monster.new(str(entry["kind"]), 1.0)
-		monster.x = int(entry["x"])
-		monster.y = int(entry["y"])
-		monster.max_hp = int(entry["max_hp"])
-		monster.hp = int(entry["hp"])
-		monster.power = int(entry["power"])
-		monster.defense = int(entry["defense"])
-		monster.xp_reward = int(entry["xp"])
-		monster.display_name = str(entry["name"])
-		monster.sprite = str(entry["sprite"])
-		monster.speed = int(entry["speed"])
-		monster.poisons = bool(entry["poisons"])
-		monster.flees_below = float(entry["flees_below"])
-		monster.awake = bool(entry["awake"])
-		monster.is_boss = bool(entry["boss"])
-		monster.is_mimic = bool(entry["mimic"])
-		monster.is_keeper = bool(entry.get("keeper", false))
-		monster.burn_turns = int(entry.get("burn", 0))
-		monster.slow_turns = int(entry.get("slow", 0))
-		monster.stun_turns = int(entry.get("stun", 0))
-		monster.regen = int(entry.get("regen", 0))
-		monster.weaken_turns = int(entry.get("weaken", 0))
-		monster.venom_turns = int(entry.get("venom", 0))
-		monster.bleed_turns = int(entry.get("bleed", 0))
-		monster.is_elite = bool(entry.get("elite", false))
-		# Without this a half-slime that was saved comes back able to
-		# split twice more.
-		monster.generation = int(entry.get("generation", 0))
-		monster.summoned = int(entry.get("summoned", 0))
-		monster.afraid = int(entry.get("afraid", 0))
-		monster.enraged = bool(entry.get("enraged", false))
-		monster.snap()
-		monsters.append(monster)
-
 	_hero_node.texture = load(CLASS_DIR + Data.class_by_id(hero_class)["sprite"] + ".png")
 	choosing = false
 	close_shop()
@@ -480,7 +517,45 @@ func _notification(what: int) -> void:
 		save_run()
 
 
-func new_level() -> void:
+## Puts the current floor aside so it can be walked back into.
+##
+## A dungeon whose floors are re-rolled every time you use a staircase
+## is not a place, it is a slot machine: the corridor you cleared is
+## gone, the chest you left behind never existed, and going back up is
+## pointless by construction. Everything that makes up a floor is kept
+## as it was left - including the dead, who stay dead.
+func _stash_floor() -> void:
+	if grid.is_empty():
+		return
+	# Kept in the same plain form the save file uses, so a floor survives
+	# closing the game as readily as it survives a staircase.
+	floors[depth] = Save.floor_data(self)
+
+
+## Walks back into a floor that has been here before. `from_below` is
+## true when the hero climbed up into it, which is the one thing the
+## snapshot cannot know: it decides which staircase they arrive on.
+func _restore_floor(from_below: bool) -> void:
+	_apply_floor(floors[depth])
+	audio.play_music(tier.get("music", ""))
+	# Arriving from below means stepping out of the down staircase; from
+	# above, out of the one that leads up.
+	var arrival: Vector2i = stairs if from_below else up_stairs
+	player.x = arrival.x
+	player.y = arrival.y
+	player.snap()
+	recompute_fov()
+	paint()
+	say("Zurück auf Ebene %d." % depth)
+	save_run()
+
+
+func new_level(from_below := false) -> void:
+	# Been here before? Then it is still the floor it was.
+	if floors.has(depth):
+		_restore_floor(from_below)
+		return
+
 	tier = Data.tier_for(depth)
 	audio.play_music(tier.get("music", ""))
 	var made := Dungeon.generate(MAP_W, MAP_H, rng)
@@ -508,6 +583,7 @@ func new_level() -> void:
 	# escape a bad floor - the floor above is regenerated too - it is
 	# there so a staircase reads as a staircase in both directions.
 	up_stairs = start
+	_seen_items.clear()
 	drank_here = false
 	hurt_here = false
 	_populate()
@@ -531,6 +607,10 @@ func new_level() -> void:
 ## Sprites belong to the floor they were made for; a new floor gets
 ## new ones. Left behind, they hang in mid-air over the next map.
 func _clear_level_nodes() -> void:
+	for shadow in _shadows.values():
+		if is_instance_valid(shadow):
+			shadow.queue_free()
+	_shadows.clear()
 	for node in _actor_nodes.values():
 		node.queue_free()
 	_actor_nodes.clear()
@@ -1100,16 +1180,18 @@ func try_move(step: Vector2i) -> void:
 			return
 		if target == stairs:
 			_settle_quest()
+			_stash_floor()
 			depth += 1
 			audio.play("stairs")
 			say("Du steigst hinab - Ebene %d." % depth)
 			new_level()
 			return
 		if target == up_stairs and depth > 1:
+			_stash_floor()
 			depth -= 1
 			audio.play("stairs")
 			say("Du steigst hinauf - Ebene %d." % depth)
-			new_level()
+			new_level(true)
 			return
 	else:
 		return
@@ -1294,7 +1376,29 @@ func _hang_doors(where: Array) -> void:
 				continue
 			if doors.has(cell):
 				continue
+			# Never beside another door. Two in a row is the same corridor
+			# closed twice, for no reason - and it reads as a mistake, which
+			# it was.
+			var crowded := false
+			for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1),
+					Vector2i(0, -1), Vector2i(1, 1), Vector2i(1, -1),
+					Vector2i(-1, 1), Vector2i(-1, -1)]:
+				if doors.has(cell + offset):
+					crowded = true
+					break
+			if crowded:
+				continue
+			# And only in an actual doorway: floor on two opposite sides, wall
+			# on the other two. A door in the middle of a room is a frame
+			# around nothing.
+			var open_x: bool = Dungeon.is_walkable(grid, cell.x - 1, cell.y) \
+				and Dungeon.is_walkable(grid, cell.x + 1, cell.y)
+			var open_y: bool = Dungeon.is_walkable(grid, cell.x, cell.y - 1) \
+				and Dungeon.is_walkable(grid, cell.x, cell.y + 1)
+			if open_x == open_y:
+				continue
 			doors[cell] = false
+
 
 
 ## The floor cells immediately outside a room that touch it.
@@ -1527,7 +1631,11 @@ func _kill(monster) -> void:
 		_offer_perk()
 		say("Level auf! Du bist jetzt Stufe %d." % player.level)
 	if _actor_nodes.has(monster):
-		_actor_nodes[monster].queue_free()
+		var sprite = _actor_nodes[monster]
+		if _shadows.has(sprite):
+			_shadows[sprite].queue_free()
+			_shadows.erase(sprite)
+		sprite.queue_free()
 		_actor_nodes.erase(monster)
 	monsters.erase(monster)
 	_quest_progress()
@@ -2022,6 +2130,7 @@ func _spring_trap(cell: Vector2i) -> void:
 		banner("Der Boden gibt nach!", Color(0.85, 0.60, 0.30))
 		say("Du stürzt eine Ebene tiefer.")
 		_settle_quest()
+		_stash_floor()
 		depth += 1
 		new_level()
 
@@ -2649,10 +2758,25 @@ func shoot() -> void:
 		damage *= Data.CRIT_MULT
 	damage += _fire_element(target)
 	target.hp -= damage
+	_flash_monster(target)
 	target.awake = true
 	if target.x != player.x:
 		player.facing = 1 if target.x > player.x else -1
 	audio.play("hit")
+	# The bolt takes the colour of whatever is being thrown: the
+	# weapon's element if it has one, a pale arrow if it does not.
+	var shade := Color(0.95, 0.92, 0.70)
+	match player.weapon_element:
+		"fire":
+			shade = Color(1.0, 0.55, 0.20)
+		"frost":
+			shade = Color(0.55, 0.85, 1.0)
+		"lightning":
+			shade = Color(1.0, 0.95, 0.45)
+		"poison":
+			shade = Color(0.55, 0.95, 0.45)
+	_bolt(Vector2i(player.x, player.y), target.cell(), shade)
+	_sparks(target.cell(), shade, 6)
 	_damage_number(target.cell(), str(damage),
 		Color(1.0, 0.92, 0.35) if crit else Color(0.85, 0.95, 1.0))
 	_sparks(target.cell(), Color(0.85, 0.95, 1.0), 5)
@@ -2691,6 +2815,37 @@ func busy() -> bool:
 	if _perk_panel != null and _perk_panel.visible and player.pending_perks > 0:
 		return true
 	return false
+
+
+## Fires by itself when something walks into range.
+##
+## A ranged fighter who has to press a button for every shot spends the
+## whole fight pressing a button; the interesting decision is where to
+## stand, not whether to loose. So the shot happens on its own - but only
+## when the hero is otherwise idle, so it never eats a step, a potion or
+## a scroll the player asked for.
+##
+## It also never starts a fight: only things already awake are shot at.
+## Waking a room from across it by reflex is not a tactic, it is a trap.
+func _auto_shoot() -> void:
+	if busy() or player.reach() <= 0 or player.shot_cooldown > 0:
+		return
+	if not player.auto_shoot or _step_cooldown > 0.0:
+		return
+	var here := Vector2i(player.x, player.y)
+	for monster in monsters:
+		if not monster.is_alive() or not monster.awake or not lit.has(monster.cell()):
+			continue
+		var away: int = absi(monster.x - here.x) + absi(monster.y - here.y)
+		# Not at arm's length: something standing next to you is a melee
+		# problem, and shooting it would waste the shot the moment it
+		# matters most.
+		if away <= 1 or away > player.reach():
+			continue
+		if not _line_clear(here, monster.cell()):
+			continue
+		shoot()
+		return
 
 
 ## Stand still for a turn.
@@ -2747,7 +2902,10 @@ func paint() -> void:
 
 	var tint: Color = tier.get("tint", Color.WHITE)
 	_floor_layer.modulate = tint
-	_dim_layer.modulate = tint * Color(0.42, 0.42, 0.52)
+	# Remembered but unlit ground: still drawn, but colder and darker
+	# than what the lamp reaches. With the light on top, this no longer
+	# has to carry the whole difference by itself.
+	_dim_layer.modulate = tint * Color(0.52, 0.52, 0.66)
 
 	for item in items:
 		_place_item(item)
@@ -2760,6 +2918,13 @@ func paint() -> void:
 		_place_prop(cell, "wall_goo")
 	for cell in doors:
 		_place_prop(cell, "doors_leaf_open" if doors[cell] else "doors_leaf_closed")
+		# A door is part of the floor plan, so it stays on the map once
+		# seen - dimmed, like the walls around it.
+		var leaf: Sprite2D = _item_nodes.get("prop:%s" % str(cell))
+		if leaf != null:
+			leaf.visible = explored.has(cell)
+			leaf.modulate = (Color.WHITE if lit.has(cell)
+				else Color(0.52, 0.52, 0.66))
 	for cell in decor:
 		_place_prop(cell, decor[cell])
 	if captive != null:
@@ -2774,6 +2939,14 @@ func paint() -> void:
 		_place_monster(monster)
 
 	_stand_on(_hero_node, Vector2i(player.x, player.y), HERO_TILES, true)
+	_shadow_for(_hero_node, Vector2i(player.x, player.y), TILE * 1.35)
+	if _torch != null:
+		_torch.position = Vector2(player.x, player.y) * TILE + Vector2(TILE, TILE) * 0.5
+	if _stairs_light != null:
+		_stairs_light.position = Vector2(stairs) * TILE + Vector2(TILE, TILE) * 0.5
+		# Only once the stairs have been seen: a light on something
+		# nobody has found yet gives it away.
+		_stairs_light.visible = explored.has(stairs)
 	_hero_node.flip_h = player.facing < 0
 	_camera_to = Vector2(player.x, player.y) * TILE + Vector2(TILE, TILE) * 0.5
 	if _camera.position.distance_to(_camera_to) > TILE * 6.0:
@@ -2823,7 +2996,13 @@ func _place_item(item: Dictionary) -> void:
 	# the scroll and the sword are paintings several hundred pixels
 	# tall. Unscaled, a scroll on the floor covered half the room.
 	_stand_on(sprite, cell, ITEM_TILES)
-	sprite.visible = explored.has(cell)
+	# Loot stays remembered once seen - a coin you walked past is a
+	# fact about the floor, not a thing that moves - but only after
+	# it has actually been in the light once.
+	sprite.visible = lit.has(cell) or _seen_items.has(cell)
+	if lit.has(cell):
+		_seen_items[cell] = true
+	sprite.modulate = Color.WHITE if lit.has(cell) else Color(0.55, 0.55, 0.68)
 
 
 ## The sprite a piece of loot shows on the floor. A potion wears the
@@ -2856,7 +3035,11 @@ func _place_prop(cell: Vector2i, art: String) -> void:
 	var sprite: Sprite2D = _item_nodes[key]
 	sprite.texture = _sprite_for(art)
 	_stand_on(sprite, cell, PROP_TILES if art in ["merchant", "blacksmith"] else 1.0)
-	sprite.visible = explored.has(cell)
+	# Standing things are only visible where the light reaches. What is
+	# remembered is the shape of the room, not who is in it - a trader
+	# glowing in the dark on the other side of the floor gives away
+	# something nobody has seen yet.
+	sprite.visible = lit.has(cell)
 
 
 ## Puts a sprite on a cell at a given height in tiles: scaled to that
@@ -2911,6 +3094,7 @@ func _place_monster(monster) -> void:
 	var sprite: Sprite2D = _actor_nodes[monster]
 	_stand_on(sprite, monster.cell(),
 		MONSTER_TILES * (BOSS_SCALE if monster.is_boss else 1.0), true)
+	_shadow_for(sprite, monster.cell(), TILE * (2.4 if monster.is_boss else 1.45))
 	sprite.flip_h = monster.x > player.x
 	sprite.visible = lit.has(monster.cell())
 	# Asleep is worth seeing: it is the difference between walking
@@ -3095,6 +3279,7 @@ func _build_hud() -> void:
 	_banner.modulate.a = 0.0
 	_play_ui.add_child(_banner)
 
+	_build_vignette()
 	_build_minimap()
 	_build_bag_panel()
 	_build_pause_panel()
@@ -3270,6 +3455,12 @@ func _update_minimap() -> void:
 ## under the 0.16s the input allows between steps, so a held direction
 ## still looks continuous and never falls behind.
 func _glide(delta: float) -> void:
+	# A torch is not a lamp. Two slow waves of different length beat
+	# against each other, which reads as flickering without ever
+	# looking like a strobe - a random value per frame does.
+	if _torch != null:
+		_flicker += delta
+		_torch.energy = 1.75 + sin(_flicker * 5.3) * 0.06 + sin(_flicker * 2.1) * 0.05
 	if _camera != null and _camera.position != _camera_to:
 		_camera.position = _camera.position.move_toward(_camera_to, TILE * 10.0 * delta)
 	if _gliding.is_empty():
@@ -3371,6 +3562,7 @@ func _build_pause_panel() -> void:
 	_pause_music = _pause_button(column, toggle_music)
 	_pause_flash = _pause_button(column, toggle_flash)
 	_pause_pad = _pause_button(column, toggle_pad)
+	_pause_auto = _pause_button(column, toggle_auto_shoot)
 
 	var back := Button.new()
 	back.text = "WEITER"
@@ -3885,6 +4077,32 @@ func banner(text: String, colour := Color(0.91, 0.71, 0.29)) -> void:
 	_banner_fade.tween_property(_banner, "modulate:a", 0.0, 0.8)
 
 
+## A shot you can see crossing the room.
+##
+## Without it a ranged attack is a number appearing on something far
+## away, and it is never clear what hit it or from where. The bolt takes
+## about an eighth of a second - long enough to read as a line, short
+## enough that it never holds up the next turn.
+func _bolt(from_cell: Vector2i, to_cell: Vector2i, colour: Color) -> void:
+	var start := Vector2(from_cell) * TILE + Vector2(TILE, TILE) * 0.5
+	var finish := Vector2(to_cell) * TILE + Vector2(TILE, TILE) * 0.5
+	var bolt := ColorRect.new()
+	bolt.color = colour
+	bolt.size = Vector2(4.5, 2.5)
+	bolt.pivot_offset = bolt.size * 0.5
+	bolt.rotation = (finish - start).angle()
+	bolt.z_index = 4
+	bolt.position = start - bolt.size * 0.5
+	add_child(bolt)
+	# A short trail of sparks behind it, so a fast bolt still leaves a
+	# line the eye can follow.
+	var flight := create_tween()
+	flight.tween_property(bolt, "position", finish - bolt.size * 0.5, 0.12)
+	flight.parallel().tween_property(bolt, "modulate:a", 0.35, 0.12)
+	flight.tween_callback(bolt.queue_free)
+	_sparks(from_cell, colour, 3)
+
+
 ## A few specks thrown off a cell. Cheap on purpose: a handful of small
 ## rectangles, each tweened once and freed - no particle system, no
 ## per-frame work once they are on their way. The pygame build throws a
@@ -3904,6 +4122,142 @@ func _sparks(cell: Vector2i, colour: Color, count: int) -> void:
 			speck.position + away.normalized() * rng.randf_range(4.0, 11.0), 0.35)
 		flight.tween_property(speck, "modulate:a", 0.0, 0.35)
 		flight.chain().tween_callback(speck.queue_free)
+
+
+## The light the hero carries, and the dark it pushes back.
+##
+## The field of view already decides what can be seen; this is only
+## about how it looks. A flat wash of light over every visible tile reads
+## as a diagram - a lamp with a falloff reads as a place. The two work
+## together: the FOV says which tiles exist at all, the lamp says how
+## brightly.
+func _build_light() -> void:
+	_gloom = CanvasModulate.new()
+	# Dark enough that the lamp is doing visible work, not so dark that a
+	# remembered corridor disappears - the map is also information.
+	_gloom.color = Color(0.40, 0.40, 0.52)
+	add_child(_gloom)
+
+	# A radial gradient, built rather than shipped: it is four colours and
+	# a curve, and a file for that is a file to keep in step.
+	var fade := Gradient.new()
+	fade.set_offset(0, 0.0)
+	fade.set_color(0, Color(1.0, 0.94, 0.80, 1.0))
+	fade.set_offset(1, 1.0)
+	fade.set_color(1, Color(0.35, 0.30, 0.42, 0.0))
+	# A small bright core and a long fade: a torch is not a floodlight.
+	fade.add_point(0.22, Color(1.0, 0.90, 0.72, 0.92))
+	fade.add_point(0.55, Color(0.85, 0.66, 0.52, 0.45))
+	var glow := GradientTexture2D.new()
+	glow.gradient = fade
+	glow.fill = GradientTexture2D.FILL_RADIAL
+	glow.fill_from = Vector2(0.5, 0.5)
+	glow.fill_to = Vector2(1.0, 0.5)
+	glow.width = 256
+	glow.height = 256
+
+	_torch = PointLight2D.new()
+	_torch.texture = glow
+	_torch.energy = 1.75
+	_torch.texture_scale = TILE * (Data.FOV_RADIUS + 3.0) * 2.0 / 256.0
+	_torch.blend_mode = Light2D.BLEND_MODE_ADD
+	_torch.z_index = 3
+	add_child(_torch)
+
+	# A cold glow on the way down, so the eye finds it across a dark
+	# room without the map having to be read.
+	_stairs_light = PointLight2D.new()
+	_stairs_light.texture = glow
+	_stairs_light.energy = 0.85
+	_stairs_light.color = Color(0.55, 0.80, 1.0)
+	_stairs_light.texture_scale = TILE * 5.0 / 256.0
+	_stairs_light.blend_mode = Light2D.BLEND_MODE_ADD
+	_stairs_light.z_index = 3
+	add_child(_stairs_light)
+
+
+## A darkening at the edges of the screen. Cheap, and it stops the map
+## from looking like it is floating on a black desk.
+func _build_vignette() -> void:
+	_vignette = ColorRect.new()
+	_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var shade := ShaderMaterial.new()
+	var code := Shader.new()
+	code.code = """
+shader_type canvas_item;
+// Darkens towards the corners. UV is 0..1 across the rect, so the
+// distance from the middle is all this needs.
+uniform float strength : hint_range(0.0, 1.5) = 0.85;
+void fragment() {
+	float away = distance(UV, vec2(0.5)) * 1.42;
+	float shade = smoothstep(0.45, 1.0, away) * strength;
+	COLOR = vec4(0.02, 0.02, 0.05, shade);
+}
+"""
+	shade.shader = code
+	_vignette.material = shade
+	_play_ui.add_child(_vignette)
+	_play_ui.move_child(_vignette, 0)
+
+
+## A soft smudge under whatever stands on a tile.
+##
+## Sprites drawn without one look pasted onto the floor rather than
+## standing on it - the single cheapest thing that makes a flat tile map
+## read as a room. Built once and shared: it is the same grey blob for
+## everything.
+func _shadow_for(sprite: Sprite2D, cell: Vector2i, width: float) -> void:
+	if _shadow_art == null:
+		var fade := Gradient.new()
+		fade.set_offset(0, 0.0)
+		fade.set_color(0, Color(0.0, 0.0, 0.0, 0.75))
+		fade.set_offset(1, 1.0)
+		fade.set_color(1, Color(0.0, 0.0, 0.0, 0.0))
+		var blob := GradientTexture2D.new()
+		blob.gradient = fade
+		blob.fill = GradientTexture2D.FILL_RADIAL
+		blob.fill_from = Vector2(0.5, 0.5)
+		blob.fill_to = Vector2(1.0, 0.5)
+		blob.width = 64
+		blob.height = 64
+		_shadow_art = blob
+
+	var shadow: Sprite2D = _shadows.get(sprite)
+	if shadow == null or not is_instance_valid(shadow):
+		shadow = Sprite2D.new()
+		shadow.texture = _shadow_art
+		shadow.centered = true
+		# Under the feet of everything, over the floor tiles.
+		shadow.z_index = 1
+		# Lights must not brighten a shadow.
+		var dark := CanvasItemMaterial.new()
+		dark.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+		shadow.material = dark
+		add_child(shadow)
+		_shadows[sprite] = shadow
+	# Wider than the thing standing on it, or the sprite's own feet
+	# cover the whole smudge and it may as well not be there - which
+	# is exactly how the first attempt looked.
+	shadow.scale = Vector2(width / 64.0, width * 0.34 / 64.0)
+	# Follows the sprite rather than the cell, so it slides along with a
+	# step instead of jumping ahead of it.
+	shadow.position = Vector2(sprite.position.x + sprite.get_rect().size.x
+		* sprite.scale.x * 0.5, float(cell.y + 1) * TILE - 1.0)
+	shadow.visible = sprite.visible
+
+
+## A short white flare over something that has just been hit. The damage
+## number says how much; this says *that*, at the moment it happens,
+## which is what the eye actually follows in a fight.
+func _flash_monster(monster) -> void:
+	var sprite: Sprite2D = _actor_nodes.get(monster)
+	if sprite == null or not is_instance_valid(sprite):
+		return
+	var was: Color = sprite.modulate
+	sprite.modulate = Color(2.2, 2.2, 2.2)
+	var back := create_tween()
+	back.tween_property(sprite, "modulate", was, 0.16)
 
 
 ## A number that floats off a cell and fades. The cheapest way to make a
@@ -4096,6 +4450,9 @@ func _refresh_settings() -> void:
 		_pause_music.text = "Musik: %s" % ("AN" if settings["music"] else "AUS")
 		_pause_flash.text = "Roter Blitz: %s" % ("AN" if settings.get("flash", true) else "AUS")
 		_pause_pad.text = "Steuerung: %s" % ("Kreuz" if settings.get("pad", false) else "Stick")
+		_pause_auto.visible = player != null and player.reach() > 0
+		_pause_auto.text = "Automatisch schießen: %s" % (
+			"AN" if settings.get("auto_shoot", true) else "AUS")
 	if _pad_button != null:
 		_pad_button.text = "Steuerung: %s" % ("Kreuz" if settings.get("pad", false) else "Stick")
 	_music_button.text = "Musik: %s" % ("AN" if settings["music"] else "AUS")
@@ -4112,6 +4469,15 @@ func _apply_control_style() -> void:
 			else Control.MOUSE_FILTER_STOP)
 	for button in _pad_buttons:
 		button.visible = use_pad
+
+
+func toggle_auto_shoot() -> void:
+	settings["auto_shoot"] = not settings.get("auto_shoot", true)
+	if player != null:
+		player.auto_shoot = settings["auto_shoot"]
+	Settings.write(settings)
+	_refresh_settings()
+	audio.play("equip")
 
 
 func toggle_pad() -> void:
@@ -4459,19 +4825,34 @@ func _process(delta: float) -> void:
 	elif _stick != null and _stick.direction() != Vector2i.ZERO:
 		_held = _stick.direction()
 
-	# Steps run on a clock, not per frame, so the hero does not walk
-	# faster the smoother it runs - which is the number being measured.
+	# Steps run on a clock, not per frame, so the hero does not walk faster
+	# the smoother it runs.
+	#
+	# A tap is one step. Holding walks. Between the two sits a pause: the
+	# first step happens the moment a direction appears, and the next one
+	# only after REPEAT_DELAY. Without that pause a normal key press - a
+	# tenth of a second or two - already produced two steps, which is
+	# exactly what it felt like.
+	var fresh: bool = _held != Vector2i.ZERO and _held != _stepped
+	if fresh:
+		_step_cooldown = 0.0
 	if _held != Vector2i.ZERO and _step_cooldown <= 0.0:
 		try_move(_held)
 		# A diagonal covers a longer distance, so it is given proportionally
 		# longer - otherwise walking at an angle is quietly forty per cent
 		# faster than walking straight.
 		var diagonal: bool = _held.x != 0 and _held.y != 0
-		_step_cooldown = STEP_TIME * (sqrt(2.0) if diagonal else 1.0)
+		var pace: float = REPEAT_DELAY if fresh else STEP_TIME
+		_step_cooldown = pace * (sqrt(2.0) if diagonal else 1.0)
+		_stepped = _held
 		if _stick != null and _stick.direction() != Vector2i.ZERO:
 			_held = _stick.direction()
 		elif not Input.is_anything_pressed():
 			_held = Vector2i.ZERO
+	if _held == Vector2i.ZERO:
+		# Let go, and the next press counts as fresh again.
+		_stepped = Vector2i.ZERO
+		_auto_shoot()
 
 	var line := "%s  Ebene %d     HP %d/%d" % [
 		tier.get("name", ""), depth, player.hp, player.max_hp]

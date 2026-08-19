@@ -85,7 +85,9 @@ func _process(_delta: float) -> bool:
 	_check_more()
 	_check_bestiary_and_waiting()
 	_check_bow()
+	_check_auto_shoot()
 	_check_captive()
+	_check_floor_memory()
 	_check_elements()
 	_check_up_stairs()
 	_check_boss_phases()
@@ -708,6 +710,21 @@ func _check_placement() -> void:
 		things.append([_game.shrine, "Schrein"])
 	if _game.captive != null:
 		things.append([_game.captive, "Gefangener"])
+
+	# No door beside another door, and every door in a real doorway.
+	for cell in _game.doors:
+		for offset in [Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1), Vector2i(1, -1)]:
+			if _game.doors.has(cell + offset):
+				_complain("zwei Türen nebeneinander",
+					"Ebene %d: %s und %s" % [_game.depth, str(cell), str(cell + offset)])
+		var open_x: bool = Dungeon.is_walkable(_game.grid, cell.x - 1, cell.y) \
+			and Dungeon.is_walkable(_game.grid, cell.x + 1, cell.y)
+		var open_y: bool = Dungeon.is_walkable(_game.grid, cell.x, cell.y - 1) \
+			and Dungeon.is_walkable(_game.grid, cell.x, cell.y + 1)
+		if open_x == open_y:
+			_complain("Tür steht nicht in einem Durchgang",
+				"Ebene %d, %s" % [_game.depth, str(cell)])
+
 	for cell in _game.traps:
 		things.append([cell, "Falle"])
 	for cell in _game.hazards:
@@ -2400,5 +2417,147 @@ func _check_captive() -> void:
 		_complain("Gefangener bleibt gefangen")
 	if p.gold <= gold_before or p.potions <= flasks_before:
 		_complain("Befreiung bringt nichts ein")
+	_settle()
+
+
+## A floor you have been on stays the floor you were on.
+##
+## Re-rolling it on every staircase makes a dungeon into a slot machine:
+## the corridor you cleared is gone, what you left behind never existed,
+## and going back up has no meaning. So: go down, remember what the floor
+## looked like, come back, and check it is the same one - including the
+## dead staying dead.
+func _check_floor_memory() -> void:
+	_settle()
+	var p = _game.player
+	_game.floors.clear()
+	_game.depth = 3
+	_game.new_level()
+
+	var walls := 0
+	for row in _game.grid:
+		for value in row:
+			if value == Dungeon.WALL:
+				walls += 1
+	var stairs_at: Vector2i = _game.stairs
+	var up_at: Vector2i = _game.up_stairs
+	var loot: int = _game.items.size()
+
+	# Clear the floor of everything alive, so "the dead stay dead" is
+	# something the check can actually see.
+	for monster in _game.monsters.duplicate():
+		_game.monsters.erase(monster)
+
+	# Down one, then back up.
+	_game._stash_floor()
+	_game.depth = 4
+	_game.new_level()
+	_game._stash_floor()
+	_game.depth = 3
+	_game.new_level(true)
+
+	var walls_again := 0
+	for row in _game.grid:
+		for value in row:
+			if value == Dungeon.WALL:
+				walls_again += 1
+	if walls_again != walls:
+		_complain("Ebene wird beim Zurückkehren neu gewürfelt",
+			"%d Wände statt %d" % [walls_again, walls])
+	if _game.stairs != stairs_at or _game.up_stairs != up_at:
+		_complain("Treppen liegen nach der Rückkehr woanders")
+	if _game.items.size() != loot:
+		_complain("Beute ändert sich beim Zurückkehren",
+			"%d statt %d" % [_game.items.size(), loot])
+	if not _game.monsters.is_empty():
+		_complain("Erschlagene Monster stehen wieder da",
+			"%d Stück" % _game.monsters.size())
+
+	# Coming up from below puts the hero on the way down, not on the way up.
+	if Vector2i(p.x, p.y) != stairs_at:
+		_complain("Aufstieg endet nicht an der Abstiegstreppe",
+			"%s statt %s" % [str(Vector2i(p.x, p.y)), str(stairs_at)])
+
+	# And a fresh run forgets the whole dungeon.
+	_game.new_run()
+	if not _game.floors.is_empty():
+		_complain("neuer Lauf erinnert die alten Ebenen", "%d" % _game.floors.size())
+	_settle()
+
+
+## Shooting by itself: it must fire at something awake at a distance, and
+## it must not fire at something standing right next to the hero - that
+## is a melee problem, and wasting the shot there is the worst moment for
+## it.
+func _check_auto_shoot() -> void:
+	_settle()
+	var p = _game.player
+	_game.depth = 4
+	_game.new_level()
+	for other in _game.monsters.duplicate():
+		_game.monsters.erase(other)
+	var spot: Variant = _open_spot()
+	if spot == null:
+		return
+	p.x = spot.x
+	p.y = spot.y
+	p.weapon = 2
+	p.shot_cooldown = 0
+	p.auto_shoot = true
+	p.max_hp = 300
+	p.hp = 300
+	_game._step_cooldown = 0.0
+
+	# Something three tiles away, awake, with a clear line.
+	var mark = Entities.Monster.new("orc", 8.0, "easy")
+	var aimed := false
+	for offset in [Vector2i(3, 0), Vector2i(-3, 0), Vector2i(0, 3), Vector2i(0, -3)]:
+		var at: Vector2i = spot + offset
+		if not Dungeon.is_walkable(_game.grid, at.x, at.y) or _game.blocks(at):
+			continue
+		if not _game._line_clear(spot, at):
+			continue
+		mark.x = at.x
+		mark.y = at.y
+		aimed = true
+		break
+	if not aimed:
+		return
+	mark.awake = true
+	mark.snap()
+	_game.monsters.append(mark)
+	_game.recompute_fov()
+	var before: int = mark.hp
+	_game._auto_shoot()
+	if mark.is_alive() and mark.hp >= before:
+		_complain("schießt nicht von selbst")
+
+	# And now right beside the hero: no shot.
+	p.shot_cooldown = 0
+	_game._step_cooldown = 0.0
+	var close = Entities.Monster.new("orc", 8.0, "easy")
+	close.x = spot.x
+	close.y = spot.y
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var at: Vector2i = spot + offset
+		if Dungeon.is_walkable(_game.grid, at.x, at.y) and not _game.blocks(at):
+			close.x = at.x
+			close.y = at.y
+			break
+	close.awake = true
+	close.snap()
+	_game.monsters.erase(mark)
+	_game.monsters.append(close)
+	_game.recompute_fov()
+	var near_before: int = close.hp
+	_game._auto_shoot()
+	if close.hp < near_before:
+		_complain("schießt auf etwas, das direkt danebensteht")
+	_game.monsters.erase(close)
+
+	# And the mage reaches without a bow at all.
+	var mage = Entities.Player.new("mage", "normal")
+	if mage.reach() <= 0:
+		_complain("Magier hat keine Reichweite")
 	_settle()
 
