@@ -85,6 +85,7 @@ func _process(_delta: float) -> bool:
 	_check_boss_stands()
 	_check_awards()
 	_check_guarded_chest()
+	_check_shops()
 
 	# The direct checks above are deliberately rough with the game:
 	# they set the hero to 200 health, drop them next to a test
@@ -1404,4 +1405,54 @@ func _check_guarded_chest() -> void:
 		_complain("bewachte Truhe bleibt zu, obwohl der Wächter tot ist")
 	_game.monsters.erase(keeper)
 	_game.chest = null
+
+
+## Both shopkeepers, opened and read. The panel has a fixed number of
+## buttons and the offers are built per visit, so an offer added later
+## can silently fall off the end - the smith already fills every slot.
+func _check_shops() -> void:
+	_settle()
+	var p = _game.player
+	p.gold = 5000
+
+	var merchant := {"cell": Vector2i(0, 0), "kind": "merchant",
+		"stock": ["healing", "haste", "shield"], "scroll": "reveal"}
+	_game.open_shop(merchant)
+	var shown := 0
+	for button in _game._shop_buttons:
+		if button.visible:
+			shown += 1
+	if shown < 4:
+		_complain("Händler zeigt nicht alles an", "%d von 4" % shown)
+	var had: int = int(p.scrolls.get("reveal", 0))
+	_game.buy("scroll:reveal")
+	if int(p.scrolls.get("reveal", 0)) != had + 1:
+		_complain("Schriftrolle beim Händler nicht kaufbar")
+	var flasks: int = p.potions
+	_game.buy("potion:haste")
+	if p.potions != flasks + 1:
+		_complain("Trank beim Händler nicht kaufbar")
+	_game.close_shop()
+
+	_game.open_shop({"cell": Vector2i(0, 0), "kind": "smith", "stock": []})
+	shown = 0
+	for button in _game._shop_buttons:
+		if button.visible:
+			shown += 1
+	if shown < 5:
+		_complain("Schmied zeigt nicht alles an", "%d von 5" % shown)
+	var sharp: int = p.weapon_extra
+	_game.buy("weapon")
+	if p.weapon_extra <= sharp:
+		_complain("Schärfen beim Schmied wirkt nicht")
+	p.weapon_element = ""
+	_game.buy("enchant")
+	if p.weapon_element == "":
+		_complain("Verzaubern beim Schmied wirkt nicht")
+	var gold_before: int = p.gold
+	_game.buy("reforge")
+	if p.gold >= gold_before:
+		_complain("Umschmieden kostet nichts")
+	_game.close_shop()
+	_settle()
 
