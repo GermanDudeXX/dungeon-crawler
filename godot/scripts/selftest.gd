@@ -83,6 +83,7 @@ func _process(_delta: float) -> bool:
 	_check_classes()
 	_check_superboss()
 	_check_monster_habits()
+	_check_deep_kin()
 	_check_bag()
 	_check_boss_stands()
 	_check_awards()
@@ -516,6 +517,7 @@ func _fingerprint() -> String:
 		"Regen=%d/%d offen=%d" % [p.regen_counter, p.regen_interval, p.pending_perks],
 		"Treppe=%s verriegelt=%s" % [str(_game.stairs), str(_game.stairs_locked)],
 		"erkundet=%d" % _game.explored.size(),
+		"Netze=%d verstrickt=%d" % [_game.webs.size(), p.webbed],
 		"Fallen=%d Gefahren=%d Dekor=%d Laeden=%d Beute=%d" % [
 			_game.traps.size(), _game.hazards.size(), _game.decor.size(),
 			_game.shops.size(), _game.items.size()],
@@ -1128,6 +1130,165 @@ func _check_superboss() -> void:
 			_complain("Superboss ist nicht stärker",
 				"%d gegen %d Leben auf Ebene %d" % [strengths[Data.SUPERBOSS_LEVEL],
 				strengths[previous], previous])
+
+
+## The seven deeper kinds, each checked doing the one thing that makes
+## it different. They share their art with the seven above, so a habit
+## that never fires leaves a monster that is only a differently coloured
+## rat - and nothing in the numbers would show it.
+func _check_deep_kin() -> void:
+	_settle()
+	var p = _game.player
+	p.max_hp = 400
+	p.hp = 400
+	p.base_defense = 0
+	p.armour = 0
+	p.armour_extra = 0
+	p.buffs.clear()
+
+	# Every new kind has to exist, be reachable, and carry its colour.
+	for kind in ["plague_rat", "sapper_goblin", "berserk_orc", "bone_mage",
+			"fire_slime", "vampire_bat", "widow_spider"]:
+		if not Data.MONSTERS.has(kind):
+			_complain("Art fehlt in der Tabelle", kind)
+			continue
+		if not Data.SPAWN_WEIGHTS.has(kind):
+			_complain("Art kann nie erscheinen", kind)
+		var one = Entities.Monster.new(kind, 1.0, "normal")
+		if one.tint == Color.WHITE:
+			_complain("Art hat keine eigene Farbe", kind)
+
+	# Sapper: killing one beside you hurts.
+	var spot: Variant = _open_spot()
+	if spot != null:
+		var sapper = Entities.Monster.new("sapper_goblin", 1.0, "normal")
+		sapper.x = spot.x
+		sapper.y = spot.y
+		sapper.snap()
+		_game.monsters.append(sapper)
+		p.x = spot.x + 1
+		p.y = spot.y
+		var before: int = p.hp
+		_game._kill(sapper)
+		if p.hp >= before:
+			_complain("Sprengkobold richtet beim Tod nichts an")
+		p.hp = 400
+
+	# Bone mage: calls something up, and not endlessly.
+	spot = _open_spot()
+	if spot != null:
+		var mage = Entities.Monster.new("bone_mage", 1.0, "normal")
+		mage.x = spot.x
+		mage.y = spot.y
+		mage.snap()
+		_game.monsters.append(mage)
+		var had: int = _game.monsters.size()
+		for _try in 40:
+			_game._summon(mage)
+		var called: int = _game.monsters.size() - had
+		if called <= 0:
+			_complain("Knochenmagier ruft niemanden")
+		if mage.summoned > Data.SUMMON_LIMIT + 1:
+			_complain("Knochenmagier ruft ohne Grenze", "%d" % mage.summoned)
+		for other in _game.monsters.duplicate():
+			if other != mage and other.kind == "skeleton":
+				_game.monsters.erase(other)
+		_game.monsters.erase(mage)
+
+	# Berserker: hits harder once it is hurt.
+	spot = _open_spot()
+	if spot != null:
+		var orc = Entities.Monster.new("berserk_orc", 1.0, "normal")
+		orc.x = spot.x
+		orc.y = spot.y
+		orc.snap()
+		_game.monsters.append(orc)
+		p.x = spot.x + 1
+		p.y = spot.y
+		if not Dungeon.is_walkable(_game.grid, p.x, p.y):
+			p.x = spot.x
+			p.y = spot.y + 1
+		p.hp = 400
+		_game._monster_attacks(orc)
+		var healthy: int = 400 - p.hp
+		orc.hp = maxi(1, orc.max_hp / 4)
+		p.hp = 400
+		_game._monster_attacks(orc)
+		var wounded: int = 400 - p.hp
+		if wounded <= healthy:
+			_complain("Berserker schlägt verwundet nicht härter",
+				"%d gegen %d" % [wounded, healthy])
+		_game.monsters.erase(orc)
+		p.hp = 400
+
+	# Vampire bat: heals itself off what it takes.
+	spot = _open_spot()
+	if spot != null:
+		var bat = Entities.Monster.new("vampire_bat", 1.0, "normal")
+		bat.x = spot.x
+		bat.y = spot.y
+		bat.hp = 1
+		bat.snap()
+		_game.monsters.append(bat)
+		_game._monster_attacks(bat)
+		if bat.hp <= 1:
+			_complain("Vampirfledermaus saugt kein Leben ab")
+		_game.monsters.erase(bat)
+		p.hp = 400
+
+	# Fire slime: burns whoever hits it.
+	spot = _open_spot()
+	if spot != null:
+		var slime = Entities.Monster.new("fire_slime", 1.0, "normal")
+		slime.x = spot.x
+		slime.y = spot.y
+		slime.snap()
+		_game.monsters.append(slime)
+		p.poison_turns = 0
+		_game._retaliate(slime)
+		if p.poison_turns <= 0:
+			_complain("Feuerschleim verbrennt niemanden")
+		_game.monsters.erase(slime)
+		p.poison_turns = 0
+
+	# Widow: spins something sticky, and it holds.
+	spot = _open_spot()
+	if spot != null:
+		var widow = Entities.Monster.new("widow_spider", 1.0, "normal")
+		widow.x = spot.x
+		widow.y = spot.y
+		widow.snap()
+		_game.monsters.append(widow)
+		p.x = spot.x
+		p.y = spot.y
+		_game.webs.clear()
+		for _try in 40:
+			_game._spin_web(widow)
+		if _game.webs.is_empty():
+			_complain("Witwenspinne spinnt nie ein Netz")
+		else:
+			var web: Vector2i = _game.webs.keys()[0]
+			p.webbed = 0
+			_game._step_in_web(web)
+			if p.webbed <= 0:
+				_complain("Netz hält niemanden fest")
+			var was := Vector2i(p.x, p.y)
+			_game.try_move(Vector2i(1, 0))
+			if Vector2i(p.x, p.y) != was:
+				_complain("Held läuft trotz Netz einfach weiter")
+			p.webbed = 0
+		_game.webs.clear()
+		_game.monsters.erase(widow)
+
+	# And a boss is never made from something feeble: the deepest fight of
+	# a run must not be a rat with three times the health of a rat.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = _seed
+	for _try in 30:
+		var kind := Data.pick_boss_kind(20, rng)
+		if int(Data.MONSTERS[kind]["hp"]) < 9:
+			_complain("Boss aus einer schwachen Art", kind)
+	_settle()
 
 
 ## Each kind of monster has to actually do the thing its entry claims.

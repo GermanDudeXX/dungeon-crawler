@@ -40,6 +40,7 @@ static func write(game) -> void:
 			"awake": m.awake, "boss": m.is_boss, "mimic": m.is_mimic, "keeper": m.is_keeper,
 			"burn": m.burn_turns, "slow": m.slow_turns, "stun": m.stun_turns,
 			"regen": m.regen, "elite": m.is_elite, "generation": m.generation,
+			"summoned": m.summoned, "enraged": m.enraged,
 			"weaken": m.weaken_turns, "venom": m.venom_turns, "bleed": m.bleed_turns,
 		})
 
@@ -56,6 +57,10 @@ static func write(game) -> void:
 		items.append({"x": item["cell"].x, "y": item["cell"].y,
 			"kind": item["kind"], "amount": item.get("amount", 0),
 			"potion": item.get("potion", ""), "scroll": item.get("scroll", "")})
+
+	var webs: Array = []
+	for cell in game.webs:
+		webs.append([cell.x, cell.y])
 
 	var hazards: Array = []
 	for cell in game.hazards:
@@ -83,6 +88,7 @@ static func write(game) -> void:
 		"shrine": null if game.shrine == null else [game.shrine.x, game.shrine.y],
 		"decor": decor,
 		"hazards": hazards,
+		"webs": webs,
 		"explored": explored,
 		"monsters": monsters,
 		"items": items,
@@ -101,7 +107,7 @@ static func write(game) -> void:
 			"weapon_element": p.weapon_element,
 			"level": p.level, "xp": p.xp, "xp_to_next": p.xp_to_next,
 			"potions": p.potions, "gold": p.gold, "kills": p.kills,
-			"facing": p.facing, "poison_turns": p.poison_turns,
+			"facing": p.facing, "poison_turns": p.poison_turns, "webbed": p.webbed,
 			"bonus_crit": p.bonus_crit, "damage_reduction": p.damage_reduction,
 			"gold_mult": p.gold_mult, "regen_interval": p.regen_interval,
 			"regen_counter": p.regen_counter, "pending_perks": p.pending_perks,

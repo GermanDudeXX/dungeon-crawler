@@ -49,6 +49,7 @@ class Player extends Actor:
 	var kills := 0
 	var facing := 1
 	var poison_turns := 0
+	var webbed := 0                 ## turns spent tearing free
 	var bonus_crit := 0.0
 	var damage_reduction := 0.0
 	var gold_mult := 1.0
@@ -229,6 +230,15 @@ class Monster extends Actor:
 	var kites := false              ## and backs away when you get close
 	var kited := 0                  ## steps taken back in a row
 	var sets_traps := false
+	var explodes := 0               ## damage it deals when it dies
+	var summons := ""              ## kind it calls for help
+	var summoned := 0               ## how many it has out
+	var enrages := 0.0              ## power multiplier below half health
+	var enraged := false
+	var burns_toucher := 0          ## sets its attacker alight
+	var drains := 0.0               ## heals itself by this share of a hit
+	var webs := false               ## leaves something sticky behind
+	var tint := Color.WHITE
 	var splits := false             ## breaks in two when killed
 	var generation := 0             ## how many splits deep this one is
 	var weak: Array = []            ## elements it fears
@@ -255,6 +265,15 @@ class Monster extends Actor:
 		ranged = info.get("ranged", false)
 		kites = info.get("kites", false)
 		sets_traps = info.get("sets_traps", false)
+		explodes = int(info.get("explodes", 0))
+		summons = str(info.get("summons", ""))
+		enrages = float(info.get("enrages", 0.0))
+		burns_toucher = int(info.get("burns_toucher", 0))
+		drains = float(info.get("drains", 0.0))
+		webs = info.get("webs", false)
+		if info.has("tint"):
+			var shade: Array = info["tint"]
+			tint = Color(shade[0], shade[1], shade[2])
 		splits = info.get("splits", false)
 		weak = info.get("weak", [])
 		resist = info.get("resist", [])

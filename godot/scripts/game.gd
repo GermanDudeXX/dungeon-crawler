@@ -60,6 +60,7 @@ var traps := {}                 ## cell -> trap id
 var chest = null                ## {cell, mimic, opened}
 var shops: Array = []           ## {cell, kind}
 var stairs_locked := false
+var webs := {}                   ## cell -> a widow's web, walked into once
 var hazards := {}               ## cell -> a standing danger, in plain sight
 var decor := {}                  ## cell -> a sprite that is only scenery
 var shrine = null                ## the cell holding this floor's shrine, or null
@@ -272,6 +273,7 @@ func load_run() -> bool:
 	player.kills = int(p["kills"])
 	player.facing = int(p["facing"])
 	player.poison_turns = int(p["poison_turns"])
+	player.webbed = int(p.get("webbed", 0))
 	player.bonus_crit = float(p.get("bonus_crit", 0.0))
 	player.damage_reduction = float(p.get("damage_reduction", 0.0))
 	player.gold_mult = float(p.get("gold_mult", 1.0))
@@ -317,6 +319,9 @@ func load_run() -> bool:
 	var up: Variant = save.get("up_stairs", null)
 	up_stairs = Vector2i(int(up[0]), int(up[1])) if up != null else Vector2i(player.x, player.y)
 	stairs_locked = bool(save["stairs_locked"])
+	webs.clear()
+	for entry in save.get("webs", []):
+		webs[Vector2i(int(entry[0]), int(entry[1]))] = true
 	hazards.clear()
 	for entry in save.get("hazards", []):
 		hazards[Vector2i(int(entry[0]), int(entry[1]))] = str(entry[2])
@@ -385,6 +390,8 @@ func load_run() -> bool:
 		# Without this a half-slime that was saved comes back able to
 		# split twice more.
 		monster.generation = int(entry.get("generation", 0))
+		monster.summoned = int(entry.get("summoned", 0))
+		monster.enraged = bool(entry.get("enraged", false))
 		monster.snap()
 		monsters.append(monster)
 
@@ -504,7 +511,7 @@ func _populate() -> void:
 	if Data.has_boss(depth):
 		var boss_cell = _free_cell([rooms[-1]] if not rooms.is_empty() else spawn_rooms)
 		if boss_cell != null:
-			var boss := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"], difficulty)
+			var boss := Entities.Monster.new(Data.pick_boss_kind(depth, rng), tier["mult"], difficulty)
 			boss.x = boss_cell.x
 			boss.y = boss_cell.y
 			boss.max_hp = int(boss.max_hp * Data.BOSS_HP_MULT)
@@ -537,7 +544,7 @@ func _populate() -> void:
 	if Data.has_mini_boss(depth):
 		var mini_cell = _free_cell(spawn_rooms)
 		if mini_cell != null:
-			var mini := Entities.Monster.new(Data.pick_kind(depth, rng), tier["mult"], difficulty)
+			var mini := Entities.Monster.new(Data.pick_boss_kind(depth, rng), tier["mult"], difficulty)
 			mini.x = mini_cell.x
 			mini.y = mini_cell.y
 			mini.max_hp = int(mini.max_hp * Data.MINI_BOSS_MULT)
@@ -598,6 +605,7 @@ func _populate() -> void:
 	# Standing hazards: visible from the moment the tile is, so they are
 	# something to walk around rather than something to discover. That is
 	# the whole difference from a trap.
+	webs.clear()
 	hazards.clear()
 	var hazard_kinds: Array = Data.hazards_for(depth)
 	if not hazard_kinds.is_empty():
@@ -847,7 +855,7 @@ func taken(cell: Vector2i) -> bool:
 		return true
 	if shrine != null and shrine == cell:
 		return true
-	if decor.has(cell) or hazards.has(cell):
+	if decor.has(cell) or hazards.has(cell) or webs.has(cell):
 		return true
 	return shop_at(cell) != null
 
@@ -928,6 +936,15 @@ func _line_clear(from: Vector2i, to: Vector2i) -> bool:
 # --- the turn -------------------------------------------------------------
 
 func try_move(step: Vector2i) -> void:
+	# Caught in a web: the turn is spent tearing free instead of
+	# moving, and the monsters get their turn anyway.
+	if player != null and player.webbed > 0 and not dead and not choosing:
+		player.webbed -= 1
+		say("Du reißt dich aus dem Netz.")
+		enemy_turn()
+		recompute_fov()
+		paint()
+		return
 	if dead or choosing or step == Vector2i.ZERO or shop_open != null:
 		return
 	if player.pending_perks > 0 and _perk_panel != null and _perk_panel.visible:
@@ -969,6 +986,7 @@ func try_move(step: Vector2i) -> void:
 		_pick_up(target)
 		_open_chest(target)
 		_spring_trap(target)
+		_step_in_web(target)
 		_step_in_hazard(target)
 		_touch_shrine(target)
 		if dead:
@@ -1071,10 +1089,99 @@ func _fire_element(monster) -> int:
 	say("%s: %s!" % [Data.ELEMENTS[id]["name"], monster.display_name])
 	return maxi(1, int(round(float(element["damage"]) * factor)))
 
+
+
+## A sapper leaves a crater. Everything beside it takes the blast - the
+## hero included, which is what makes killing one next to you a mistake
+## rather than a formality.
+func _explode(monster) -> void:
+	var here: Vector2i = monster.cell()
+	audio.play("boss")
+	_sparks(here, Color(1.0, 0.70, 0.25), 18)
+	_shake(3.0)
+	banner("%s geht hoch!" % monster.display_name, Color(1.0, 0.70, 0.25))
+	for other in monsters.duplicate():
+		if other == monster or not other.is_alive():
+			continue
+		if absi(other.x - here.x) > 1 or absi(other.y - here.y) > 1:
+			continue
+		other.hp -= monster.explodes
+		if not other.is_alive():
+			_kill(other)
+	if absi(player.x - here.x) <= 1 and absi(player.y - here.y) <= 1 and not dead:
+		var hurt: int = maxi(1, monster.explodes - player.defense())
+		player.hp -= hurt
+		_damage_number(Vector2i(player.x, player.y), "-%d" % hurt, Color(1.0, 0.55, 0.20))
+		_hurt_flash()
+		say("Die Explosion trifft dich für %d." % hurt)
+		if player.hp <= 0:
+			player.hp = 0
+			dead = true
+			Save.wipe()
+			audio.play("death")
+			_show_death()
+
+
+## A bone mage calls up help - but only so much of it, and only beside
+## itself. Without the limit a single mage turns a floor into a wall of
+## skeletons while you are still walking towards it.
+func _summon(monster) -> void:
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
+			Vector2i(1, 1), Vector2i(-1, -1)]:
+		var spot: Vector2i = monster.cell() + offset
+		if not Dungeon.is_walkable(grid, spot.x, spot.y) or blocks(spot):
+			continue
+		if occupied(spot) or spot == Vector2i(player.x, player.y):
+			continue
+		var called := Entities.Monster.new(monster.summons, tier["mult"], difficulty)
+		called.x = spot.x
+		called.y = spot.y
+		called.awake = true
+		# Half the experience: a summoned skeleton is a nuisance, not a
+		# renewable source of levels.
+		called.xp_reward = maxi(1, called.xp_reward / 2)
+		called.snap()
+		monsters.append(called)
+		monster.summoned += 1
+		if lit.has(monster.cell()):
+			say("%s ruft Verstärkung." % monster.display_name)
+		return
+
+
+## A widow spins a web on a cell near the hero. Walking into it costs
+## you a few turns of speed rather than health - a different kind of
+## trouble from everything else on the floor.
+func _spin_web(monster) -> void:
+	var here := Vector2i(player.x, player.y)
+	for offset in [Vector2i.ZERO, Vector2i(1, 0), Vector2i(-1, 0),
+			Vector2i(0, 1), Vector2i(0, -1)]:
+		var spot: Vector2i = here + offset
+		if not Dungeon.is_walkable(grid, spot.x, spot.y) or blocks(spot):
+			continue
+		if taken(spot) or spot == stairs or spot == up_stairs:
+			continue
+		webs[spot] = true
+		if lit.has(spot):
+			say("%s spinnt ein Netz." % monster.display_name)
+		return
+
+
+## Walked into a web: it holds for a few turns, and it is used up.
+func _step_in_web(cell: Vector2i) -> void:
+	if not webs.has(cell):
+		return
+	webs.erase(cell)
+	player.webbed = maxi(player.webbed, Data.WEB_SLOW)
+	audio.play("denied")
+	say("Du hängst im Netz fest.")
+
+
 ## A monster dies: experience, the level-up that may follow, and the
 ## sprite. Anything that can kill goes through here - a thrown flask
 ## that skipped this step handed out no experience at all.
 func _kill(monster) -> void:
+	if monster.explodes > 0:
+		_explode(monster)
 	_sparks(monster.cell(), Color(0.85, 0.30, 0.28), 16)
 	# A slime does not die the first time: it comes apart into two
 	# smaller ones. Two generations deep and there is nothing left to
@@ -1209,6 +1316,11 @@ func enemy_turn() -> void:
 				break
 			if monster.sets_traps and rng.randf() < Data.TRAP_CHANCE:
 				_monster_sets_trap(monster)
+			if monster.webs and reach <= 4 and rng.randf() < Data.WEB_CHANCE:
+				_spin_web(monster)
+			if monster.summons != "" and monster.summoned < Data.SUMMON_LIMIT \
+					and rng.randf() < Data.SUMMON_CHANCE:
+				_summon(monster)
 			var step := towards
 			if monster.is_fleeing():
 				step = -step
@@ -1293,6 +1405,17 @@ func _monster_sets_trap(monster) -> void:
 
 func _monster_attacks(monster) -> void:
 	var hits_for: int = monster.power
+	# Rage is read from health rather than latched when it crosses the
+	# line, so a healed berserker calms down again - the same rule the
+	# boss phases follow.
+	if monster.enrages > 0.0 and monster.hp <= monster.max_hp / 2:
+		hits_for = int(round(hits_for * monster.enrages))
+		if not monster.enraged:
+			monster.enraged = true
+			audio.play("boss")
+			say("%s gerät in Rage." % monster.display_name)
+	elif monster.enrages > 0.0:
+		monster.enraged = false
 	if monster.is_boss:
 		# A cornered boss swings harder. Announced once per phase, not
 		# once per swing, or the log is nothing but rage.
@@ -1319,6 +1442,11 @@ func _monster_attacks(monster) -> void:
 			_retaliate(monster)
 			return
 	player.hp -= damage
+	# Some things feed on what they take.
+	if monster.drains > 0.0 and monster.hp < monster.max_hp:
+		var drawn: int = maxi(1, int(round(damage * monster.drains)))
+		monster.hp = mini(monster.max_hp, monster.hp + drawn)
+		_damage_number(monster.cell(), "+%d" % drawn, Color(0.95, 0.45, 0.60))
 	_damage_number(Vector2i(player.x, player.y), "-%d" % damage, Color(1.0, 0.35, 0.32))
 	_hurt_flash()
 	_shake(1.5)
@@ -1337,6 +1465,11 @@ func _monster_attacks(monster) -> void:
 ## sets them alight. Both fire whether or not the blow got through the
 ## shield - they answer the attack, not the damage.
 func _retaliate(monster) -> void:
+	# Some things are hot to the touch. This is the monster's answer to
+	# being hit, so it fires before thorns - which is the hero's.
+	if monster.burns_toucher > 0 and not dead:
+		player.poison_turns = maxi(player.poison_turns, monster.burns_toucher)
+		say("%s verbrennt dich beim Zuschlagen." % monster.display_name)
 	var thorns := int(player.buff_total("thorns"))
 	if thorns > 0 and monster.is_alive():
 		monster.hp -= thorns
@@ -1999,6 +2132,8 @@ func paint() -> void:
 			else "chest_full_open_anim_f0")
 	for cell in hazards:
 		_place_prop(cell, Data.HAZARDS[hazards[cell]]["tile"])
+	for cell in webs:
+		_place_prop(cell, "wall_goo")
 	for cell in decor:
 		_place_prop(cell, decor[cell])
 	if shrine != null:
@@ -2164,7 +2299,7 @@ func _place_monster(monster) -> void:
 	elif monster.is_elite:
 		sprite.modulate = Color(1.0, 0.92, 0.55)
 	else:
-		sprite.modulate = Color.WHITE
+		sprite.modulate = monster.tint
 
 	var bar: ColorRect = sprite.get_node_or_null("health")
 	if bar != null:

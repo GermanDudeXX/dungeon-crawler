@@ -49,6 +49,47 @@ const MONSTERS := {
 		"hp": 7, "power": 3, "defense": 0, "xp": 9, "name": "Spinne",
 		"poisons": true, "sprite": "spider", "resist": ["poison"],
 	},
+	# --- deeper kin ------------------------------------------------------
+	# Seven more, each a cousin of one of the seven above: the same
+	# silhouette, a colour of its own and a habit the original does not
+	# have. Cheaper than seven more paintings, and a familiar shape that
+	# behaves differently is a better surprise than an unfamiliar one.
+	"plague_rat": {
+		"hp": 7, "power": 3, "defense": 0, "xp": 9, "name": "Pestratte",
+		"sprite": "rat", "tint": [0.62, 0.95, 0.55], "poisons": true,
+		"swarms": [2, 4], "resist": ["poison"],
+	},
+	"sapper_goblin": {
+		"hp": 9, "power": 3, "defense": 1, "xp": 13, "name": "Sprengkobold",
+		"sprite": "goblin", "tint": [1.0, 0.85, 0.35], "explodes": 8,
+		"sets_traps": true,
+	},
+	"berserk_orc": {
+		"hp": 18, "power": 6, "defense": 2, "xp": 22, "name": "Berserker-Ork",
+		"sprite": "orc", "tint": [1.0, 0.45, 0.40], "enrages": 1.6,
+		"weak": ["frost"],
+	},
+	"bone_mage": {
+		"hp": 12, "power": 4, "defense": 1, "xp": 26, "name": "Knochenmagier",
+		"sprite": "skeleton", "tint": [0.75, 0.60, 1.0], "ranged": true,
+		"kites": true, "summons": "skeleton", "resist": ["poison"],
+		"weak": ["fire"],
+	},
+	"fire_slime": {
+		"hp": 11, "power": 3, "defense": 0, "xp": 15, "name": "Feuerschleim",
+		"sprite": "slime", "tint": [1.0, 0.55, 0.25], "splits": true,
+		"burns_toucher": 3, "resist": ["fire"], "weak": ["frost"],
+	},
+	"vampire_bat": {
+		"hp": 9, "power": 4, "defense": 0, "xp": 16, "name": "Vampirfledermaus",
+		"sprite": "bat", "tint": [1.0, 0.50, 0.62], "speed": 2,
+		"drains": 0.5, "swarms": [2, 3], "weak": ["lightning"],
+	},
+	"widow_spider": {
+		"hp": 13, "power": 5, "defense": 1, "xp": 24, "name": "Witwenspinne",
+		"sprite": "spider", "tint": [0.60, 0.75, 1.0], "poisons": true,
+		"webs": true, "resist": ["poison"],
+	},
 }
 
 ## Which kinds may appear at which depth, and how likely - the deeper
@@ -58,6 +99,12 @@ const SPAWN_WEIGHTS := {
 	"rat": [1, 3.0], "goblin": [1, 2.0], "orc": [2, 2.0],
 	"skeleton": [3, 1.0], "slime": [2, 1.5], "bat": [1, 1.2],
 	"spider": [3, 1.0],
+	# The deeper kin, gated behind the depth where their habit stops
+	# being a curiosity and starts being a problem.
+	"plague_rat": [4, 1.2], "sapper_goblin": [5, 1.0],
+	"berserk_orc": [6, 1.2], "bone_mage": [8, 0.9],
+	"fire_slime": [6, 1.0], "vampire_bat": [7, 1.0],
+	"widow_spider": [9, 0.9],
 }
 
 const WEAPONS := [
@@ -140,6 +187,10 @@ const SPLIT_CHILD_MULT := 0.5       ## what is left of a slime it split from
 const WEAK_MULT := 2.0              ## elemental damage against a weakness
 const RESIST_MULT := 0.5
 const TRAP_CHANCE := 0.12           ## per goblin turn
+const SUMMON_CHANCE := 0.18         ## per bone mage turn
+const SUMMON_LIMIT := 3             ## how many it may have out at once
+const WEB_CHANCE := 0.22            ## per widow turn
+const WEB_SLOW := 3                 ## turns a web holds you
 const POISON_PER_TURN := 2
 
 ## What a shopkeeper sells, and what a smith charges. Prices rise with
@@ -607,4 +658,26 @@ static func hazards_for(level: int) -> Array:
 		if int(HAZARDS[id]["min_level"]) <= level:
 			out.append(id)
 	return out
+
+
+## The kind a boss is made from. Not the same roll as an ordinary
+## monster: with fourteen kinds in the table, a plain roll can crown a
+## rat, and the deepest fight of a run then has less health than the
+## floor above it. Only the sturdier half of what this depth has
+## unlocked is eligible.
+static func pick_boss_kind(level: int, rng: RandomNumberGenerator) -> String:
+	var toughest := 0
+	for kind in MONSTERS:
+		if SPAWN_WEIGHTS.has(kind) and int(SPAWN_WEIGHTS[kind][0]) > level:
+			continue
+		toughest = maxi(toughest, int(MONSTERS[kind]["hp"]))
+	var pool: Array[String] = []
+	for kind in MONSTERS:
+		if SPAWN_WEIGHTS.has(kind) and int(SPAWN_WEIGHTS[kind][0]) > level:
+			continue
+		if int(MONSTERS[kind]["hp"]) * 2 >= toughest:
+			pool.append(kind)
+	if pool.is_empty():
+		return pick_kind(level, rng)
+	return pool[rng.randi() % pool.size()]
 
