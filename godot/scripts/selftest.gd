@@ -541,6 +541,14 @@ func _check_audio() -> void:
 ## makes one of them unreachable, and neither shows up as a crash - the
 ## floor simply quietly holds less than it should.
 func _check_placement() -> void:
+	# A floor may hold its allowance plus the deliberate extras: one
+	# boss or mini-boss and a vault full of guards. Anything beyond that
+	# is a leak - the swarms once tripled the population of the first
+	# floor, and the game quietly became unwinnable.
+	var allowed: int = Data.monster_count(_game.depth) + 1 + Data.VAULT_GUARDS[1]
+	if _game.monsters.size() > allowed:
+		_complain("zu viele Monster auf einer Ebene",
+			"Ebene %d: %d, erlaubt %d" % [_game.depth, _game.monsters.size(), allowed])
 	# The stairs have to be walkable to, with every shopkeeper counted
 	# as a wall - they are one. A floor that fails this is a floor the
 	# run ends on.

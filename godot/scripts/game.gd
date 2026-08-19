@@ -84,6 +84,8 @@ var _dead_text: Label
 var _sound_button: Button
 var _difficulty_button: Button
 var _flash_button: Button
+var _record_label: Label
+var _hint_label: Label
 var _drink_button: Button
 var _bag_panel: PanelContainer
 var _bag_list: VBoxContainer
@@ -372,6 +374,8 @@ func save_run() -> void:
 
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_GO_BACK_REQUEST and close_topmost():
+		return
 	if what == NOTIFICATION_WM_CLOSE_REQUEST \
 			or what == NOTIFICATION_APPLICATION_PAUSED \
 			or what == NOTIFICATION_WM_GO_BACK_REQUEST:
@@ -431,7 +435,15 @@ func _clear_level_nodes() -> void:
 
 func _populate() -> void:
 	var spawn_rooms: Array = rooms.slice(1) if rooms.size() > 1 else rooms
-	for _i in Data.monster_count(depth):
+	# Counted, not looped: a swarm is part of the floor's allowance, not
+	# an extra on top of it. Adding the pack members outside the count
+	# put eight monsters on a floor meant to hold three, and the first
+	# floor stopped being a first floor.
+	var wanted: int = Data.monster_count(depth)
+	var placed := 0
+	var tries := 0
+	while placed < wanted and tries < wanted * 4:
+		tries += 1
 		var cell: Variant = _free_cell(spawn_rooms)
 		if cell == null:
 			continue
@@ -442,7 +454,7 @@ func _populate() -> void:
 			monster.make_elite(Data.ELITES[rng.randi() % Data.ELITES.size()])
 		monster.snap()
 		monsters.append(monster)
-		_swarm_around(monster, cell, spawn_rooms)
+		placed += 1 + _swarm_around(monster, cell, wanted - placed - 1)
 
 	# The boss holds the key, so it is placed first and far from the
 	# hero - a floor you have to finish rather than cross.
@@ -626,19 +638,21 @@ func _populate() -> void:
 ## Rats and bats do not turn up alone. The rest of the pack goes beside
 ## the first one rather than anywhere on the floor, so a swarm reads as
 ## a swarm instead of as five separate rats.
-func _swarm_around(monster, cell: Vector2i, where: Array) -> void:
+func _swarm_around(monster, cell: Vector2i, room_left: int) -> int:
 	var info: Dictionary = Data.MONSTERS[monster.kind]
-	if not info.has("swarms"):
-		return
+	if not info.has("swarms") or room_left <= 0:
+		return 0
 	var span: Array = info["swarms"]
-	var count: int = rng.randi_range(int(span[0]), int(span[1])) - 1
+	var count: int = mini(room_left,
+		rng.randi_range(int(span[0]), int(span[1])) - 1)
+	var made := 0
 	var spots: Array[Vector2i] = []
 	for dy in range(-2, 3):
 		for dx in range(-2, 3):
 			spots.append(cell + Vector2i(dx, dy))
 	for spot in spots:
 		if count <= 0:
-			return
+			return made
 		if not Dungeon.is_walkable(grid, spot.x, spot.y) or blocks(spot):
 			continue
 		if occupied(spot) or taken(spot) or spot == Vector2i(player.x, player.y):
@@ -649,6 +663,9 @@ func _swarm_around(monster, cell: Vector2i, where: Array) -> void:
 		friend.snap()
 		monsters.append(friend)
 		count -= 1
+		made += 1
+	return made
+
 
 ## Whether the floor, as it stands right now, has cut something off from
 ## the hero. Asked after every solid piece of scenery is put down.
@@ -1789,7 +1806,7 @@ func cycle_potion() -> void:
 
 func say(line: String) -> void:
 	log_lines.append(line)
-	while log_lines.size() > 4:
+	while log_lines.size() > 6:
 		log_lines.remove_at(0)
 
 
@@ -2019,6 +2036,8 @@ func _build_hud() -> void:
 		var label := Label.new()
 		label.name = name
 		label.add_theme_font_size_override("font_size", 22)
+		label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+		label.add_theme_constant_override("outline_size", 5)
 		label.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
 		_play_ui.add_child(label)
 	_play_ui.get_node("stats").position = Vector2(14, 8)
@@ -2030,8 +2049,8 @@ func _build_hud() -> void:
 
 	var log_label: Label = _play_ui.get_node("log")
 	log_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	log_label.position = Vector2(-620, -170)
-	log_label.custom_minimum_size = Vector2(600, 130)
+	log_label.position = Vector2(-660, -300)
+	log_label.custom_minimum_size = Vector2(640, 190)
 	log_label.add_theme_color_override("font_color", Color(0.80, 0.80, 0.86))
 
 	var pad := 28.0
@@ -2290,6 +2309,51 @@ func _glide(delta: float) -> void:
 		sprite.position = sprite.position.move_toward(where, speed)
 		if sprite.position.is_equal_approx(where):
 			_gliding.erase(sprite)
+
+## Keys, for playing on the machine this is built on. The phone has
+## buttons for all of it; a keyboard should not need them.
+##
+## Escape closes whatever is open rather than quitting - on Android the
+## same job is done by the back gesture, and a back gesture that ended
+## the app while a shop was open would be a very rude shop.
+func _unhandled_key_input(event: InputEvent) -> void:
+	if not event.is_pressed() or event.is_echo():
+		return
+	var key := (event as InputEventKey).keycode
+	match key:
+		KEY_ESCAPE:
+			if not close_topmost():
+				show_title()
+		KEY_G:
+			drink()
+		KEY_T:
+			if _bag_panel != null and _bag_panel.visible:
+				close_bag()
+			else:
+				open_bag()
+		KEY_Q:
+			cycle_potion()
+		KEY_1, KEY_2, KEY_3:
+			var at: int = key - KEY_1
+			if at < Data.SCROLLS.size():
+				read_scroll(Data.SCROLLS[at]["id"])
+
+
+## Shuts the topmost thing that is open and says whether there was one.
+## The order is the order they sit in front of each other.
+func close_topmost() -> bool:
+	if _bag_panel != null and _bag_panel.visible:
+		close_bag()
+		return true
+	if shop_open != null:
+		close_shop()
+		return true
+	if _perk_panel != null and _perk_panel.visible:
+		# Not closable: the gift has to be taken. Reporting it as handled
+		# keeps Escape from dropping the run instead.
+		return true
+	return false
+
 
 ## The bag: everything carried, on one screen, each line a button.
 ##
@@ -2574,13 +2638,13 @@ func _build_settings(column: VBoxContainer) -> void:
 	column.add_child(row)
 
 	_sound_button = Button.new()
-	_sound_button.custom_minimum_size = Vector2(280, 62)
+	_sound_button.custom_minimum_size = Vector2(230, 62)
 	_sound_button.add_theme_font_size_override("font_size", 24)
 	_sound_button.pressed.connect(toggle_sound)
 	row.add_child(_sound_button)
 
 	_music_button = Button.new()
-	_music_button.custom_minimum_size = Vector2(280, 62)
+	_music_button.custom_minimum_size = Vector2(230, 62)
 	_music_button.add_theme_font_size_override("font_size", 24)
 	_music_button.pressed.connect(toggle_music)
 	row.add_child(_music_button)
@@ -2588,14 +2652,14 @@ func _build_settings(column: VBoxContainer) -> void:
 	# The difficulty sits with the other switches rather than on a page
 	# of its own: it is picked once, in the same breath as the sound.
 	_difficulty_button = Button.new()
-	_difficulty_button.custom_minimum_size = Vector2(360, 62)
+	_difficulty_button.custom_minimum_size = Vector2(320, 62)
 	_difficulty_button.add_theme_font_size_override("font_size", 24)
 	_difficulty_button.pressed.connect(cycle_difficulty)
 	row.add_child(_difficulty_button)
 
 	# The red wash is the one effect people ask to turn off.
 	_flash_button = Button.new()
-	_flash_button.custom_minimum_size = Vector2(300, 62)
+	_flash_button.custom_minimum_size = Vector2(260, 62)
 	_flash_button.add_theme_font_size_override("font_size", 24)
 	_flash_button.pressed.connect(toggle_flash)
 	row.add_child(_flash_button)
@@ -2722,7 +2786,10 @@ func _build_title_panel() -> void:
 		blurb.text = info["blurb"]
 		blurb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		blurb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		blurb.custom_minimum_size = Vector2(280, 64)
+		# Tall enough for three lines: the longest blurb wraps to three,
+		# and a card that grows pushes its own button out of line with
+		# the others.
+		blurb.custom_minimum_size = Vector2(280, 96)
 		blurb.add_theme_font_size_override("font_size", 20)
 		blurb.add_theme_color_override("font_color", Color(0.80, 0.80, 0.86))
 		card.add_child(blurb)
@@ -2737,6 +2804,23 @@ func _build_title_panel() -> void:
 
 	_build_settings(column)
 
+	# The record so far, under the choice. A dead run leaves nothing
+	# else behind, and this is the line that makes the next one worth
+	# starting.
+	_hint_label = Label.new()
+	_hint_label.text = "Laufen: Pfeiltasten oder das Steuerkreuz. In einen Gegner laufen greift an.
+Treppe hinab = tiefer. Tasche zeigt Tränke und Rollen."
+	_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hint_label.add_theme_font_size_override("font_size", 20)
+	_hint_label.add_theme_color_override("font_color", Color(0.72, 0.72, 0.80))
+	column.add_child(_hint_label)
+
+	_record_label = Label.new()
+	_record_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_record_label.add_theme_font_size_override("font_size", 22)
+	_record_label.add_theme_color_override("font_color", Color(0.66, 0.66, 0.74))
+	column.add_child(_record_label)
+
 
 ## Puts the title screen back up and rolls a fresh floor behind it, so
 ## the choice is never made against the corpse of the last run.
@@ -2750,6 +2834,18 @@ func show_title() -> void:
 	close_shop()
 	if _continue_button != null:
 		_continue_button.visible = Save.exists()
+	if _hint_label != null:
+		# Only for someone who has never played: after the first run it is
+		# a line of instructions in the way.
+		_hint_label.visible = int(Stats.read()["runs"]) == 0
+	if _record_label != null:
+		var record := Stats.read()
+		if int(record["runs"]) == 0:
+			_record_label.text = "Noch kein Lauf. Viel Glück."
+		else:
+			_record_label.text = "%d Läufe, %d Tode - am tiefsten: Ebene %d, beste Stufe %d, %d Kills" % [
+				int(record["runs"]), int(record["deaths"]), int(record["deepest"]),
+				int(record["best_level"]), int(record["kills"])]
 	if _play_ui != null:
 		_play_ui.visible = false
 	if _title_panel != null:
