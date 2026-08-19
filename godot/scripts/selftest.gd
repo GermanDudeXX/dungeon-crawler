@@ -156,14 +156,19 @@ func _process(_delta: float) -> bool:
 		var what := "Treppe"
 		# Loot lying on the floor gets picked up: a bot that walks past
 		# it never carries a scroll, and scrolls are then untested.
+		# Always the same piece, not the nearest one. Nearest flip-flops:
+		# one step towards A makes B the nearer, one step back makes A
+		# nearer again, and the bot walks between two coins until the
+		# floor times out. That looked exactly like an unfinishable
+		# level and was not one.
 		var loot_cell: Variant = null
-		var loot_away := 1 << 30
+		var loot_key := 1 << 30
 		for item in _game.items:
-			var away: int = Vector2i(item["cell"]).distance_squared_to(
-				Vector2i(_game.player.x, _game.player.y))
-			if away < loot_away:
-				loot_away = away
-				loot_cell = item["cell"]
+			var cell: Vector2i = item["cell"]
+			var key: int = cell.y * 1000 + cell.x
+			if key < loot_key:
+				loot_key = key
+				loot_cell = cell
 
 		# A shrine is a coin flip worth taking, so a player takes it.
 		if _game.shrine != null:
@@ -254,8 +259,21 @@ func _process(_delta: float) -> bool:
 		else:
 			on_this_floor += 1
 			if on_this_floor > 600:
+				var cells_note: Array[String] = []
+				for item in _game.items:
+					cells_note.append("%s%s" % [item["kind"], str(item["cell"])])
+				_notes.append("  steckt: Held (%d,%d) Ziel %s (%s), Treppe %s, Beute [%s], Truhe %s, Schrein %s" % [
+					_game.player.x, _game.player.y, str(target), what, str(_game.stairs),
+					", ".join(cells_note), str(_game.chest), str(_game.shrine)])
+				var boss_note := "kein Boss"
+				for m in _game.monsters:
+					if m.is_alive() and m.is_boss:
+						boss_note = "%s %d/%d Leben, Schaden %d, Abwehr %d bei (%d,%d)" % [
+							m.display_name, m.hp, m.max_hp, m.power, m.defense, m.x, m.y]
 				_complain("Ebene nicht abschließbar",
-					"Ebene %d, %d Züge" % [_game.depth, on_this_floor])
+					"Ebene %d, %d Züge, Held Stufe %d mit %d Schaden, verriegelt=%s, %s" % [
+					_game.depth, on_this_floor, _game.player.level, _game.player.power(),
+					str(_game.stairs_locked), boss_note])
 				_next_floor()
 				depth_at = _game.depth
 				on_this_floor = 0
@@ -364,6 +382,38 @@ func _check(where: String) -> void:
 			_complain("Monster-Leben ueber dem Maximum", "%s bei %s" % [m.kind, where])
 		if not Dungeon.is_walkable(_game.grid, m.x, m.y):
 			_complain("Monster steckt in einer Wand", "%s bei %s" % [m.kind, where])
+	# The two potion counters have to agree. They disagreed once, and
+	# the symptom was a flask that showed in the count, could not be
+	# drunk, and vanished on the next load.
+	var carried := 0
+	for id in p.potion_counts:
+		carried += int(p.potion_counts[id])
+		if int(p.potion_counts[id]) <= 0:
+			_complain("leerer Trank-Eintrag im Inventar", "%s bei %s" % [id, where])
+		if not Data.POTIONS.any(func(entry): return entry["id"] == id):
+			_complain("unbekannte Trankart im Inventar", "%s bei %s" % [id, where])
+	if carried != p.potions:
+		_complain("Trankzähler und Inventar stimmen nicht überein",
+			"%d gegen %d bei %s" % [p.potions, carried, where])
+	if p.shield < 0 or p.poison_turns < 0 or p.bleed_turns < 0:
+		_complain("negativer Zustandswert", where)
+	for id in p.buffs:
+		if int(p.buffs[id]) <= 0:
+			_complain("abgelaufener Buff hängt fest", "%s bei %s" % [id, where])
+		if not Data.BUFFS.has(id):
+			_complain("unbekannter Buff", "%s bei %s" % [id, where])
+	for id in p.scrolls:
+		if int(p.scrolls[id]) <= 0:
+			_complain("leerer Rollen-Eintrag", "%s bei %s" % [id, where])
+	# Two monsters on one cell means one of them cannot be attacked.
+	var cells := {}
+	for m in _game.monsters:
+		if not m.is_alive():
+			continue
+		if cells.has(m.cell()):
+			_complain("zwei Monster auf einem Feld",
+				"%s und %s bei %s" % [m.kind, cells[m.cell()], where])
+		cells[m.cell()] = m.kind
 	if p.level < 1 or p.max_hp < 1:
 		_complain("unmoegliche Spielerwerte", "Stufe %d bei %s" % [p.level, where])
 
@@ -465,6 +515,26 @@ func _check_audio() -> void:
 ## makes one of them unreachable, and neither shows up as a crash - the
 ## floor simply quietly holds less than it should.
 func _check_placement() -> void:
+	# The stairs have to be walkable to, with every shopkeeper counted
+	# as a wall - they are one. A floor that fails this is a floor the
+	# run ends on.
+	var blocked := {}
+	for shop in _game.shops:
+		blocked[shop["cell"]] = true
+	var open_cells: Dictionary = _game.reachable_from(
+		Vector2i(_game.player.x, _game.player.y), blocked)
+	if not open_cells.has(_game.stairs):
+		_complain("Treppe von Anfang an unerreichbar",
+			"Ebene %d, Treppe %s" % [_game.depth, str(_game.stairs)])
+	if _game.chest != null and not open_cells.has(_game.chest["cell"]):
+		_complain("Truhe von Anfang an unerreichbar",
+			"Ebene %d, Truhe %s" % [_game.depth, str(_game.chest["cell"])])
+	for item in _game.items:
+		if not open_cells.has(item["cell"]):
+			_complain("Beute unerreichbar abgelegt",
+				"Ebene %d, %s auf %s" % [_game.depth, item["kind"], str(item["cell"])])
+		if not Dungeon.is_walkable(_game.grid, item["cell"].x, item["cell"].y):
+			_complain("Beute steckt in einer Wand", str(item["cell"]))
 	var seen_here := {}
 	var things: Array = []
 	for shop in _game.shops:
