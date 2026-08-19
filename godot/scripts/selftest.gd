@@ -1724,7 +1724,21 @@ func _check_diagonals() -> void:
 			var free := true
 			for dy in [-1, 0, 1]:
 				for dx in [-1, 0, 1]:
-					if not Dungeon.is_walkable(_game.grid, x + dx, y + dy):
+					var near := Vector2i(x + dx, y + dy)
+					# Walkable is not enough: a crate, a shut door, a
+					# shopkeeper or a monster all stop a step for their own
+					# good reasons, and any of them here measures something
+					# other than "can the hero walk diagonally".
+					if not Dungeon.is_walkable(_game.grid, near.x, near.y):
+						free = false
+					elif _game.blocks(near) or _game.occupied(near):
+						free = false
+					elif _game.shop_at(near) != null or _game.webs.has(near):
+						free = false
+					elif near == _game.stairs or near == _game.up_stairs:
+						# Stepping onto a staircase changes floor, or is
+						# refused while a boss holds the key. Either way the
+						# hero does not end up one tile diagonally away.
 						free = false
 			if free and not _game.occupied(Vector2i(x, y)):
 				open_spot = Vector2i(x, y)
@@ -1737,6 +1751,12 @@ func _check_diagonals() -> void:
 
 	var cell: Vector2i = open_spot
 	for step in [Vector2i(1, 1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(-1, -1)]:
+		# Each successful step lets the monsters move, and one of them
+		# walking into the next target turns the following step into an
+		# attack. Correct behaviour, wrong measurement.
+		for other in _game.monsters.duplicate():
+			if absi(other.x - cell.x) <= 2 and absi(other.y - cell.y) <= 2:
+				_game.monsters.erase(other)
 		p.x = cell.x
 		p.y = cell.y
 		_game.try_move(step)
