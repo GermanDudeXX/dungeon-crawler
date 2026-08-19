@@ -87,6 +87,9 @@ var _flash_button: Button
 var _drink_button: Button
 var _flash: ColorRect
 var _minimap: TextureRect
+var _banner: Label
+var _banner_fade: Tween
+var _announce: Array = []        ## what to shout once the floor is drawn
 var _minimap_drawn := -1
 var _minimap_at := Vector2i(-1, -1)
 var _gliding := {}               ## sprite -> where it is walking to
@@ -399,6 +402,14 @@ func new_level() -> void:
 	_populate()
 	recompute_fov()
 	paint()
+	# The banner waits for the floor to be drawn: shouting about a boss
+	# over the last floor's picture reads as belonging to that one.
+	if not _announce.is_empty():
+		banner(_announce[0], _announce[1])
+		_announce.clear()
+	elif depth > 1 and Data.tier_for(depth)["id"] != Data.tier_for(depth - 1)["id"]:
+		banner(tier.get("name", ""), tier.get("tint", Color.WHITE))
+
 	# The floor is the natural checkpoint: it is the one moment where
 	# the whole level is settled and nothing is half-resolved.
 	save_run()
@@ -458,6 +469,10 @@ func _populate() -> void:
 			boss.snap()
 			monsters.append(boss)
 			stairs_locked = true
+			if depth == Data.SUPERBOSS_LEVEL:
+				_announce = ["Der Herr der Tiefe erwartet dich", Color(0.90, 0.25, 0.22)]
+			else:
+				_announce = ["Ein Boss hält den Schlüssel", Color(0.90, 0.45, 0.25)]
 
 	# A mini-boss on the floors between real bosses, so the gap has a
 	# landmark in it. It does not lock the stairs - it is a fight you
@@ -496,6 +511,7 @@ func _populate() -> void:
 			monsters.append(guard)
 			var hoard = _free_cell([room] if room != null else spawn_rooms)
 			if hoard != null:
+				_announce = ["Eine Schatzkammer, gut bewacht", Color(1.0, 0.84, 0.30)]
 				items.append({"cell": hoard, "kind": "gold",
 					"amount": rng.randi_range(30, 60 + depth * 5)})
 
@@ -645,6 +661,12 @@ func _seals_something() -> bool:
 		return true
 	if shrine != null and not open_cells.has(shrine):
 		return true
+	# The boss above all: it holds the key to the stairs, so a crate
+	# that walls it in ends the run on this floor. Ordinary monsters
+	# may be shut away - that is just a fight you get to skip.
+	for monster in monsters:
+		if monster.is_boss and not open_cells.has(monster.cell()):
+			return true
 	for shop in shops:
 		if not open_cells.has(shop["cell"]):
 			return true
@@ -714,6 +736,15 @@ func _shopkeeper_spot(where: Array) -> Variant:
 		if chest != null and not open_cells.has(chest["cell"]):
 			continue
 		if shrine != null and not open_cells.has(shrine):
+			continue
+		# And the boss, for the same reason a crate may not wall it in:
+		# it holds the key, and a keeper is a tile that never opens.
+		var sealed_boss := false
+		for monster in monsters:
+			if monster.is_boss and not open_cells.has(monster.cell()):
+				sealed_boss = true
+				break
+		if sealed_boss:
 			continue
 		return cell
 	return null            ## rather no shop than a floor nobody can finish
@@ -1204,7 +1235,7 @@ func _pick_up(cell: Vector2i) -> void:
 			# tier: a Fine Dagger can beat a plain Short Sword, and the sale
 			# price is what stops a worse one from being a dead pickup.
 			var w_type: int = mini(Data.WEAPONS.size() - 1, 1 + depth / 2)
-			var w_rarity: Dictionary = Data.pick_rarity(depth, rng)
+			var w_rarity: Dictionary = _roll_rarity()
 			var w_value: int = int(round(float(Data.WEAPONS[w_type]["bonus"])
 				* float(w_rarity["mult"])))
 			if w_value > player.weapon_bonus():
@@ -1219,7 +1250,7 @@ func _pick_up(cell: Vector2i) -> void:
 				say("Eine schlechtere Waffe - für 10 Gold verkauft.")
 		"armour":
 			var a_type: int = mini(Data.ARMOURS.size() - 1, 1 + depth / 3)
-			var a_rarity: Dictionary = Data.pick_rarity(depth, rng)
+			var a_rarity: Dictionary = _roll_rarity()
 			var a_value: int = int(round(float(Data.ARMOURS[a_type]["bonus"])
 				* float(a_rarity["mult"])))
 			if a_value > player.armour_bonus():
@@ -1262,6 +1293,20 @@ func _tick_buffs() -> void:
 			Save.wipe()
 			audio.play("death")
 			_show_death()
+
+## The rarity of a drop. Luck rolls twice and keeps the better one rather
+## than reweighting the table: it cannot conjure a tier that is not
+## unlocked at this depth yet, and it stays worth drinking at every
+## depth. The same rule as game.py _roll_rarity.
+func _roll_rarity() -> Dictionary:
+	var rolled := Data.pick_rarity(depth, rng)
+	if not player.has_buff("luck"):
+		return rolled
+	var second := Data.pick_rarity(depth, rng)
+	if Data.RARITIES.find(second) > Data.RARITIES.find(rolled):
+		return second
+	return rolled
+
 
 ## Regeneration ticks on the turn, not the frame - a hero who heals
 ## faster on a faster phone is a different game.
@@ -1385,6 +1430,7 @@ func _open_chest(cell: Vector2i) -> void:
 	mimic.snap()
 	monsters.append(mimic)
 	audio.play("boss")
+	banner("Es war eine Mimik!", Color(0.85, 0.32, 0.30))
 	say("Die Truhe schnappt zu - es war eine Mimik!")
 
 
@@ -1584,6 +1630,7 @@ func _touch_shrine(cell: Vector2i) -> void:
 			say("Der Schrein zehrt an dir: -%d maximales Leben." % loss)
 		"ambush":
 			audio.play("player_hurt")
+			banner("Rachsüchtige Geister!", Color(0.85, 0.32, 0.30))
 			say("Aus dem Schrein steigen rachsüchtige Geister!")
 			_ambush()
 
@@ -1706,7 +1753,12 @@ func _reveal_level() -> void:
 
 ## A short hop to a free cell somewhere else on the floor.
 func _blink() -> void:
-	var spot: Variant = _free_cell(rooms)
+	# Only to somewhere the hero could have walked to anyway. A free
+	# cell is not the same as a reachable one: crates can close a room
+	# off, and a blink into that pocket strands the run there - the
+	# floor is then unfinishable and nothing looks broken.
+	var spot: Variant = _free_cell(rooms,
+		reachable_from(Vector2i(player.x, player.y)))
 	if spot == null:
 		say("Nichts geschieht.")
 		return
@@ -2023,6 +2075,17 @@ func _build_hud() -> void:
 	again.pressed.connect(show_title)
 	_play_ui.add_child(again)
 
+	_banner = Label.new()
+	_banner.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_banner.position = Vector2(-400, 150)
+	_banner.custom_minimum_size = Vector2(800, 60)
+	_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_banner.add_theme_font_size_override("font_size", 40)
+	_banner.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	_banner.add_theme_constant_override("outline_size", 8)
+	_banner.modulate.a = 0.0
+	_play_ui.add_child(_banner)
+
 	_build_minimap()
 	_build_shop_panel()
 	_build_perk_panel()
@@ -2191,6 +2254,23 @@ func _glide(delta: float) -> void:
 		sprite.position = sprite.position.move_toward(where, speed)
 		if sprite.position.is_equal_approx(where):
 			_gliding.erase(sprite)
+
+## A line across the middle of the screen for the handful of moments that
+## deserve one: a boss waking up, a vault found, a new stretch of the
+## dungeon. The log at the bottom is for everything else - a banner for
+## every hit would be a banner for nothing.
+func banner(text: String, colour := Color(0.91, 0.71, 0.29)) -> void:
+	if _banner == null:
+		return
+	_banner.text = text
+	_banner.add_theme_color_override("font_color", colour)
+	_banner.modulate.a = 1.0
+	if _banner_fade != null and _banner_fade.is_valid():
+		_banner_fade.kill()
+	_banner_fade = create_tween()
+	_banner_fade.tween_interval(1.6)
+	_banner_fade.tween_property(_banner, "modulate:a", 0.0, 0.8)
+
 
 ## A number that floats off a cell and fades. The cheapest way to make a
 ## hit legible: without it the only sign that anything happened is a

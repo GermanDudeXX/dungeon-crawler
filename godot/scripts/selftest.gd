@@ -79,6 +79,16 @@ func _process(_delta: float) -> bool:
 	_check_superboss()
 	_check_monster_habits()
 
+	# The direct checks above are deliberately rough with the game:
+	# they set the hero to 200 health, drop them next to a test
+	# dummy, hand out a hundred gold. Playing on from that is playing
+	# a different game - and one of them left the hero standing in a
+	# one-cell hole, which showed up much later as "the boss cannot be
+	# reached". A clean run starts here.
+	_game.rng.seed = _seed
+	_game.choose_class(Data.CLASSES[0]["id"])
+	depth_at = _game.depth
+
 	for turn in _turns:
 		if _game.dead:
 			deaths += 1
@@ -416,6 +426,11 @@ func _check(where: String) -> void:
 			_complain("zwei Monster auf einem Feld",
 				"%s und %s bei %s" % [m.kind, cells[m.cell()], where])
 		cells[m.cell()] = m.kind
+	# A hero who can reach nothing is a run that is over without saying
+	# so. It happened: a blink dropped one into a pocket that crates had
+	# closed off.
+	if _game.reachable_from(Vector2i(p.x, p.y)).size() < 2:
+		_complain("Held kommt nirgendwo mehr hin", "(%d, %d) bei %s" % [p.x, p.y, where])
 	if p.level < 1 or p.max_hp < 1:
 		_complain("unmoegliche Spielerwerte", "Stufe %d bei %s" % [p.level, where])
 
@@ -1100,7 +1115,14 @@ func _check_monster_habits() -> void:
 		goblin.x = goblin_spot.x
 		goblin.y = goblin_spot.y
 		goblin.snap()
+		# Clear the neighbours first: a goblin hemmed in by scenery has
+		# nowhere to put anything, and that is the level being crowded,
+		# not the goblin refusing.
 		_game.traps.clear()
+		for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var beside: Vector2i = goblin.cell() + offset
+			_game.decor.erase(beside)
+			_game.hazards.erase(beside)
 		for _try in 200:
 			_game._monster_sets_trap(goblin)
 		if _game.traps.is_empty():
