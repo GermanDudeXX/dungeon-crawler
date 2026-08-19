@@ -224,6 +224,13 @@ class Monster extends Actor:
 	var regen := 0                  ## heals this much at the end of its turn
 	var is_elite := false
 	var phase_said := ""            ## the boss phase already announced
+	var ranged := false             ## attacks from a distance
+	var kites := false              ## and backs away when you get close
+	var sets_traps := false
+	var splits := false             ## breaks in two when killed
+	var generation := 0             ## how many splits deep this one is
+	var weak: Array = []            ## elements it fears
+	var resist: Array = []          ## and shrugs off
 
 	func _init(kind_id: String, tier_mult: float, difficulty_id := Data.DEFAULT_DIFFICULTY) -> void:
 		kind = kind_id
@@ -243,6 +250,12 @@ class Monster extends Actor:
 		speed = info.get("speed", 1)
 		poisons = info.get("poisons", false)
 		flees_below = info.get("flees_below", 0.0)
+		ranged = info.get("ranged", false)
+		kites = info.get("kites", false)
+		sets_traps = info.get("sets_traps", false)
+		splits = info.get("splits", false)
+		weak = info.get("weak", [])
+		resist = info.get("resist", [])
 
 	## Turns this monster into an elite: the same creature with a
 	## prefix and better numbers, worth two and a half times the

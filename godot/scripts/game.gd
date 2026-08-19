@@ -425,6 +425,7 @@ func _populate() -> void:
 			monster.make_elite(Data.ELITES[rng.randi() % Data.ELITES.size()])
 		monster.snap()
 		monsters.append(monster)
+		_swarm_around(monster, cell, spawn_rooms)
 
 	# The boss holds the key, so it is placed first and far from the
 	# hero - a floor you have to finish rather than cross.
@@ -599,6 +600,33 @@ func _populate() -> void:
 			loot["scroll"] = Data.SCROLLS[rng.randi() % Data.SCROLLS.size()]["id"]
 		items.append(loot)
 
+
+## Rats and bats do not turn up alone. The rest of the pack goes beside
+## the first one rather than anywhere on the floor, so a swarm reads as
+## a swarm instead of as five separate rats.
+func _swarm_around(monster, cell: Vector2i, where: Array) -> void:
+	var info: Dictionary = Data.MONSTERS[monster.kind]
+	if not info.has("swarms"):
+		return
+	var span: Array = info["swarms"]
+	var count: int = rng.randi_range(int(span[0]), int(span[1])) - 1
+	var spots: Array[Vector2i] = []
+	for dy in range(-2, 3):
+		for dx in range(-2, 3):
+			spots.append(cell + Vector2i(dx, dy))
+	for spot in spots:
+		if count <= 0:
+			return
+		if not Dungeon.is_walkable(grid, spot.x, spot.y) or blocks(spot):
+			continue
+		if occupied(spot) or taken(spot) or spot == Vector2i(player.x, player.y):
+			continue
+		var friend := Entities.Monster.new(monster.kind, tier["mult"], difficulty)
+		friend.x = spot.x
+		friend.y = spot.y
+		friend.snap()
+		monsters.append(friend)
+		count -= 1
 
 ## Whether the floor, as it stands right now, has cut something off from
 ## the hero. Asked after every solid piece of scenery is put down.
@@ -870,6 +898,14 @@ func _fire_element(monster) -> int:
 	var element: Dictionary = Data.ELEMENTS[id]
 	if rng.randf() >= float(element["chance"]):
 		return 0
+	# What a creature fears hurts it twice as much; what it is made
+	# of barely touches it. A skeleton and a slime both burn, an orc
+	# freezes, a bat is a lightning rod.
+	var factor := 1.0
+	if id in monster.weak:
+		factor = Data.WEAK_MULT
+	elif id in monster.resist:
+		factor = Data.RESIST_MULT
 	var turns: int = int(element["turns"])
 	match element["status"]:
 		"burn":
@@ -882,12 +918,17 @@ func _fire_element(monster) -> int:
 		"poison":
 			monster.venom_turns = maxi(monster.venom_turns, turns)
 	say("%s: %s!" % [Data.ELEMENTS[id]["name"], monster.display_name])
-	return int(element["damage"])
+	return maxi(1, int(round(float(element["damage"]) * factor)))
 
 ## A monster dies: experience, the level-up that may follow, and the
 ## sprite. Anything that can kill goes through here - a thrown flask
 ## that skipped this step handed out no experience at all.
 func _kill(monster) -> void:
+	# A slime does not die the first time: it comes apart into two
+	# smaller ones. Two generations deep and there is nothing left to
+	# divide, or one slime would keep a floor busy forever.
+	if monster.splits and monster.generation < 2:
+		_split(monster)
 	audio.play("monster_death")
 	say("%s stirbt." % monster.display_name)
 	player.kills += 1
@@ -899,6 +940,33 @@ func _kill(monster) -> void:
 		_actor_nodes[monster].queue_free()
 		_actor_nodes.erase(monster)
 	monsters.erase(monster)
+
+## Two halves beside the cell the thing died on.
+func _split(monster) -> void:
+	var made := 0
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		if made >= 2:
+			return
+		var spot: Vector2i = monster.cell() + offset
+		if not Dungeon.is_walkable(grid, spot.x, spot.y) or blocks(spot):
+			continue
+		if occupied(spot) or spot == Vector2i(player.x, player.y):
+			continue
+		var half := Entities.Monster.new(monster.kind, tier["mult"], difficulty)
+		half.x = spot.x
+		half.y = spot.y
+		half.generation = monster.generation + 1
+		half.max_hp = maxi(1, int(monster.max_hp * Data.SPLIT_CHILD_MULT))
+		half.hp = half.max_hp
+		half.power = maxi(1, int(monster.power * Data.SPLIT_CHILD_MULT))
+		half.xp_reward = maxi(1, int(monster.xp_reward * Data.SPLIT_CHILD_MULT))
+		half.display_name = "Kleiner %s" % monster.display_name
+		half.awake = true
+		half.snap()
+		monsters.append(half)
+		made += 1
+	if made > 0:
+		say("%s teilt sich!" % monster.display_name)
 
 func enemy_turn() -> void:
 	# Haste is the hero acting twice, expressed the other way round:
@@ -960,16 +1028,33 @@ func enemy_turn() -> void:
 			if dead or not monster.is_alive():
 				break
 			var to_player: Vector2i = here - monster.cell()
-			if absi(to_player.x) + absi(to_player.y) == 1:
+			var reach: int = absi(to_player.x) + absi(to_player.y)
+			var towards := Vector2i(signi(to_player.x), signi(to_player.y))
+			if reach == 1:
+				# A kiter would rather not be here at all: it takes the free
+				# step back instead of trading blows, and only swings when it
+				# has nowhere left to go.
+				if monster.kites and _step_monster(monster, -towards):
+					continue
 				_monster_attacks(monster)
 				break
-			var step := Vector2i(signi(to_player.x), signi(to_player.y))
+			var can_shoot: bool = monster.ranged and reach <= Data.RANGED_RANGE
+			if can_shoot and _line_clear(monster.cell(), here):
+				_monster_shoots(monster)
+				break
+			if monster.sets_traps and rng.randf() < Data.TRAP_CHANCE:
+				_monster_sets_trap(monster)
+			var step := towards
 			if monster.is_fleeing():
 				step = -step
 			_step_monster(monster, step)
 
 
-func _step_monster(monster, step: Vector2i) -> void:
+
+## Returns whether it actually moved: a kiter needs to know, because
+## a backwards step that failed means it is cornered and should
+## swing after all.
+func _step_monster(monster, step: Vector2i) -> bool:
 	for candidate in [monster.cell() + step,
 			monster.cell() + Vector2i(step.x, 0),
 			monster.cell() + Vector2i(0, step.y)]:
@@ -984,8 +1069,52 @@ func _step_monster(monster, step: Vector2i) -> void:
 			continue
 		monster.x = candidate.x
 		monster.y = candidate.y
-		return
+		return true
+	return false
 
+
+## An arrow. Weaker than a swing, but it arrives from five tiles away,
+## which is the whole point of a skeleton.
+func _monster_shoots(monster) -> void:
+	var damage: int = maxi(1, int(round(
+		(monster.power * Data.RANGED_DAMAGE_MULT) - player.defense())))
+	if player.shield > 0:
+		var soaked: int = mini(player.shield, damage)
+		player.shield -= soaked
+		damage -= soaked
+		if damage <= 0:
+			say("Der Schild fängt den Pfeil von %s." % monster.display_name)
+			return
+	player.hp -= damage
+	audio.play("player_hurt")
+	_damage_number(Vector2i(player.x, player.y), "-%d" % damage, Color(0.85, 0.75, 0.95))
+	_hurt_flash()
+	say("%s schießt auf dich: %d." % [monster.display_name, damage])
+	if player.hp <= 0:
+		player.hp = 0
+		dead = true
+		Save.wipe()
+		audio.play("death")
+		_show_death()
+		say("Du stirbst auf Ebene %d." % depth)
+
+
+## A goblin leaves something behind - beside itself, not underneath, or
+## it springs its own trap on the way back.
+func _monster_sets_trap(monster) -> void:
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var spot: Vector2i = monster.cell() + offset
+		if not Dungeon.is_walkable(grid, spot.x, spot.y) or blocks(spot):
+			continue
+		if taken(spot) or occupied(spot) or spot == Vector2i(player.x, player.y):
+			continue
+		if spot == stairs or spot == up_stairs:
+			continue
+		var kinds: Array = Data.TRAPS.keys()
+		traps[spot] = kinds[rng.randi() % kinds.size()]
+		if lit.has(spot):
+			say("%s legt etwas aus." % monster.display_name)
+		return
 
 func _monster_attacks(monster) -> void:
 	var hits_for: int = monster.power

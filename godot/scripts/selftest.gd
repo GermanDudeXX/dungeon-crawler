@@ -77,6 +77,7 @@ func _process(_delta: float) -> bool:
 	_check_boss_phases()
 	_check_classes()
 	_check_superboss()
+	_check_monster_habits()
 
 	for turn in _turns:
 		if _game.dead:
@@ -776,12 +777,22 @@ func _check_scrolls() -> void:
 	target.snap()
 	_game.monsters.append(target)
 	_game.recompute_fov()
-	var before: int = target.hp
+	# Measured across everything alive, not on the one dummy: the
+	# fireball picks its own target, and with swarms on the floor the
+	# nearest visible thing may well be a rat standing just as close.
+	var before := 0
+	for m in _game.monsters:
+		if m.is_alive():
+			before += m.hp
 	p.scrolls["fireball"] = 1
 	_game.read_scroll("fireball")
-	if target.is_alive() and target.hp >= before:
+	var after := 0
+	for m in _game.monsters:
+		if m.is_alive():
+			after += m.hp
+	if after >= before:
 		_complain("Feuerball richtet keinen Schaden an",
-			"%d von %d Leben" % [target.hp, before])
+			"%d Leben vorher, %d nachher" % [before, after])
 	_game.monsters.erase(target)
 
 
@@ -1008,4 +1019,90 @@ func _check_superboss() -> void:
 			_complain("Superboss ist nicht stärker",
 				"%d gegen %d Leben auf Ebene %d" % [strengths[Data.SUPERBOSS_LEVEL],
 				strengths[previous], previous])
+
+
+## Each kind of monster has to actually do the thing its entry claims.
+## The numbers are easy to check by reading; a habit that quietly never
+## fires is not.
+func _check_monster_habits() -> void:
+	_settle()
+	_game.depth = 6
+	_game.new_level()
+
+	# Swarming kinds arrive in company. Generated fresh a few times,
+	# since where they land depends on the room.
+	var biggest := 0
+	for _try in 6:
+		_game.new_level()
+		var counts := {}
+		for m in _game.monsters:
+			counts[m.kind] = int(counts.get(m.kind, 0)) + 1
+		for kind in counts:
+			if Data.MONSTERS[kind].has("swarms"):
+				biggest = maxi(biggest, int(counts[kind]))
+	if biggest < 2:
+		_complain("Schwarmtiere kommen einzeln", "größte Gruppe: %d" % biggest)
+
+	# A slime leaves two smaller ones behind.
+	var spot: Variant = _open_spot()
+	if spot != null:
+		var slime = Entities.Monster.new("slime", 4.0, "normal")
+		slime.x = spot.x
+		slime.y = spot.y
+		slime.snap()
+		_game.monsters.append(slime)
+		var before: int = _game.monsters.size()
+		_game._kill(slime)
+		var after: int = _game.monsters.size()
+		if after <= before - 1:
+			_complain("Schleim teilt sich nicht", "%d statt mehr Monster" % after)
+		for m in _game.monsters.duplicate():
+			if m.generation > 0:
+				if m.max_hp >= slime.max_hp:
+					_complain("Schleimhälfte ist nicht kleiner",
+						"%d gegen %d" % [m.max_hp, slime.max_hp])
+				_game.monsters.erase(m)
+
+	# A skeleton shoots from a distance instead of walking up.
+	var shooter_spot: Variant = _open_spot()
+	if shooter_spot != null:
+		var bones = Entities.Monster.new("skeleton", 1.0, "normal")
+		if not bones.ranged or not bones.kites:
+			_complain("Skelett schießt gar nicht")
+		bones.x = shooter_spot.x
+		bones.y = shooter_spot.y
+		bones.awake = true
+		bones.snap()
+		_game.monsters.append(bones)
+		_game.player.x = shooter_spot.x + 3
+		_game.player.y = shooter_spot.y
+		_game.player.max_hp = 300
+		_game.player.hp = 300
+		_game.player.base_defense = 0
+		_game.player.armour = 0
+		_game.player.armour_extra = 0
+		if Dungeon.is_walkable(_game.grid, _game.player.x, _game.player.y):
+			var hp_before: int = _game.player.hp
+			for _turn in 4:
+				_game.enemy_turn()
+			if _game.player.hp >= hp_before and bones.is_alive():
+				_complain("Skelett trifft aus der Entfernung nie",
+					"Abstand 3, %d Leben unverändert" % hp_before)
+		_game.monsters.erase(bones)
+
+	# A goblin leaves traps behind.
+	var goblin_spot: Variant = _open_spot()
+	if goblin_spot != null:
+		var goblin = Entities.Monster.new("goblin", 1.0, "normal")
+		if not goblin.sets_traps:
+			_complain("Goblin stellt keine Fallen")
+		goblin.x = goblin_spot.x
+		goblin.y = goblin_spot.y
+		goblin.snap()
+		_game.traps.clear()
+		for _try in 200:
+			_game._monster_sets_trap(goblin)
+		if _game.traps.is_empty():
+			_complain("Goblin legt nie etwas ab")
+		_game.traps.clear()
 

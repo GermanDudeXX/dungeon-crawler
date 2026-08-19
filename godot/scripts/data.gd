@@ -14,34 +14,40 @@ const LEVELS_PER_TIER := 10
 ## themes start over rather than making floor 51 easier than floor 50.
 const TIER_GROWTH := 1.33
 
+# Each kind has a habit of its own, not just different numbers: rats
+# and bats come in groups, goblins leave traps behind, skeletons shoot
+# and back away, slimes split when they die, and everything has an
+# element it fears or shrugs off. Straight from constants.py
+# MONSTER_TYPES.
 const MONSTERS := {
 	"rat": {
 		"hp": 4, "power": 2, "defense": 0, "xp": 4, "name": "Ratte",
-		"flees_below": 0.3, "sprite": "rat",
+		"flees_below": 0.3, "sprite": "rat", "swarms": [2, 5],
 	},
 	"goblin": {
 		"hp": 8, "power": 3, "defense": 1, "xp": 8, "name": "Goblin",
-		"sprite": "goblin",
+		"sprite": "goblin", "sets_traps": true,
 	},
 	"orc": {
 		"hp": 14, "power": 5, "defense": 2, "xp": 14, "name": "Ork",
-		"sprite": "orc",
+		"sprite": "orc", "weak": ["frost"],
 	},
 	"skeleton": {
 		"hp": 9, "power": 4, "defense": 1, "xp": 10, "name": "Skelett",
-		"sprite": "skeleton",
+		"sprite": "skeleton", "ranged": true, "kites": true,
+		"resist": ["poison"], "weak": ["fire"],
 	},
 	"slime": {
 		"hp": 6, "power": 2, "defense": 0, "xp": 6, "name": "Schleim",
-		"flees_below": 0.25, "sprite": "slime",
+		"flees_below": 0.25, "sprite": "slime", "splits": true, "weak": ["fire"],
 	},
 	"bat": {
 		"hp": 5, "power": 2, "defense": 0, "xp": 6, "name": "Fledermaus",
-		"speed": 2, "sprite": "bat",
+		"speed": 2, "sprite": "bat", "swarms": [2, 4], "weak": ["lightning"],
 	},
 	"spider": {
 		"hp": 7, "power": 3, "defense": 0, "xp": 9, "name": "Spinne",
-		"poisons": true, "sprite": "spider",
+		"poisons": true, "sprite": "spider", "resist": ["poison"],
 	},
 }
 
@@ -128,6 +134,12 @@ const BOSS_HP_MULT := 3.2
 const BOSS_POWER_MULT := 1.6
 const MIMIC_MULT := 1.8
 const BURN_DAMAGE := 3
+const RANGED_RANGE := 5             ## how far a skeleton can shoot
+const RANGED_DAMAGE_MULT := 0.7     ## an arrow hurts less than an axe
+const SPLIT_CHILD_MULT := 0.5       ## what is left of a slime it split from
+const WEAK_MULT := 2.0              ## elemental damage against a weakness
+const RESIST_MULT := 0.5
+const TRAP_CHANCE := 0.12           ## per goblin turn
 const POISON_PER_TURN := 2
 
 ## What a shopkeeper sells, and what a smith charges. Prices rise with
