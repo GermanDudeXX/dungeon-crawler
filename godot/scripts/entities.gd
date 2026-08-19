@@ -53,6 +53,9 @@ class Player extends Actor:
 	var bonus_crit := 0.0
 	var damage_reduction := 0.0
 	var gold_mult := 1.0
+	var xp_mult := 1.0
+	var potion_mult := 1.0
+	var scholar := 0.0             ## chance a scroll survives being read
 	var regen_interval := 0        ## 0 means no regeneration at all
 	var regen_counter := 0
 	var pending_perks := 0         ## levels gained but not yet spent
@@ -189,7 +192,7 @@ class Player extends Actor:
 
 
 	func gain_xp(amount: int) -> int:
-		xp += amount
+		xp += maxi(1, int(round(amount * xp_mult)))
 		var gained := 0
 		while xp >= xp_to_next:
 			xp -= xp_to_next
@@ -229,6 +232,7 @@ class Monster extends Actor:
 	var ranged := false             ## attacks from a distance
 	var kites := false              ## and backs away when you get close
 	var kited := 0                  ## steps taken back in a row
+	var afraid := 0                 ## turns spent running from you
 	var sets_traps := false
 	var explodes := 0               ## damage it deals when it dies
 	var summons := ""              ## kind it calls for help
@@ -303,4 +307,6 @@ class Monster extends Actor:
 
 
 	func is_fleeing() -> bool:
+		if afraid > 0:
+			return true
 		return flees_below > 0.0 and float(hp) / float(max_hp) <= flees_below

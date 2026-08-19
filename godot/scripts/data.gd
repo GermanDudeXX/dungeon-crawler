@@ -131,6 +131,17 @@ const TIERS := [
 	{"id": "iron", "name": "Eisenverlies", "tint": Color(0.53, 0.60, 0.72), "music": "vault.mp3"},
 	{"id": "flame", "name": "Flammenreich", "tint": Color(0.78, 0.50, 0.44), "music": "caverns.mp3"},
 	{"id": "frost", "name": "Frostgruft", "tint": Color(0.60, 0.74, 0.80), "music": "vault.mp3"},
+	# Past the fifth the themes used to start again from the top while the
+	# numbers kept climbing. Four more means a deep run keeps changing its
+	# colour for another forty floors before anything repeats.
+	{"id": "sunken", "name": "Versunkene Hallen", "tint": Color(0.45, 0.72, 0.70),
+		"music": "vault.mp3"},
+	{"id": "ash", "name": "Aschewüste", "tint": Color(0.72, 0.66, 0.58),
+		"music": "caverns.mp3"},
+	{"id": "bloom", "name": "Pilzgärten", "tint": Color(0.62, 0.78, 0.52),
+		"music": "caverns.mp3"},
+	{"id": "void", "name": "Die Leere", "tint": Color(0.58, 0.52, 0.78),
+		"music": "crypt.mp3"},
 ]
 
 
@@ -269,6 +280,11 @@ const PERKS := [
 	{"id": "regeneration", "name": "Regeneration", "desc": "1 Leben alle 5 Züge",
 		"regen": 5},
 	{"id": "greed", "name": "Gier", "desc": "+25% Gold", "gold": 0.25},
+	{"id": "scholar", "name": "Gelehrsamkeit", "desc": "Rollen verbrauchen sich manchmal nicht",
+		"scholar": 0.35},
+	{"id": "alchemy", "name": "Alchemie", "desc": "Tränke wirken um die Hälfte stärker",
+		"alchemy": 0.5},
+	{"id": "hunter", "name": "Jägerblut", "desc": "+30% Erfahrung", "xp": 0.3},
 ]
 const PERK_CHOICES := 3
 const CRIT_MULT := 2
@@ -418,6 +434,12 @@ const SCROLLS := [
 		"desc": "Bringt dich an einen zufälligen Ort dieser Ebene."},
 	{"id": "reveal", "name": "Enthüllung", "price": 25,
 		"desc": "Zeigt die ganze Ebene."},
+	{"id": "fear", "name": "Schrecken", "price": 35,
+		"desc": "Alles in Sicht flieht für eine Weile."},
+	{"id": "quake", "name": "Beben", "damage": 8, "price": 45,
+		"desc": "Erschüttert alles in Sicht und wirft es zu Boden."},
+	{"id": "blessing", "name": "Segen", "price": 40,
+		"desc": "Schenkt dir eine zufällige Gunst."},
 ]
 
 
@@ -601,6 +623,8 @@ const WEAKEN_DEFENSE_MULT := 0.6
 # rather than being a slow drain.
 const BLEED_DAMAGE := 5
 const BLEED_TURNS := 2
+const FEAR_TURNS := 8               ## how long a scroll of terror holds
+const QUAKE_STUN := 2
 
 
 ## The element a dropped weapon carries, or "" for a plain one.

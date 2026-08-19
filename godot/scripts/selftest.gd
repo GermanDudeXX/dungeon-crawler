@@ -80,6 +80,7 @@ func _process(_delta: float) -> bool:
 	_check_doors()
 	_check_themes()
 	_check_quests()
+	_check_more()
 	_check_elements()
 	_check_up_stairs()
 	_check_boss_phases()
@@ -1924,5 +1925,113 @@ func _check_quests() -> void:
 	_game._settle_quest()
 	if _game.player.gold != gold_before:
 		_complain("verfehlter Auftrag zahlt trotzdem")
+	_settle()
+
+
+## The three later scrolls and the three later gifts. Each does
+## something the game already knows how to do - fear borrows fleeing,
+## a blessing borrows the buff table - so what is worth checking is that
+## reading one actually reaches that machinery.
+func _check_more() -> void:
+	_settle()
+	var p = _game.player
+	_game.depth = 8
+	_game.new_level()
+	p.max_hp = 300
+	p.hp = 300
+
+	# Terror: everything in sight runs.
+	var spot: Variant = _open_spot()
+	if spot != null:
+		p.x = spot.x
+		p.y = spot.y
+		var brave = Entities.Monster.new("orc", 1.0, "normal")
+		brave.x = spot.x + 1
+		brave.y = spot.y
+		brave.awake = true
+		brave.snap()
+		_game.monsters.append(brave)
+		_game.recompute_fov()
+		p.scrolls["fear"] = 1
+		_game.read_scroll("fear")
+		if brave.afraid <= 0 or not brave.is_fleeing():
+			_complain("Schrecken jagt niemandem Angst ein")
+		_game.monsters.erase(brave)
+
+	# Quake: everything in sight is hurt and floored.
+	spot = _open_spot()
+	if spot != null:
+		p.x = spot.x
+		p.y = spot.y
+		var standing = Entities.Monster.new("orc", 6.0, "normal")
+		standing.x = spot.x + 1
+		standing.y = spot.y
+		standing.awake = true
+		standing.snap()
+		_game.monsters.append(standing)
+		_game.recompute_fov()
+		var before: int = standing.hp
+		p.scrolls["quake"] = 1
+		_game.read_scroll("quake")
+		if standing.is_alive() and standing.hp >= before:
+			_complain("Beben richtet nichts an")
+		if standing.is_alive() and standing.stun_turns <= 0:
+			_complain("Beben wirft niemanden zu Boden")
+		_game.monsters.erase(standing)
+
+	# Blessing: a favour, and never a curse.
+	p.buffs.clear()
+	for _try in 12:
+		p.scrolls["blessing"] = 1
+		_game.read_scroll("blessing")
+	if p.buffs.is_empty():
+		_complain("Segen schenkt nichts")
+	for id in p.buffs:
+		var entry: Dictionary = Data.BUFFS[id]
+		if int(entry.get("power", 0)) < 0 or int(entry.get("defense", 0)) < 0:
+			_complain("Segen verteilt einen Fluch", id)
+	p.buffs.clear()
+
+	# Scholarship, alchemy, hunting: each has to change its number.
+	var plain = Entities.Player.new("warrior", "normal")
+	var gained: int = plain.gain_xp(20)
+	var keen = Entities.Player.new("warrior", "normal")
+	keen.xp_mult = 1.3
+	if keen.gain_xp(20) < gained or keen.xp <= plain.xp:
+		_complain("Jägerblut bringt keine zusätzliche Erfahrung")
+
+	p.potion_mult = 2.0
+	p.max_hp = 300
+	p.hp = 100
+	p.potion_counts.clear()
+	p.potions = 0
+	p.add_potion("healing", 1)
+	p.selected_potion = "healing"
+	_game.drink()
+	var strong: int = p.hp - 100
+	p.potion_mult = 1.0
+	p.hp = 100
+	p.add_potion("healing", 1)
+	p.selected_potion = "healing"
+	_game.drink()
+	var plainly: int = p.hp - 100
+	if strong <= plainly:
+		_complain("Alchemie macht Tränke nicht stärker",
+			"%d gegen %d" % [strong, plainly])
+
+	p.scholar = 1.0
+	p.scrolls["reveal"] = 1
+	_game.read_scroll("reveal")
+	if not p.scrolls.has("reveal"):
+		_complain("Gelehrsamkeit bewahrt die Rolle nie")
+	p.scholar = 0.0
+	p.scrolls.clear()
+
+	# And the deeper stretches of dungeon have to exist and differ.
+	var names := {}
+	for level in range(1, 96, 10):
+		names[Data.tier_for(level)["id"]] = true
+	if names.size() < 9:
+		_complain("zu wenige Abschnitte", "%d verschiedene" % names.size())
 	_settle()
 

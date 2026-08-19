@@ -40,7 +40,7 @@ static func write(game) -> void:
 			"awake": m.awake, "boss": m.is_boss, "mimic": m.is_mimic, "keeper": m.is_keeper,
 			"burn": m.burn_turns, "slow": m.slow_turns, "stun": m.stun_turns,
 			"regen": m.regen, "elite": m.is_elite, "generation": m.generation,
-			"summoned": m.summoned, "enraged": m.enraged,
+			"summoned": m.summoned, "enraged": m.enraged, "afraid": m.afraid,
 			"weaken": m.weaken_turns, "venom": m.venom_turns, "bleed": m.bleed_turns,
 		})
 
@@ -118,7 +118,9 @@ static func write(game) -> void:
 			"potions": p.potions, "gold": p.gold, "kills": p.kills,
 			"facing": p.facing, "poison_turns": p.poison_turns, "webbed": p.webbed,
 			"bonus_crit": p.bonus_crit, "damage_reduction": p.damage_reduction,
-			"gold_mult": p.gold_mult, "regen_interval": p.regen_interval,
+			"gold_mult": p.gold_mult, "xp_mult": p.xp_mult,
+			"potion_mult": p.potion_mult, "scholar": p.scholar,
+			"regen_interval": p.regen_interval,
 			"regen_counter": p.regen_counter, "pending_perks": p.pending_perks,
 			"potion_counts": p.potion_counts, "selected_potion": p.selected_potion,
 			"buffs": p.buffs, "shield": p.shield, "bleed_turns": p.bleed_turns,

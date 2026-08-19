@@ -282,6 +282,9 @@ func load_run() -> bool:
 	player.bonus_crit = float(p.get("bonus_crit", 0.0))
 	player.damage_reduction = float(p.get("damage_reduction", 0.0))
 	player.gold_mult = float(p.get("gold_mult", 1.0))
+	player.xp_mult = float(p.get("xp_mult", 1.0))
+	player.potion_mult = float(p.get("potion_mult", 1.0))
+	player.scholar = float(p.get("scholar", 0.0))
 	player.regen_interval = int(p.get("regen_interval", 0))
 	player.regen_counter = int(p.get("regen_counter", 0))
 	player.pending_perks = int(p.get("pending_perks", 0))
@@ -418,6 +421,7 @@ func load_run() -> bool:
 		# split twice more.
 		monster.generation = int(entry.get("generation", 0))
 		monster.summoned = int(entry.get("summoned", 0))
+		monster.afraid = int(entry.get("afraid", 0))
 		monster.enraged = bool(entry.get("enraged", false))
 		monster.snap()
 		monsters.append(monster)
@@ -1507,6 +1511,8 @@ func enemy_turn() -> void:
 		if not monster.is_alive():
 			continue
 		# Fire keeps burning whether the thing acts or not.
+		if monster.afraid > 0:
+			monster.afraid -= 1
 		if monster.weaken_turns > 0:
 			monster.weaken_turns -= 1
 		if monster.venom_turns > 0:
@@ -2119,7 +2125,8 @@ func drink() -> void:
 ## a scroll or a shrine can hand the same table over later.
 func _apply_effect(effect: Dictionary) -> void:
 	if effect.has("heal"):
-		var healed: int = mini(player.max_hp - player.hp, int(effect["heal"]))
+		var healed: int = mini(player.max_hp - player.hp,
+			int(round(int(effect["heal"]) * player.potion_mult)))
 		player.hp += healed
 		_damage_number(Vector2i(player.x, player.y), "+%d" % healed, Color(0.42, 0.88, 0.50))
 		say("%d Leben zurück." % healed)
@@ -2150,7 +2157,7 @@ func _apply_effect(effect: Dictionary) -> void:
 		player.buffs[id] = int(player.buffs.get(id, 0)) + turns
 		say("%s für %d Züge." % [Data.BUFFS[id]["name"], turns])
 	if effect.has("shield"):
-		player.shield += int(effect["shield"])
+		player.shield += int(round(int(effect["shield"]) * player.potion_mult))
 		say("Ein Schild von %d." % int(effect["shield"]))
 	if effect.has("reveal"):
 		_reveal_level()
@@ -2244,9 +2251,12 @@ func read_scroll(id: String) -> void:
 	if dead or choosing or int(player.scrolls.get(id, 0)) <= 0:
 		return
 	var scroll := Data.scroll_by_id(id)
-	player.scrolls[id] = int(player.scrolls[id]) - 1
-	if int(player.scrolls[id]) <= 0:
-		player.scrolls.erase(id)
+	if player.scholar > 0.0 and rng.randf() < player.scholar:
+		say("Die Rolle bleibt unversehrt.")
+	else:
+		player.scrolls[id] = int(player.scrolls[id]) - 1
+		if int(player.scrolls[id]) <= 0:
+			player.scrolls.erase(id)
 	say("Du liest: %s." % scroll["name"])
 	scrolls_read += 1
 	match id:
@@ -2257,12 +2267,76 @@ func read_scroll(id: String) -> void:
 		"reveal":
 			_reveal_level()
 			say("Die Ebene liegt offen vor dir.")
+		"fear":
+			_terrify()
+		"quake":
+			_quake(int(scroll.get("damage", 8)))
+		"blessing":
+			_bless()
 	if dead:
 		return
 	_tick_buffs()
 	enemy_turn()
 	recompute_fov()
 	paint()
+
+
+## Everything that can see you decides it would rather not. Fleeing is
+## the behaviour monsters already have when they are nearly dead, so
+## this borrows it wholesale rather than inventing a second kind of
+## running away.
+func _terrify() -> void:
+	var scared := 0
+	for monster in monsters:
+		if not monster.is_alive() or not lit.has(monster.cell()):
+			continue
+		monster.afraid = maxi(monster.afraid, Data.FEAR_TURNS)
+		monster.awake = true
+		scared += 1
+	audio.play("boss")
+	banner("Schrecken", Color(0.75, 0.65, 1.0))
+	say("%d Kreaturen fliehen vor dir." % scared)
+
+
+## A shake that reaches everything you can see: modest damage, but it
+## puts the whole room on the floor for a moment. The answer to being
+## surrounded rather than to being outmatched.
+func _quake(damage: int) -> void:
+	var hit := 0
+	for monster in monsters.duplicate():
+		if not monster.is_alive() or not lit.has(monster.cell()):
+			continue
+		hit += 1
+		monster.hp -= damage
+		monster.stun_turns = maxi(monster.stun_turns, Data.QUAKE_STUN)
+		monster.awake = true
+		_sparks(monster.cell(), Color(0.85, 0.75, 0.55), 6)
+		if not monster.is_alive():
+			_kill(monster)
+	audio.play("boss")
+	_shake(4.0)
+	say("Der Boden bebt - %d getroffen." % hit)
+
+
+## A random favour, drawn from the same table the potions use. Cheaper
+## than a table of its own, and it means a blessing can hand out
+## anything the game already knows how to grant.
+func _bless() -> void:
+	var ids: Array = Data.BUFFS.keys()
+	var kindly: Array = []
+	for id in ids:
+		# Nothing that makes you worse: a blessing that clumsies you is a
+		# curse with a nice name.
+		if int(Data.BUFFS[id].get("power", 0)) < 0 or int(Data.BUFFS[id].get("defense", 0)) < 0:
+			continue
+		kindly.append(id)
+	if kindly.is_empty():
+		return
+	var chosen: String = kindly[rng.randi() % kindly.size()]
+	player.buffs[chosen] = int(player.buffs.get(chosen, 0)) + 14
+	audio.play("levelup")
+	banner("Segen: %s" % Data.BUFFS[chosen]["name"], Color(0.55, 0.85, 0.98))
+	say("%s für 14 Züge." % Data.BUFFS[chosen]["name"])
 
 
 ## The nearest monster you can actually see, and everything beside it.
@@ -2812,6 +2886,9 @@ func take_perk(index: int) -> void:
 	player.bonus_crit += float(perk.get("crit", 0.0))
 	player.damage_reduction = minf(0.8, player.damage_reduction + float(perk.get("reduction", 0.0)))
 	player.gold_mult += float(perk.get("gold", 0.0))
+	player.xp_mult += float(perk.get("xp", 0.0))
+	player.potion_mult += float(perk.get("alchemy", 0.0))
+	player.scholar = minf(0.8, player.scholar + float(perk.get("scholar", 0.0)))
 	if perk.has("regen"):
 		# Taking it twice makes it faster rather than doing nothing.
 		player.regen_interval = (int(perk["regen"]) if player.regen_interval == 0
