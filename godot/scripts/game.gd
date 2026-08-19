@@ -88,6 +88,7 @@ var _hud: Control
 var audio: Audio
 var settings := Settings.DEFAULTS.duplicate()
 var earned := {}                 ## achievements already won
+var known := {}                  ## the bestiary, kind by kind
 var scrolls_read := 0            ## across all runs, for one of them
 var potion_free := true          ## no potion drunk this run yet
 var _play_ui: Control            ## stats, log and the pad - hidden on the title
@@ -110,6 +111,8 @@ var updater: Updater
 var _update_url := ""
 var _awards_panel: PanelContainer
 var _awards_list: VBoxContainer
+var _kin_panel: PanelContainer
+var _kin_list: VBoxContainer
 var _drink_button: Button
 var _bag_panel: PanelContainer
 var _bag_list: VBoxContainer
@@ -139,6 +142,7 @@ func _ready() -> void:
 	rng.randomize()
 	settings = Settings.read()
 	earned = Achievements.read()
+	known = Bestiary.read()
 	updater = Updater.new()
 	add_child(updater)
 	updater.checked.connect(_update_answer)
@@ -567,6 +571,7 @@ func _populate() -> void:
 				boss.display_name = "Der Herr der Tiefe"
 			boss.snap()
 			monsters.append(boss)
+			_note_kind(boss.kind, "seen")
 			stairs_locked = true
 			if depth == Data.SUPERBOSS_LEVEL:
 				_announce = ["Der Herr der Tiefe erwartet dich", Color(0.90, 0.25, 0.22)]
@@ -1414,6 +1419,7 @@ func _summon(monster) -> void:
 		called.xp_reward = maxi(1, called.xp_reward / 2)
 		called.snap()
 		monsters.append(called)
+		_note_kind(called.kind, "seen")
 		monster.summoned += 1
 		if lit.has(monster.cell()):
 			say("%s ruft Verstärkung." % monster.display_name)
@@ -1452,6 +1458,7 @@ func _step_in_web(cell: Vector2i) -> void:
 ## sprite. Anything that can kill goes through here - a thrown flask
 ## that skipped this step handed out no experience at all.
 func _kill(monster) -> void:
+	_note_kind(monster.kind, "killed")
 	if monster.explodes > 0:
 		_explode(monster)
 	_sparks(monster.cell(), Color(0.85, 0.30, 0.28), 16)
@@ -1498,6 +1505,7 @@ func _split(monster) -> void:
 		half.awake = true
 		half.snap()
 		monsters.append(half)
+		_note_kind(half.kind, "seen")
 		made += 1
 	if made > 0:
 		say("%s teilt sich!" % monster.display_name)
@@ -1558,6 +1566,7 @@ func enemy_turn() -> void:
 			# you - same as the original, so a floor is not a stampede.
 			if lit.has(monster.cell()):
 				monster.awake = true
+				_note_kind(monster.kind, "seen")
 			else:
 				continue
 		for _move in monster.speed:
@@ -1734,6 +1743,7 @@ func _monster_attacks(monster) -> void:
 		Save.wipe()
 		audio.play("death")
 		_show_death()
+		_note_kind(monster.kind, "killed_by")
 		say("Du stirbst auf Ebene %d. Tippe NEU." % depth)
 
 
@@ -1984,6 +1994,7 @@ func _open_chest(cell: Vector2i) -> void:
 	mimic.display_name = "Mimik (%s)" % mimic.display_name
 	mimic.snap()
 	monsters.append(mimic)
+	_note_kind(mimic.kind, "seen")
 	audio.play("boss")
 	banner("Es war eine Mimik!", Color(0.85, 0.32, 0.30))
 	say("Die Truhe schnappt zu - es war eine Mimik!")
@@ -2246,6 +2257,7 @@ func _ambush() -> void:
 		ghost.awake = true
 		ghost.snap()
 		monsters.append(ghost)
+		_note_kind(ghost.kind, "seen")
 		spawned += 1
 
 
@@ -2434,6 +2446,30 @@ func _blink() -> void:
 	player.y = spot.y
 	player.snap()
 	say("Ein Blinzeln - und du stehst woanders.")
+
+
+## Stand still for a turn.
+##
+## Sounds like nothing and is not: regeneration, poison, burning and
+## every buff run on turns, so without a way to spend one there is no
+## way to heal up before opening a door, and a Potion of Regeneration
+## can only be drunk while running away.
+func wait_a_turn() -> void:
+	if dead or choosing or shop_open != null:
+		return
+	if _bag_panel != null and _bag_panel.visible:
+		return
+	if player.pending_perks > 0 and _perk_panel != null and _perk_panel.visible:
+		return
+	say("Du wartest.")
+	_tick_poison()
+	_tick_regen()
+	_tick_buffs()
+	if dead:
+		return
+	enemy_turn()
+	recompute_fov()
+	paint()
 
 
 ## Walks to the next kind of flask carried. Costs no turn: choosing what
@@ -2750,6 +2786,15 @@ func _build_hud() -> void:
 	swap.pressed.connect(cycle_potion)
 	_play_ui.add_child(swap)
 
+	var rest := Button.new()
+	rest.text = "WARTEN"
+	rest.custom_minimum_size = Vector2(size * 1.2, size * 0.6)
+	rest.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	rest.position = Vector2(-pad - size * 3.6, pad)
+	rest.add_theme_font_size_override("font_size", 24)
+	rest.pressed.connect(wait_a_turn)
+	_play_ui.add_child(rest)
+
 	var bag := Button.new()
 	bag.text = "TASCHE"
 	bag.custom_minimum_size = Vector2(size * 1.2, size * 0.6)
@@ -2800,6 +2845,7 @@ func _build_hud() -> void:
 	_build_minimap()
 	_build_bag_panel()
 	_build_awards_panel()
+	_build_kin_panel()
 	_build_shop_panel()
 	_build_perk_panel()
 	_build_dead_panel()
@@ -3007,6 +3053,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
 				open_bag()
 		KEY_Q:
 			cycle_potion()
+		KEY_SPACE, KEY_PERIOD:
+			wait_a_turn()
 		KEY_1, KEY_2, KEY_3:
 			var at: int = key - KEY_1
 			if at < Data.SCROLLS.size():
@@ -3016,6 +3064,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 ## Shuts the topmost thing that is open and says whether there was one.
 ## The order is the order they sit in front of each other.
 func close_topmost() -> bool:
+	if _kin_panel != null and _kin_panel.visible:
+		close_kin()
+		return true
 	if _awards_panel != null and _awards_panel.visible:
 		close_awards()
 		return true
@@ -3185,6 +3236,19 @@ func _describe(effect: Dictionary) -> String:
 	return ", ".join(parts)
 
 
+## Writes one fact about a kind into the bestiary.
+##
+## Saved on the spot rather than at the end of a run: what you learned
+## about a monster should survive the death it taught you, and a death
+## is exactly when nothing else gets saved.
+func _note_kind(kind: String, what: String) -> void:
+	if not Data.MONSTERS.has(kind):
+		return
+	var entry := Bestiary.row(known, kind)
+	entry[what] = int(entry.get(what, 0)) + 1
+	Bestiary.write(known)
+
+
 ## Awards an achievement once, with a banner, and remembers it.
 ##
 ## Called from wherever the thing actually happens rather than from one
@@ -3283,6 +3347,74 @@ func _update_answer(available: bool, version: String, url: String, note: String)
 		_update_url = ""
 		_update_button.text = "NACH UPDATE SUCHEN"
 		_update_label.add_theme_color_override("font_color", Color(0.72, 0.72, 0.80))
+
+
+## The bestiary, on the title screen next to the achievements.
+##
+## Kinds that have never been met are listed as unknown rather than
+## hidden: knowing there are three things down there you have not seen
+## is itself a reason to go back down.
+func _build_kin_panel() -> void:
+	_kin_panel = PanelContainer.new()
+	_kin_panel.custom_minimum_size = Vector2(900, 560)
+	_kin_panel.visible = false
+	_solid_panel(_kin_panel)
+	_hud.add_child(_centred(_kin_panel))
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 10)
+	_kin_panel.add_child(column)
+
+	var heading := Label.new()
+	heading.text = "Bestiarium"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 32)
+	heading.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
+	column.add_child(heading)
+
+	var scroller := ScrollContainer.new()
+	scroller.custom_minimum_size = Vector2(0, 400)
+	scroller.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	column.add_child(scroller)
+
+	_kin_list = VBoxContainer.new()
+	_kin_list.custom_minimum_size = Vector2(840, 0)
+	_kin_list.add_theme_constant_override("separation", 4)
+	scroller.add_child(_kin_list)
+
+	var close := Button.new()
+	close.text = "ZURÜCK"
+	close.custom_minimum_size = Vector2(0, 64)
+	close.add_theme_font_size_override("font_size", 26)
+	close.pressed.connect(close_kin)
+	column.add_child(close)
+
+
+func open_kin() -> void:
+	if _kin_panel == null:
+		return
+	known = Bestiary.read()
+	for old in _kin_list.get_children():
+		old.queue_free()
+	for kind in Data.MONSTERS:
+		var line := Label.new()
+		line.add_theme_font_size_override("font_size", 20)
+		if known.has(kind):
+			line.text = Bestiary.describe(kind, known[kind])
+			line.add_theme_color_override("font_color", Color(0.86, 0.86, 0.92))
+		else:
+			line.text = "??? - noch nie begegnet."
+			line.add_theme_color_override("font_color", Color(0.48, 0.48, 0.56))
+		_kin_list.add_child(line)
+	var holder := _kin_panel.get_parent()
+	if holder != null:
+		holder.move_to_front()
+	_kin_panel.visible = true
+
+
+func close_kin() -> void:
+	if _kin_panel != null:
+		_kin_panel.visible = false
 
 
 ## The list of achievements, won and unwon, on the title screen.
@@ -3536,6 +3668,13 @@ func _build_settings(column: VBoxContainer) -> void:
 	awards.add_theme_font_size_override("font_size", 24)
 	awards.pressed.connect(open_awards)
 	row.add_child(awards)
+
+	var kin := Button.new()
+	kin.text = "Bestiarium"
+	kin.custom_minimum_size = Vector2(210, 54)
+	kin.add_theme_font_size_override("font_size", 24)
+	kin.pressed.connect(open_kin)
+	row.add_child(kin)
 
 	_pad_button = Button.new()
 	_pad_button.custom_minimum_size = Vector2(250, 54)

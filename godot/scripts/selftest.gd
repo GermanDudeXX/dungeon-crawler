@@ -81,6 +81,7 @@ func _process(_delta: float) -> bool:
 	_check_themes()
 	_check_quests()
 	_check_more()
+	_check_bestiary_and_waiting()
 	_check_elements()
 	_check_up_stairs()
 	_check_boss_phases()
@@ -2033,5 +2034,71 @@ func _check_more() -> void:
 		names[Data.tier_for(level)["id"]] = true
 	if names.size() < 9:
 		_complain("zu wenige Abschnitte", "%d verschiedene" % names.size())
+	_settle()
+
+
+## The bestiary and the waiting turn.
+##
+## Both are small and both are the kind of thing that quietly does
+## nothing: an entry that is never written, a button that spends no
+## turn at all.
+func _check_bestiary_and_waiting() -> void:
+	_settle()
+	var p = _game.player
+
+	# Every kind has to produce a readable line, including the ones with
+	# no habits at all - a description that crashes on the plainest
+	# monster in the game is worse than none.
+	for kind in Data.MONSTERS:
+		var line := Bestiary.describe(kind, {"seen": 1, "killed": 2, "killed_by": 3})
+		if line.length() < 10:
+			_complain("Bestiarium-Eintrag ist leer", kind)
+		if not line.contains(str(Data.MONSTERS[kind]["name"])):
+			_complain("Bestiarium nennt den Namen nicht", kind)
+
+	# Killing something writes it down.
+	var before: int = int(_game.known.get("orc", {}).get("killed", 0))
+	var spot: Variant = _open_spot()
+	if spot != null:
+		var orc = Entities.Monster.new("orc", 1.0, "easy")
+		orc.x = spot.x
+		orc.y = spot.y
+		orc.snap()
+		_game.monsters.append(orc)
+		_game._kill(orc)
+		if int(_game.known.get("orc", {}).get("killed", 0)) <= before:
+			_complain("erschlagenes Monster landet nicht im Bestiarium")
+
+	# The kill above may well have levelled the hero up, and a pending
+	# gift blocks everything until it is taken - including waiting.
+	_settle()
+
+	# Waiting spends a turn: the monsters move, and what runs on turns
+	# runs. Without it there is no way to heal before opening a door.
+	spot = _open_spot()
+	if spot != null:
+		p.x = spot.x
+		p.y = spot.y
+		p.max_hp = 100
+		p.hp = 100
+		p.buffs.clear()
+		p.buffs["strength"] = 3
+		_game.wait_a_turn()
+		if int(p.buffs.get("strength", 0)) != 2:
+			_complain("Warten kostet keinen Zug",
+				"Stärke steht bei %d statt 2" % int(p.buffs.get("strength", 0)))
+		if Vector2i(p.x, p.y) != spot:
+			_complain("Warten bewegt den Helden")
+		p.buffs.clear()
+
+	# And it must not work while a window is open, or a tap behind the
+	# bag quietly costs a turn.
+	_game.open_bag()
+	p.buffs["strength"] = 3
+	_game.wait_a_turn()
+	if int(p.buffs.get("strength", 0)) != 3:
+		_complain("Warten läuft trotz offener Tasche")
+	p.buffs.clear()
+	_game.close_bag()
 	_settle()
 
