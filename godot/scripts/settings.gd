@@ -12,6 +12,7 @@ const DEFAULTS := {
 	"sound": true,
 	"music": true,
 	"difficulty": "normal",
+	"flash": true,
 }
 
 

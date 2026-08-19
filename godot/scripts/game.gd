@@ -80,7 +80,9 @@ var _dead_panel: PanelContainer
 var _dead_text: Label
 var _sound_button: Button
 var _difficulty_button: Button
+var _flash_button: Button
 var _drink_button: Button
+var _flash: ColorRect
 var _scroll_buttons: Array = []
 var _perk_panel: PanelContainer
 var _perk_buttons: Array = []
@@ -745,6 +747,10 @@ func _attack_monster(monster) -> void:
 	damage += element
 	audio.play("boss" if monster.is_boss else "hit")
 	monster.hp -= damage
+	_damage_number(monster.cell(), str(damage),
+		Color(1.0, 0.90, 0.24) if crit else Color(1.0, 1.0, 1.0))
+	if crit:
+		_shake(2.0)
 	var leech := player.buff_total("lifesteal")
 	if leech > 0.0 and player.hp < player.max_hp:
 		var back: int = maxi(1, int(round(damage * leech)))
@@ -900,6 +906,9 @@ func _monster_attacks(monster) -> void:
 			_retaliate(monster)
 			return
 	player.hp -= damage
+	_damage_number(Vector2i(player.x, player.y), "-%d" % damage, Color(1.0, 0.35, 0.32))
+	_hurt_flash()
+	_shake(1.5)
 	say("%s trifft dich für %d." % [monster.display_name, damage])
 	_retaliate(monster)
 	if player.hp <= 0:
@@ -936,6 +945,7 @@ func _pick_up(cell: Vector2i) -> void:
 			var luck := 1.5 if player.has_buff("luck") else 1.0
 			var found: int = int(round(loot["amount"] * player.gold_mult * luck))
 			player.gold += found
+			_damage_number(cell, "+%d" % found, Color(1.0, 0.84, 0.30))
 			audio.play("coin")
 			say("%d Gold." % found)
 		"potion":
@@ -1049,6 +1059,9 @@ func _spring_trap(cell: Vector2i) -> void:
 	if trap.get("one_shot", false):
 		traps.erase(cell)
 	player.hp -= trap["damage"]
+	_damage_number(cell, "-%d" % int(trap["damage"]), Color(1.0, 0.55, 0.20))
+	_hurt_flash()
+	_shake(2.5)
 	audio.play("trap")
 	say("%s! Du nimmst %d Schaden." % [trap["name"], trap["damage"]])
 	if trap.has("poison"):
@@ -1212,6 +1225,7 @@ func _apply_effect(effect: Dictionary) -> void:
 	if effect.has("heal"):
 		var healed: int = mini(player.max_hp - player.hp, int(effect["heal"]))
 		player.hp += healed
+		_damage_number(Vector2i(player.x, player.y), "+%d" % healed, Color(0.42, 0.88, 0.50))
 		say("%d Leben zurück." % healed)
 	if effect.has("heal_pct"):
 		player.hp = player.max_hp
@@ -1615,6 +1629,12 @@ func _build_hud() -> void:
 	_play_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud.add_child(_play_ui)
 
+	_flash = ColorRect.new()
+	_flash.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_flash.color = Color(0.75, 0.10, 0.12, 0.0)
+	_flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_play_ui.add_child(_flash)
+
 	for name in ["stats", "gear", "fps", "log"]:
 		var label := Label.new()
 		label.name = name
@@ -1782,6 +1802,52 @@ func take_perk(index: int) -> void:
 		save_run()
 
 
+## A number that floats off a cell and fades. The cheapest way to make a
+## hit legible: without it the only sign that anything happened is a
+## line of text at the bottom of the screen, which nobody reads mid-fight.
+func _damage_number(cell: Vector2i, text: String, colour: Color) -> void:
+	var label := Label.new()
+	label.text = text
+	label.z_index = 5
+	label.add_theme_font_size_override("font_size", 10)
+	label.add_theme_color_override("font_color", colour)
+	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	label.add_theme_constant_override("outline_size", 4)
+	label.position = Vector2(cell) * TILE + Vector2(0, -4)
+	add_child(label)
+	var rise := create_tween()
+	rise.set_parallel(true)
+	rise.tween_property(label, "position:y", label.position.y - TILE, 0.5)
+	rise.tween_property(label, "modulate:a", 0.0, 0.5).set_delay(0.15)
+	rise.chain().tween_callback(label.queue_free)
+
+
+## A short shove of the camera. Used on the blows that are meant to feel
+## heavy - a critical hit, a trap, the moment the hero is hurt - and
+## nowhere else, or it stops meaning anything.
+func _shake(strength: float) -> void:
+	if _camera == null:
+		return
+	var home: Vector2 = _camera.offset
+	var shove := create_tween()
+	for i in 4:
+		var away := Vector2(
+			rng.randf_range(-strength, strength), rng.randf_range(-strength, strength))
+		shove.tween_property(_camera, "offset", home + away, 0.03)
+	shove.tween_property(_camera, "offset", home, 0.05)
+
+
+## A red wash over the screen when the hero is hit. Switchable, because
+## it is the one effect people ask to turn off - the pygame build got
+## exactly that request.
+func _hurt_flash() -> void:
+	if not settings.get("flash", true) or _flash == null:
+		return
+	_flash.color = Color(0.75, 0.10, 0.12, 0.35)
+	var fade := create_tween()
+	fade.tween_property(_flash, "color:a", 0.0, 0.35)
+
+
 ## What is left of a run when it ends. The pygame build shows the same
 ## four numbers; without them a death is just the word "gestorben" and
 ## the player has no idea whether it went well.
@@ -1869,6 +1935,13 @@ func _build_settings(column: VBoxContainer) -> void:
 	_difficulty_button.add_theme_font_size_override("font_size", 24)
 	_difficulty_button.pressed.connect(cycle_difficulty)
 	row.add_child(_difficulty_button)
+
+	# The red wash is the one effect people ask to turn off.
+	_flash_button = Button.new()
+	_flash_button.custom_minimum_size = Vector2(300, 62)
+	_flash_button.add_theme_font_size_override("font_size", 24)
+	_flash_button.pressed.connect(toggle_flash)
+	row.add_child(_flash_button)
 	_refresh_settings()
 
 
@@ -1880,6 +1953,8 @@ func _refresh_settings() -> void:
 		var level_of_play := Data.difficulty_by_id(difficulty)
 		_difficulty_button.text = "Schwierigkeit: %s" % level_of_play["name"]
 		_difficulty_button.tooltip_text = level_of_play["desc"]
+	if _flash_button != null:
+		_flash_button.text = "Roter Blitz: %s" % ("AN" if settings.get("flash", true) else "AUS")
 	_music_button.text = "Musik: %s" % ("AN" if settings["music"] else "AUS")
 
 
@@ -1897,6 +1972,13 @@ func cycle_difficulty() -> void:
 	Settings.write(settings)
 	_refresh_settings()
 	audio.play("equip")
+
+func toggle_flash() -> void:
+	settings["flash"] = not settings.get("flash", true)
+	Settings.write(settings)
+	_refresh_settings()
+	audio.play("equip")
+
 
 func toggle_sound() -> void:
 	settings["sound"] = not settings["sound"]
