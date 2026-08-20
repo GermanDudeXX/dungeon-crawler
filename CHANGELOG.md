@@ -17,6 +17,24 @@ Das Spiel gibt es in zwei Fassungen:
 
 # Godot-Fassung
 
+## 1.6.4 — Ein Symbol, das nach dem Spiel aussieht
+
+- **Das App-Symbol auf dem Handy war ein Ausschnitt.** Als Projektsymbol
+  stand der rohe 16 × 28 Pixel große Ritter-Sprite eingetragen: Android
+  zog das auf 512 hoch und schnitt es rund zu, übrig blieb ein Stück
+  Schild und ein halber Helm. Jetzt ein richtiges Set aus der eigenen
+  Grafik des Spiels — beleuchtete Ziegelwand, der Ritter mittig mit
+  Schatten, dünner Messingrahmen.
+- Dazu die **adaptiven** Fassungen, die Android getrennt braucht:
+  Vordergrund mit allem Wichtigen in den mittleren zwei Dritteln (mehr
+  lässt eine runde Maske nicht stehen), Hintergrund aus derselben Wand,
+  und eine **Silhouette** für die getönten Symbole ab Android 13 — ohne
+  die zeigt ein getönter Startbildschirm gar nichts.
+- **Die Windows-.exe trug Godots Roboter** in Taskleiste und Explorer.
+  Jetzt derselbe Ritter, als .ico in sechs Größen von 16 bis 256, damit
+  Windows in jeder Ansicht ein scharfes hat statt eines
+  zusammengequetschten.
+
 ## 1.6.3 — Der Fernkampf funktioniert wirklich
 
 Gemeldet: „automatischer Angriff, nichts mit Projektil fliegen sehen und
