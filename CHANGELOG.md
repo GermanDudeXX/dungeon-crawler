@@ -17,6 +17,23 @@ Das Spiel gibt es in zwei Fassungen:
 
 # Godot-Fassung
 
+## 1.6.2 — Knöpfe aus Stein und Messing, Schwierigkeit gehört zum Lauf
+
+- **Knöpfe sehen jetzt nach diesem Spiel aus.** Godots Standardknopf ist
+  eine graue Platte aus einem anderen Programm — neben dem Tileset liest
+  er sich wie ein Fehlerfenster. Jetzt derselbe warme dunkle Stein wie die
+  Fenster, mit Messingkante: heller unter dem Finger, leuchtend beim
+  Drücken, stumpf und grau, wenn er nicht gedrückt werden kann. Das
+  Steuerkreuz bleibt bewusst leiser als der Rest — acht messinggeränderte
+  Platten in der Ecke wären das Lauteste im ganzen Verlies.
+- **Die Schwierigkeit wird nach der Heldenwahl gefragt** und gilt dann für
+  den ganzen Lauf. Vorher stand sie in den Einstellungen zwischen Ton und
+  rotem Blitz und ließ sich mitten im Lauf umstellen — was an dem, was
+  schon auf der Ebene steht, nichts ändert: ein Hardcore-Lauf konnte auf
+  Leicht zu Ende gespielt werden. Sie gehört zum Lauf, also wird sie am
+  Anfang eines Laufs gewählt und danach gehalten. Nachlesen kann man sie
+  auf der Werte-Seite.
+
 ## 1.6.1 — Ein Knopf, der auch zuschlägt
 
 ### Behoben (gemeldet nach 1.6.0)

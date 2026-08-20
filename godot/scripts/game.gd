@@ -113,11 +113,12 @@ var _continue_button: Button
 var _dead_panel: PanelContainer
 var _dead_text: Label
 var _sound_button: Button
-var _difficulty_button: Button
 var _flash_button: Button
 var _volume_label: Label
 var _diagonal_button: Button
 var _corner_buttons: Array = []  ## the four diagonal keys of the pad
+var _level_panel: PanelContainer ## how hard, asked once, after the hero
+var _picked_class := ""          ## chosen, waiting for a level of play
 var _stats_panel: PanelContainer   ## what the hero actually adds up to
 var _options_panel: PanelContainer ## the title screen, one level down
 var _info_panel: PanelContainer
@@ -3501,6 +3502,7 @@ func _build_hud() -> void:
 	_hud = Control.new()
 	_hud.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud.theme = _button_look()
 	layer.add_child(_hud)
 
 	# Everything the player uses while walking lives in one node, so
@@ -3684,9 +3686,63 @@ func _build_hud() -> void:
 	_build_setup_panel()
 	_build_stats_panel()
 	_build_attack_hint()
+	_build_level_panel()
 	_build_options_panel()
 	_build_info_panel()
 	_build_title_panel()
+
+
+## One look for every button in the game.
+##
+## Godot's default button is a grey slab from a different program: it has
+## nothing to do with a torchlit dungeon of brick and old gold, and next
+## to the tileset it reads as a bug report window. This is the same warm
+## dark stone the panels are made of, with a brass edge that brightens
+## under a finger and glows when it is pressed.
+##
+## Set once on the HUD, so every button inside inherits it - including
+## the ones built later, which is most of them.
+func _button_look() -> Theme:
+	var look := Theme.new()
+	look.set_type_variation("", "")
+
+	var resting := StyleBoxFlat.new()
+	resting.bg_color = Color(0.16, 0.13, 0.17)
+	resting.border_color = Color(0.56, 0.42, 0.24)
+	resting.set_border_width_all(2)
+	resting.set_corner_radius_all(8)
+	resting.set_content_margin_all(10)
+	look.set_stylebox("normal", "Button", resting)
+
+	var under_finger: StyleBoxFlat = resting.duplicate()
+	under_finger.bg_color = Color(0.24, 0.19, 0.24)
+	under_finger.border_color = Color(0.86, 0.68, 0.32)
+	look.set_stylebox("hover", "Button", under_finger)
+
+	var pushed: StyleBoxFlat = resting.duplicate()
+	pushed.bg_color = Color(0.40, 0.29, 0.14)
+	pushed.border_color = Color(1.0, 0.82, 0.42)
+	pushed.set_border_width_all(3)
+	look.set_stylebox("pressed", "Button", pushed)
+
+	# A button nobody can press has to look like one. The old theme said so
+	# only with a slightly paler word.
+	var refused: StyleBoxFlat = resting.duplicate()
+	refused.bg_color = Color(0.11, 0.10, 0.12)
+	refused.border_color = Color(0.30, 0.27, 0.30)
+	look.set_stylebox("disabled", "Button", refused)
+
+	var edged: StyleBoxFlat = resting.duplicate()
+	edged.border_color = Color(1.0, 0.86, 0.50)
+	look.set_stylebox("focus", "Button", edged)
+
+	look.set_color("font_color", "Button", Color(0.94, 0.91, 0.85))
+	look.set_color("font_hover_color", "Button", Color(1.0, 0.95, 0.80))
+	look.set_color("font_pressed_color", "Button", Color(1.0, 0.88, 0.52))
+	look.set_color("font_disabled_color", "Button", Color(0.48, 0.46, 0.50))
+	look.set_color("font_outline_color", "Button", Color(0, 0, 0, 0.85))
+	look.set_constant("outline_size", "Button", 3)
+	return look
 
 
 ## A flat rectangle of colour, positioned by hand.
@@ -4152,6 +4208,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 ## Shuts the topmost thing that is open and says whether there was one.
 ## The order is the order they sit in front of each other.
 func close_topmost() -> bool:
+	if _level_panel != null and _level_panel.visible:
+		close_levels()
+		return true
 	if _attack_panel != null and _attack_panel.visible:
 		_attack_never_mind()
 		return true
@@ -5112,6 +5171,8 @@ func open_stats() -> void:
 	var rows: Array[String] = []
 	rows.append("Klasse:  %s          Stufe %d  (%d / %d XP)" % [
 		Data.class_by_id(p.hero_class)["name"], p.level, p.xp, p.xp_to_next])
+	rows.append("Schwierigkeit:  %s  (für diesen Lauf festgelegt)" % 
+		Data.difficulty_by_id(difficulty)["name"])
 	rows.append("")
 	rows.append("Leben:  %d / %d%s" % [p.hp, p.max_hp,
 		"    Schild %d" % p.shield if p.shield > 0 else ""])
@@ -5311,13 +5372,6 @@ func _build_settings(column: VBoxContainer) -> void:
 	_music_button.pressed.connect(toggle_music)
 	row.add_child(_music_button)
 
-	# The difficulty sits with the other switches rather than on a page
-	# of its own: it is picked once, in the same breath as the sound.
-	_difficulty_button = Button.new()
-	_difficulty_button.custom_minimum_size = Vector2(300, 54)
-	_difficulty_button.add_theme_font_size_override("font_size", 24)
-	_difficulty_button.pressed.connect(cycle_difficulty)
-	row.add_child(_difficulty_button)
 
 	# The red wash is the one effect people ask to turn off.
 	_flash_button = Button.new()
@@ -5400,10 +5454,6 @@ func _refresh_settings() -> void:
 	if _sound_button == null:
 		return
 	_sound_button.text = "Ton: %s" % ("AN" if settings["sound"] else "AUS")
-	if _difficulty_button != null:
-		var level_of_play := Data.difficulty_by_id(difficulty)
-		_difficulty_button.text = "Schwierigkeit: %s" % level_of_play["name"]
-		_difficulty_button.tooltip_text = level_of_play["desc"]
 	if _flash_button != null:
 		_flash_button.text = "Roter Blitz: %s" % ("AN" if settings.get("flash", true) else "AUS")
 	if _pause_sound != null:
@@ -5439,6 +5489,10 @@ func _apply_control_style() -> void:
 	var corners: bool = settings.get("diagonal", true)
 	for button in _pad_buttons:
 		button.visible = use_pad and (corners or not _corner_buttons.has(button))
+		# Quieter than the rest: the pad is under a thumb for the whole
+		# run, and eight brass-edged slabs in the corner of the screen
+		# would be the loudest thing in the dungeon.
+		button.modulate = Color(1, 1, 1, 0.62)
 
 
 func toggle_auto_shoot() -> void:
@@ -5465,21 +5519,6 @@ func toggle_pad() -> void:
 	_refresh_settings()
 	audio.play("equip")
 
-
-## Walks through the four levels of play. Only settable from the title
-## screen, which is the only place it is shown - changing it mid-run
-## would rescale monsters that were already built.
-func cycle_difficulty() -> void:
-	var at := 0
-	for i in Data.DIFFICULTIES.size():
-		if Data.DIFFICULTIES[i]["id"] == difficulty:
-			at = i
-			break
-	difficulty = Data.DIFFICULTIES[(at + 1) % Data.DIFFICULTIES.size()]["id"]
-	settings["difficulty"] = difficulty
-	Settings.write(settings)
-	_refresh_settings()
-	audio.play("equip")
 
 func toggle_flash() -> void:
 	settings["flash"] = not settings.get("flash", true)
@@ -5592,7 +5631,7 @@ func _build_title_panel() -> void:
 		pick.custom_minimum_size = Vector2(0, 62)
 		pick.add_theme_font_size_override("font_size", 26)
 		pick.add_theme_color_override("font_color", info["color"])
-		pick.pressed.connect(choose_class.bind(info["id"]))
+		pick.pressed.connect(offer_levels.bind(info["id"]))
 		card.add_child(pick)
 
 	# Two doors instead of a wall of switches.
@@ -5727,6 +5766,84 @@ func _attack_never_mind() -> void:
 	_attack_step = Vector2i.ZERO
 
 
+## How hard it should be, asked once, after the hero is picked.
+##
+## It used to sit in the settings between the sound and the red flash,
+## where it could be changed in the middle of a run - and changing it
+## mid-run changes nothing that is already standing on the floor, so a
+## hardcore run could be finished on easy. It belongs to the run, so it
+## is asked at the start of one and then held for its whole length.
+func _build_level_panel() -> void:
+	_level_panel = PanelContainer.new()
+	_level_panel.custom_minimum_size = Vector2(820, 560)
+	_level_panel.visible = false
+	_solid_panel(_level_panel)
+	_hud.add_child(_centred(_level_panel))
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 12)
+	_level_panel.add_child(column)
+
+	var heading := Label.new()
+	heading.text = "Wie schwer?"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 36)
+	heading.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
+	column.add_child(heading)
+
+	var note := Label.new()
+	note.text = "Gilt für den ganzen Lauf und lässt sich danach nicht mehr ändern."
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.custom_minimum_size = Vector2(760, 0)
+	note.add_theme_font_size_override("font_size", 20)
+	note.add_theme_color_override("font_color", Color(0.78, 0.78, 0.86))
+	column.add_child(note)
+
+	for entry in Data.DIFFICULTIES:
+		var pick := Button.new()
+		pick.text = "%s - %s" % [entry["name"], entry["desc"]]
+		pick.custom_minimum_size = Vector2(0, 74)
+		pick.add_theme_font_size_override("font_size", 22)
+		pick.pressed.connect(start_at_level.bind(str(entry["id"])))
+		column.add_child(pick)
+
+	var back := Button.new()
+	back.text = "ZURÜCK"
+	back.custom_minimum_size = Vector2(0, 58)
+	back.add_theme_font_size_override("font_size", 24)
+	back.pressed.connect(close_levels)
+	column.add_child(back)
+
+
+## The hero is chosen; now the level of play.
+func offer_levels(id: String) -> void:
+	_picked_class = id
+	if _level_panel == null:
+		choose_class(id)
+		return
+	_level_panel.get_parent().move_to_front()
+	_level_panel.visible = true
+	audio.play("equip")
+
+
+## Locks it in and starts the run. The choice is remembered as next
+## time's suggestion, but never applied behind anyone's back: the panel
+## always asks.
+func start_at_level(id: String) -> void:
+	difficulty = id
+	settings["difficulty"] = id
+	Settings.write(settings)
+	_level_panel.visible = false
+	_refresh_settings()
+	choose_class(_picked_class)
+
+
+func close_levels() -> void:
+	if _level_panel != null:
+		_level_panel.visible = false
+
+
 ## The switches, one level below the title screen.
 func _build_options_panel() -> void:
 	_options_panel = PanelContainer.new()
@@ -5851,6 +5968,7 @@ func close_info() -> void:
 ## the choice is never made against the corpse of the last run.
 func show_title() -> void:
 	choosing = true
+	close_levels()
 	close_options()
 	close_info()
 	close_pause()
