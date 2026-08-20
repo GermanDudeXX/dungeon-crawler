@@ -131,6 +131,7 @@ var _party_panel: PanelContainer ## hosting, joining, and who is here
 var _party_where: Label
 var _party_note: Label
 var _party_list: Label
+var _party_trail: Label
 var _party_field: LineEdit
 var _party_host: Button
 var _party_join: Button
@@ -227,7 +228,8 @@ var _perk_buttons: Array = []
 var perk_choices: Array = []      ## the three on offer right now
 var _music_button: Button
 var _held := Vector2i.ZERO
-var _stepped := Vector2i.ZERO    ## the direction the last step went
+var _stepped := Vector2i.ZERO
+var _pad_held := false           ## a direction button on the screen is under a finger    ## the direction the last step went
 var _stick: Stick
 var _pad_buttons: Array[Button] = []
 var _haste_flip := false
@@ -6468,6 +6470,18 @@ func _build_party_panel() -> void:
 	_party_list.add_theme_color_override("font_color", Color(0.80, 0.86, 0.78))
 	column.add_child(_party_list)
 
+	# What the connection is actually doing, line by line.
+	#
+	# "It does not work" is the least useful sentence in software, and it
+	# is the only one anyone can say when the screen shows nothing. Every
+	# step is written down here and into the log file, so a run that fails
+	# can be read afterwards instead of guessed at.
+	_party_trail = Label.new()
+	_party_trail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_party_trail.add_theme_font_size_override("font_size", 16)
+	_party_trail.add_theme_color_override("font_color", Color(0.62, 0.62, 0.70))
+	column.add_child(_party_trail)
+
 	_party_leave = Button.new()
 	_party_leave.text = "VERBINDUNG TRENNEN"
 	_party_leave.custom_minimum_size = Vector2(0, 58)
@@ -6484,6 +6498,12 @@ func _build_party_panel() -> void:
 
 	net.note.connect(_party_says)
 	net.party_changed.connect(_refresh_party)
+	net.traced.connect(_refresh_trail)
+
+
+func _refresh_trail() -> void:
+	if _party_trail != null:
+		_party_trail.text = "\n".join(net.trail)
 
 
 func open_party() -> void:
@@ -6492,6 +6512,7 @@ func open_party() -> void:
 	_party_panel.get_parent().move_to_front()
 	_party_panel.visible = true
 	_refresh_party()
+	_refresh_trail()
 	audio.play("equip")
 
 
@@ -6560,6 +6581,17 @@ func _refresh_party() -> void:
 					rest.append(found[at])
 				lines.append("Falls das nicht geht:  %s" % "   ".join(rest))
 			lines.append("Port %d" % Net.PORT)
+			# The one thing that catches everybody: a phone on mobile data
+			# sits behind the network of its provider, and nothing from
+			# outside can reach it there. The address it shows is real and
+			# completely unreachable, which is the worst combination.
+			if found[0].begins_with("10."):
+				lines.append("Achtung: mit mobilen Daten kann dich niemand"
+					+ " erreichen. WLAN oder Hotspot.")
+			_party_says("Warte auf Mitspieler." + ("" if OS.get_name() != "Windows"
+				else "
+Windows fragt beim ersten Mal nach einer Freigabe -"
+				+ " ohne 'Zulassen' kommt niemand durch."))
 			_party_where.text = "\n".join(lines)
 	elif net.guest:
 		_party_where.text = "Gast bei %s" % _party_field.text.strip_edges()
@@ -6857,8 +6889,11 @@ func _button(label: String, where: Vector2, size: float, step: Vector2i) -> Butt
 	button.add_theme_font_size_override("font_size", 40)
 	# Held, not tapped: walking is what a frame rate has to be measured
 	# on, and one step per tap measures nothing.
-	button.button_down.connect(func() -> void: _held = step)
+	button.button_down.connect(func() -> void:
+		_held = step
+		_pad_held = true)
 	button.button_up.connect(func() -> void:
+		_pad_held = false
 		if _held == step:
 			_held = Vector2i.ZERO)
 	_play_ui.add_child(button)
@@ -6892,6 +6927,15 @@ func _process(delta: float) -> void:
 		_held = _straighten(keyed)
 	elif _stick != null and _stick.direction() != Vector2i.ZERO:
 		_held = _straighten(_stick.direction())
+	elif not _pad_held:
+		# Nothing is under a finger any more, so nothing is held - checked
+		# every frame, not only when the step clock happens to be ready.
+		#
+		# That was the second step. Let go 0.2 s into a 0.34 s wait and the
+		# direction stayed standing until the clock ran out, and then the
+		# block below took one more step - a fifth of a second after the
+		# key was already up.
+		_held = Vector2i.ZERO
 
 	# Steps run on a clock, not per frame, so the hero does not walk faster
 	# the smoother it runs.
@@ -6913,10 +6957,6 @@ func _process(delta: float) -> void:
 		var pace: float = REPEAT_DELAY if fresh else STEP_TIME
 		_step_cooldown = pace * (sqrt(2.0) if diagonal else 1.0)
 		_stepped = _held
-		if _stick != null and _stick.direction() != Vector2i.ZERO:
-			_held = _straighten(_stick.direction())
-		elif not Input.is_anything_pressed():
-			_held = Vector2i.ZERO
 	if _held == Vector2i.ZERO:
 		# Let go, and the next press counts as fresh again.
 		_stepped = Vector2i.ZERO

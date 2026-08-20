@@ -45,6 +45,7 @@ const LOG_TAIL := 8
 
 signal party_changed()
 signal note(text: String)
+signal traced()
 
 var game: Node                    ## the one and only game.gd
 var hosting := false
@@ -52,6 +53,11 @@ var guest := false
 ## Who is here. The heroes themselves live in the game - one list, owned
 ## by the thing that owns the world - and this is only their names.
 var names := {}                   ## peer id -> what to call them
+var _dialing := -1.0              ## seconds spent knocking on a door
+var _floorless := false           ## a guest that has not been handed a floor yet
+var _asked := 0.0
+var _asks := 0
+var trail: Array[String] = []     ## the last few steps, for reading
 
 
 func _ready() -> void:
@@ -62,6 +68,44 @@ func _ready() -> void:
 	multiplayer.server_disconnected.connect(_host_is_gone)
 
 
+## Gives up knocking after a while.
+##
+## ENet keeps trying for a long time and says nothing, so a guest that
+## typed one digit wrong - or whose host is behind a firewall that never
+## answered - sits on "connecting ..." for ever and has no idea which of
+## the two it is. Twelve seconds is long enough for any wifi and short
+## enough to still be a message rather than a hang.
+func _process(delta: float) -> void:
+	_keep_asking(delta)
+	if _dialing < 0.0:
+		return
+	_dialing += delta
+	if _dialing < 12.0:
+		return
+	_dialing = -1.0
+	shut()
+	note.emit("Kein Kontakt zum Gastgeber.\nBeide im selben WLAN?"
+		+ " Adresse richtig abgetippt?\nAuf einem Windows-Gastgeber muss die"
+		+ " Freigabe der Firewall erlaubt sein.")
+
+
+## Writes down one step of the connection, on the screen and into the log
+## file.
+##
+## "It does not work" is not something anyone can act on, and a network
+## has a dozen ways to half-work. So every step says so: the port opened,
+## somebody knocked, the floor went out and how big it was, the floor came
+## in. Printed as well as shown, because print reaches the log file and a
+## log file can be sent to somebody who was not in the room.
+func trace(text: String) -> void:
+	var line := "%6.2f s  %s" % [Time.get_ticks_msec() / 1000.0, text]
+	print("[Netz] " + line)
+	trail.append(line)
+	while trail.size() > 8:
+		trail.remove_at(0)
+	traced.emit()
+
+
 ## Whether this copy of the game is in charge of the world.
 func in_charge() -> bool:
 	return not guest
@@ -69,6 +113,29 @@ func in_charge() -> bool:
 
 func playing_together() -> bool:
 	return hosting or guest
+
+
+## Asking again, and again, until the floor is actually here.
+##
+## The host sends it the moment somebody connects, which on one machine
+## is instant and in order. Across a real network that first packet can
+## go out before the guest has finished setting itself up - and then it
+## is simply gone, and the guest waits for ever for something nobody is
+## going to send again. A guest that keeps asking cannot get stuck that
+## way.
+func _keep_asking(delta: float) -> void:
+	if not guest or not _floorless:
+		return
+	_asked += delta
+	if _asked < 2.0:
+		return
+	_asked = 0.0
+	_asks += 1
+	rpc_id(1, "request", "hello", 0, 0)
+	trace("frage nach der Ebene (Versuch %d)" % _asks)
+	if _asks == 3:
+		note.emit("Verbunden, aber es kommt keine Ebene zurück."
+			+ "\nLäuft auf beiden Geräten dieselbe Version?")
 
 
 # --- opening and closing the door -----------------------------------------
@@ -85,6 +152,7 @@ func host(port := PORT) -> bool:
 	multiplayer.multiplayer_peer = peer
 	hosting = true
 	guest = false
+	trace("Port %d offen" % port)
 	game.party.clear()
 	names.clear()
 	game.party[1] = game.player
@@ -94,23 +162,39 @@ func host(port := PORT) -> bool:
 	return true
 
 
+## `address` may carry a port - "10.0.0.5:27615" - because that is how
+## everybody writes an address down, and typing it out in full should
+## not be the thing that fails.
 func join(address: String, port := PORT) -> bool:
 	shut()
+	var where := address.strip_edges()
+	if where.count(":") == 1:
+		var parts := where.split(":")
+		where = parts[0]
+		if parts[1].is_valid_int():
+			port = int(parts[1])
 	var peer := ENetMultiplayerPeer.new()
-	var error := peer.create_client(address.strip_edges(), port)
+	var error := peer.create_client(where, port)
 	if error != OK:
 		note.emit("Verbindung nicht möglich (Fehler %d)." % error)
 		return false
 	multiplayer.multiplayer_peer = peer
 	guest = true
 	hosting = false
-	note.emit("Verbinde mit %s ..." % address)
+	_dialing = 0.0
+	_floorless = true
+	_asked = 1.6
+	_asks = 0
+	trace("wähle %s:%d" % [where, port])
+	note.emit("Verbinde mit %s ..." % where)
 	return true
 
 
 ## Hangs up, whichever end this is. Leaves the game running on its own,
 ## because a lost connection should cost a run at most once.
 func shut() -> void:
+	_dialing = -1.0
+	_floorless = false
 	if multiplayer.multiplayer_peer != null:
 		multiplayer.multiplayer_peer.close()
 	multiplayer.multiplayer_peer = null
@@ -163,6 +247,7 @@ static func _is_carrier_grade(text: String) -> bool:
 func _someone_arrived(peer: int) -> void:
 	if not hosting:
 		return
+	trace("Peer %d verbunden" % peer)
 	note.emit("Jemand verbindet sich ...")
 	# The hero is built here, not there: the host owns everything that
 	# can affect the world, and a guest that picked its own numbers would
@@ -188,6 +273,8 @@ func _someone_left(peer: int) -> void:
 
 
 func _we_are_in() -> void:
+	_dialing = -1.0
+	trace("verbunden, ich bin %d" % multiplayer.get_unique_id())
 	note.emit("Verbunden. Warte auf die Ebene ...")
 	# The class was picked before joining, on this machine. The host has to
 	# be told, because the host is the one who builds the hero.
@@ -196,6 +283,7 @@ func _we_are_in() -> void:
 
 
 func _we_are_not() -> void:
+	_dialing = -1.0
 	guest = false
 	multiplayer.multiplayer_peer = null
 	note.emit("Der Gastgeber antwortet nicht.")
@@ -216,6 +304,8 @@ func send_floor(to := 0) -> void:
 	if not hosting:
 		return
 	var plan: Dictionary = game.floor_for_network()
+	trace("Ebene %d raus an %s (%d Bytes)" % [game.depth,
+		"alle" if to == 0 else str(to), var_to_bytes(plan).size()])
 	if to == 0:
 		rpc("take_floor", plan)
 	else:
@@ -231,6 +321,9 @@ func pulse() -> void:
 
 @rpc("authority", "call_remote", "reliable")
 func take_floor(plan: Dictionary) -> void:
+	_floorless = false
+	trace("Ebene angekommen (%d Bytes)" % var_to_bytes(plan).size())
+	note.emit("Im Dungeon.")
 	game.apply_network_floor(plan)
 
 
@@ -249,6 +342,14 @@ func request(what: String, x: int, y: int) -> void:
 		return
 	var who := multiplayer.get_remote_sender_id()
 	if not game.party.has(who):
+		return
+	if what == "hello":
+		# Somebody is still waiting for a floor. Sending it again costs
+		# fifteen kilobytes and fixes every way the first one could have
+		# gone missing.
+		trace("Peer %d fragt nach der Ebene" % who)
+		send_floor(who)
+		pulse()
 		return
 	game.guest_acts(who, what, Vector2i(x, y))
 

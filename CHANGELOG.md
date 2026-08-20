@@ -17,6 +17,40 @@ Das Spiel gibt es in zwei Fassungen:
 
 # Godot-Fassung
 
+## 1.7.1 — Der Doppelschritt, und ein Mehrspieler, der sagt was er tut
+
+### Behoben
+- **Man lief immer noch zwei Schritte.** `_held` — die gehaltene Richtung —
+  wurde nur *innerhalb* des Schritt-Blocks geleert. Lässt du nach 0,2 s
+  los, die Wiederholpause dauert aber 0,34 s, dann bleibt die Richtung
+  stehen, und sobald die Uhr abläuft, geht der Held ein zweites Mal —
+  eine Fünftelsekunde, nachdem du den Finger schon gehoben hattest.
+  Jetzt wird jedes Bild geprüft, ob überhaupt noch etwas gedrückt ist.
+  Gemessen: Richtung 0,2 s halten, loslassen, eine Sekunde warten →
+  **1 Feld** statt 2. Halten läuft weiterhin durch.
+
+### Mehrspieler
+- **Die Übergabe repariert sich selbst.** Der Gastgeber schickt die Ebene,
+  sobald jemand verbindet — auf einer Maschine sofort und in Reihenfolge,
+  über ein echtes Netz aber möglicherweise, bevor der Gast fertig
+  eingerichtet ist. Dann war das Paket weg und der Gast wartete ewig auf
+  etwas, das nie wieder kommt. Jetzt fragt der Gast alle zwei Sekunden
+  nach, bis die Ebene wirklich da ist.
+- **Man sieht, was passiert.** Jeder Schritt der Verbindung steht auf dem
+  Bildschirm und in der Logdatei: Port offen, Peer verbunden, Ebene raus
+  (mit Größe), Ebene angekommen. „Geht nicht" ist der unbrauchbarste Satz
+  in Software, und er war bisher der einzige, den man sagen konnte.
+- **Abbruch nach 12 Sekunden** statt endlosem „Verbinde …", mit den drei
+  Dingen, die es sein können.
+- **Adresse mit Port** (`10.0.0.5:27615`) wird jetzt akzeptiert — so
+  schreibt man eine Adresse nun einmal auf.
+- **Warnung bei mobilen Daten:** ein Handy im Mobilfunknetz sitzt hinter
+  dem NAT des Anbieters. Die angezeigte Adresse ist echt und trotzdem von
+  außen unerreichbar — die schlechteste aller Kombinationen, also steht
+  es jetzt dabei.
+- **Windows-Firewall:** der Gastgeber-Bildschirm erinnert daran, dass
+  Windows beim ersten Mal nach einer Freigabe fragt.
+
 ## 1.7.0 — Zu zweit im selben Dungeon
 
 **Koop über Netzwerk, selbst gehostet, Handy und PC gemischt.** Kein
