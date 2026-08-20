@@ -274,10 +274,13 @@ func install(path: String) -> bool:
 ## Everything is written with the rights the player already has - the
 ## game installs itself under the user's own AppData, so replacing it
 ## needs no administrator and no prompt.
-## Batch files want carriage returns. Named, because a literal one in
-## the middle of the script below is unreadable.
-const BAT_NL := "
-"
+## Batch files want carriage returns, and cmd.exe is particular about
+## it: a script with bare line feeds can lose its way on a label, and
+## this one jumps to one in a loop. Built from the two character codes
+## rather than written out, because an escape inside the script below
+## is one more thing to get wrong.
+static func bat_nl() -> String:
+	return String.chr(13) + String.chr(10)
 
 
 ## The batch file, as text. Kept apart from writing it so it can be read
@@ -285,16 +288,16 @@ const BAT_NL := "
 ## process and then moves a file over another one is not something to
 ## test by running it.
 static func swap_script(pid: int, fresh: String, running: String) -> String:
-	return ("@echo off" + BAT_NL
-		+ ":wait" + BAT_NL
-		+ "tasklist /FI \"PID eq %d\" | find \"%d\" >nul" % [pid, pid] + BAT_NL
-		+ "if not errorlevel 1 (" + BAT_NL
-		+ "  ping -n 2 127.0.0.1 >nul" + BAT_NL
-		+ "  goto wait" + BAT_NL
-		+ ")" + BAT_NL
-		+ "move /y \"%s\" \"%s\" >nul" % [fresh, running] + BAT_NL
-		+ "start \"\" \"%s\"" % running + BAT_NL
-		+ "del \"%~f0\"" + BAT_NL)
+	return ("@echo off" + bat_nl()
+		+ ":wait" + bat_nl()
+		+ "tasklist /FI \"PID eq %d\" | find \"%d\" >nul" % [pid, pid] + bat_nl()
+		+ "if not errorlevel 1 (" + bat_nl()
+		+ "  ping -n 2 127.0.0.1 >nul" + bat_nl()
+		+ "  goto wait" + bat_nl()
+		+ ")" + bat_nl()
+		+ "move /y \"%s\" \"%s\" >nul" % [fresh, running] + bat_nl()
+		+ "start \"\" \"%s\"" % running + bat_nl()
+		+ "del \"%~f0\"" + bat_nl())
 
 
 func _swap_windows_build(fresh: String) -> bool:

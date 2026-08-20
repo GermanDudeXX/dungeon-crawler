@@ -208,6 +208,10 @@ func _ready() -> void:
 	# single file sitting wherever it was downloaded, and it can move into
 	# a folder of its own if that is wanted.
 	if Setup.worth_offering() and not settings.get("install_asked", false):
+		# In front of the title screen, which is opaque and was built after
+		# this one - so without moving it the offer sits behind a solid
+		# panel and cannot be seen, let alone pressed.
+		_setup_panel.get_parent().move_to_front()
 		_setup_panel.visible = true
 
 
@@ -795,26 +799,33 @@ func _populate() -> void:
 	# whole.
 	decor.clear()
 	for _piece in range(4 + depth / 2):
-		var spot: Variant = _free_cell(spawn_rooms)
-		if spot == null:
-			continue
-		var piece: String = DECOR[rng.randi() % DECOR.size()]
-		# A banner hangs on a wall. Dropped on open floor it is a flag
-		# lying in the middle of a room, which is what it looked like -
-		# so one only goes down where there is a wall behind it to hang
-		# from, and it is drawn half a tile up, against that wall.
-		if piece.begins_with("wall_banner") \
-				and Dungeon.is_walkable(grid, spot.x, spot.y - 1):
-			continue
-		# And nothing solid in a doorway. A crate in front of a door
-		# does not seal the floor off - there is always a way round -
-		# but it does turn the door into furniture, and standing in a
-		# doorway is the one place scenery has no business being.
-		if piece in Data.BLOCKING_DECOR and _beside_a_door(spot):
-			continue
-		decor[spot] = piece
-		if piece in Data.BLOCKING_DECOR and _seals_something():
-			decor.erase(spot)
+		# Each piece gets a few tries rather than one. A banner that came
+		# up for a spot with no wall behind it used to cost the whole slot,
+		# and floors quietly lost half their scenery to rules about where
+		# scenery may not go.
+		for _attempt in 6:
+			var spot: Variant = _free_cell(spawn_rooms)
+			if spot == null:
+				break
+			var piece: String = DECOR[rng.randi() % DECOR.size()]
+			# A banner hangs on a wall. Dropped on open floor it is a flag
+			# lying in the middle of a room, which is what it looked like -
+			# so one only goes down where there is a wall behind it to hang
+			# from, and it is drawn half a tile up, against that wall.
+			if piece.begins_with("wall_banner") \
+					and Dungeon.is_walkable(grid, spot.x, spot.y - 1):
+				continue
+			# And nothing solid in a doorway. A crate in front of a door
+			# does not seal the floor off - there is always a way round -
+			# but it does turn the door into furniture, and standing in a
+			# doorway is the one place scenery has no business being.
+			if piece in Data.BLOCKING_DECOR and _beside_a_door(spot):
+				continue
+			decor[spot] = piece
+			if piece in Data.BLOCKING_DECOR and _seals_something():
+				decor.erase(spot)
+				continue
+			break
 
 
 	# Somebody chained up. Placed like the shrine - only where the hero
@@ -1403,6 +1414,11 @@ func _furnish_theme(where: Array, within: Dictionary) -> void:
 		var spot: Variant = _free_cell([room], within)
 		if spot == null:
 			continue
+		# The same rule the rest of the scenery follows: nothing solid in
+		# a doorway. A themed room is furnished separately, and the rule
+		# was only written into the other half.
+		if chosen["decor"] in Data.BLOCKING_DECOR and _beside_a_door(spot):
+			continue
 		decor[spot] = chosen["decor"]
 		if chosen["decor"] in Data.BLOCKING_DECOR and _seals_something():
 			decor.erase(spot)
@@ -1451,6 +1467,11 @@ func _hang_doors(where: Array) -> void:
 			if rng.randf() >= Data.DOOR_CHANCE:
 				continue
 			if cell == stairs or cell == up_stairs or cell == Vector2i(player.x, player.y):
+				continue
+			# Doors are hung after everything has been put down, so the cell
+			# has to be empty: a shut door with a monster inside it is a
+			# monster in a wall.
+			if occupied(cell) or taken(cell):
 				continue
 			if doors.has(cell):
 				continue
@@ -5429,6 +5450,11 @@ func _process(delta: float) -> void:
 	_play_ui.get_node("stats").text = line
 	_play_ui.get_node("gear").text = gear
 	_update_minimap()
+	# The shooting button appears for whoever can shoot. It was built
+	# hidden and then never shown again, which left a ranger on a phone
+	# with auto-shooting turned off holding a bow and no way to loose it.
+	if _shoot_button != null:
+		_shoot_button.visible = player.reach() > 0
 	if _drink_button != null:
 		if player.potions <= 0:
 			_drink_button.text = "KEINE TRÄNKE"
