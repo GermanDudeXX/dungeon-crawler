@@ -230,6 +230,11 @@ class Monster extends Actor:
 	var poisons := false
 	var flees_below := 0.0
 	var is_boss := false
+	# A number that stays the same across the wire, so a guest can tell
+	# "the orc that was there last turn, one step further along" from "a
+	# different orc". Without it every pulse would look like every
+	# monster died and a new one took its place.
+	var net_id := 0
 	var is_mimic := false
 	var is_keeper := false          ## stands over the chest
 	var burn_turns := 0             ## takes damage at the end of its turn

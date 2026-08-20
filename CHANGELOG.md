@@ -17,6 +17,52 @@ Das Spiel gibt es in zwei Fassungen:
 
 # Godot-Fassung
 
+## 1.7.0 — Zu zweit im selben Dungeon
+
+**Koop über Netzwerk, selbst gehostet, Handy und PC gemischt.** Kein
+Konto, kein Lobby-Dienst, kein Server von mir dazwischen: ein Gerät
+öffnet einen Port, die anderen tippen die Adresse ein.
+
+### Wie es funktioniert
+- **Titelbildschirm → ZUSAMMEN SPIELEN.** Wer hostet, sieht seine
+  Adresse groß und in Blau, samt Port — genau die vier Zahlen, die man
+  vorlesen muss. Wer beitritt, tippt sie ein.
+- **Der Gastgeber spielt mit** und ist gleichzeitig Server. Bis zu drei
+  Gäste.
+- **Crossplay ist kostenlos**: Handy und PC laufen mit derselben Engine
+  und demselben Protokoll. Ein Android-Gast an einem Windows-Gastgeber
+  ist kein Sonderfall, das ist der Normalfall.
+
+### Wie es gebaut ist
+Der Gastgeber besitzt die Welt. Er hat die ganze Ebene ohnehin in
+Variablen und weiß bereits, wie man sie als Daten hinschreibt — das ist
+der Spielstand. Also spielt er einfach weiter, und alle anderen schicken
+„ich will nach links" und bekommen zurück, wie die Ebene danach aussieht.
+Ein Gast kann sich damit nie verrechnen, nie auseinanderlaufen und nicht
+schummeln.
+
+Zwei Nachrichten tragen alles: **Ebene** (die komplette Etage, beim
+Beitreten und bei jedem Stockwerkswechsel — dieselbe Struktur wie der
+Spielstand, ein Serialisierer für Platte und Leitung) und **Puls** (was
+sich seit der letzten Handlung bewegt hat: Helden, Monster, Beute, Türen,
+die letzten Logzeilen).
+
+**Sicht wird nicht übertragen.** Jeder rechnet selbst aus, was er sieht —
+das spart die größte Datenstruktur des Spiels und sorgt dafür, dass die
+Fackel des einen nicht den Bildschirm des anderen erhellt. Man sieht
+seinen Mitspieler nur, wenn das eigene Licht ihn erreicht.
+
+### Was ehrlich noch fehlt
+- **Monster schlagen den, der gerade gezogen hat.** Stillstehen ist
+  dadurch sicherer, als es sein sollte. Das ist das Nächste, kein
+  Feature.
+- Ein gefallener Gast steht mit einem Viertel Leben neben dem Gastgeber
+  wieder auf — der Lauf endet nur, wenn der Gastgeber fällt.
+- Läden, Gaben beim Stufenaufstieg und Schriftrollen laufen weiterhin
+  nur beim Gastgeber.
+- Über das Internet braucht der Gastgeber eine Portfreigabe für
+  **UDP 27615**. Im selben WLAN geht es ohne alles.
+
 ## 1.6.6 — Die Mimik lässt keine Truhe zurück
 
 - **Eine Mimik-Truhe verschwindet jetzt beim Öffnen.** Vorher blieb sie

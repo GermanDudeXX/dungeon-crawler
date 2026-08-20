@@ -86,7 +86,24 @@ var decor := {}                  ## cell -> a sprite that is only scenery
 var captive = null               ## somebody chained up down here
 var shrine = null                ## the cell holding this floor's shrine, or null
 var shop_open = null            ## the shop the hero is standing in
-var dead := false
+## Whether the run is over.
+##
+## Written from seven different places - poison, bleeding, a trap, a
+## hazard, an explosion, an arrow, a swing - and every one of them says
+## the same thing. A property rather than a plain flag, so the one case
+## that has to be different can be handled once instead of seven times:
+## when a *guest* falls, the run does not end. Their hero is put back on
+## its feet beside the host with a quarter of its health, because one
+## person's bad step should not close the dungeon on everybody.
+var _run_over := false
+var dead: bool:
+	get:
+		return _run_over
+	set(value):
+		if value and net != null and net.hosting and _acting_peer > 1:
+			_pick_guest_up()
+			return
+		_run_over = value
 var hero_class := Data.DEFAULT_CLASS
 var difficulty := Data.DEFAULT_DIFFICULTY
 var choosing := true            ## the title screen is up, nothing moves
@@ -103,6 +120,21 @@ var _tile_ids := {}
 var _sprites := {}
 var _actor_nodes := {}
 var _item_nodes := {}
+var net: Net                     ## the door to the other players
+var party := {}                  ## host only: peer id -> that peer's hero
+var _acting_peer := 1            ## whose action the host is running right now
+var _net_ids := 0                ## the last number handed to a monster
+var _mates: Array = []           ## guest only: the other heroes, as plain data
+var _mate_nodes := {}            ## and their sprites
+var _by_net_id := {}             ## guest only: number -> the monster it belongs to
+var _party_panel: PanelContainer ## hosting, joining, and who is here
+var _party_where: Label
+var _party_note: Label
+var _party_list: Label
+var _party_field: LineEdit
+var _party_host: Button
+var _party_join: Button
+var _party_leave: Button
 var _hero_node: Sprite2D
 var _camera: Camera2D
 var _hud: Control
@@ -212,6 +244,13 @@ func _ready() -> void:
 	add_child(updater)
 	updater.checked.connect(_update_answer)
 	updater.fetched.connect(_update_fetched)
+	# Named, and named the same on every machine: a remote call finds its
+	# way by node path, so host and guest have to agree on where this
+	# thing lives.
+	net = Net.new()
+	net.name = "Net"
+	net.game = self
+	add_child(net)
 	audio = Audio.new()
 	add_child(audio)
 	audio.enabled = settings["sound"]
@@ -1268,6 +1307,12 @@ func _straighten(step: Vector2i) -> Vector2i:
 
 
 func try_move(step: Vector2i) -> void:
+	# A guest owns nothing: it asks, the host decides, and the answer
+	# arrives as the next pulse. Simulating it here as well would be
+	# two dungeons pretending to be one.
+	if net != null and net.guest:
+		net.ask("move", step)
+		return
 	# Caught in a web: the turn is spent tearing free instead of
 	# moving, and the monsters get their turn anyway.
 	if player != null and player.webbed > 0 and not dead and not choosing:
@@ -2562,6 +2607,12 @@ func _spend(cost: int) -> bool:
 ## an effect nobody handles would be a potion that costs a turn and does
 ## nothing, which is worse than not having it.
 func drink() -> void:
+	# A guest owns nothing: it asks, the host decides, and the answer
+	# arrives as the next pulse. Simulating it here as well would be
+	# two dungeons pretending to be one.
+	if net != null and net.guest:
+		net.ask("drink")
+		return
 	if busy() or player.potions <= 0:
 		return
 	var id: String = player.selected_potion
@@ -2970,6 +3021,12 @@ func _blink() -> void:
 ## than a swing, and needs a moment before the next one - otherwise a bow
 ## is simply a sword that also works at range.
 func shoot(on_its_own := false) -> void:
+	# A guest owns nothing: it asks, the host decides, and the answer
+	# arrives as the next pulse. Simulating it here as well would be
+	# two dungeons pretending to be one.
+	if net != null and net.guest:
+		net.ask("shoot")
+		return
 	if busy() or player.reach() <= 0:
 		return
 	# Paced by the clock, not by turns.
@@ -3170,6 +3227,12 @@ func rest_or_attack() -> void:
 ## way to heal up before opening a door, and a Potion of Regeneration
 ## can only be drunk while running away.
 func wait_a_turn() -> void:
+	# A guest owns nothing: it asks, the host decides, and the answer
+	# arrives as the next pulse. Simulating it here as well would be
+	# two dungeons pretending to be one.
+	if net != null and net.guest:
+		net.ask("wait")
+		return
 	if busy():
 		return
 	say("Du wartest.")
@@ -3270,6 +3333,13 @@ func paint() -> void:
 		_place_prop(shop["cell"], "blacksmith" if shop["kind"] == "smith" else "merchant")
 	for monster in monsters:
 		_place_monster(monster)
+	_paint_mates()
+
+	# One repaint means one action has just finished, so this is where the
+	# others get told what happened. Cheap when alone: the pulse returns at
+	# once if nobody else is connected.
+	if net != null and net.hosting:
+		net.pulse()
 
 	_stand_on(_hero_node, Vector2i(player.x, player.y), HERO_TILES, true)
 	_shadow_for(_hero_node, Vector2i(player.x, player.y), TILE * 1.35)
@@ -3750,6 +3820,7 @@ func _build_hud() -> void:
 	_build_level_panel()
 	_build_options_panel()
 	_build_info_panel()
+	_build_party_panel()
 	_build_title_panel()
 
 
@@ -3765,7 +3836,6 @@ func _build_hud() -> void:
 ## the ones built later, which is most of them.
 func _button_look() -> Theme:
 	var look := Theme.new()
-	look.set_type_variation("", "")
 
 	var resting := StyleBoxFlat.new()
 	resting.bg_color = Color(0.16, 0.13, 0.17)
@@ -4002,6 +4072,375 @@ func _refresh_gauges(delta: float) -> void:
 			float(boss.hp) / float(maxi(1, boss.max_hp)), 0.0, 1.0)
 		_boss_text.text = "%s   %d / %d" % [boss.display_name, maxi(0, boss.hp), boss.max_hp]
 
+
+# --- playing together -----------------------------------------------------
+
+## A guest who has fallen, put back on their feet beside the host.
+##
+## The alternative is that one person's bad step ends the run for
+## everyone at the table, which is a punishment nobody agreed to. A
+## quarter of their health and everything they were carrying: enough to
+## keep going, little enough that it hurt.
+func _pick_guest_up() -> void:
+	var fallen = player
+	fallen.hp = maxi(1, fallen.max_hp / 4)
+	fallen.poison_turns = 0
+	fallen.bleed_turns = 0
+	var spot: Vector2i = _room_for_one(Vector2i(party[1].x, party[1].y))
+	fallen.x = spot.x
+	fallen.y = spot.y
+	fallen.snap()
+	audio.play("player_hurt")
+	say("Ein Mitspieler ist gefallen und kommt zurück zum Gastgeber.")
+
+
+## A hero for someone who has just connected.
+##
+## Built here rather than there: everything that can affect the floor is
+## decided by the machine that owns the floor. A guest that rolled its own
+## hero would be a guest that rolled its own strength.
+func spawn_guest(peer: int) -> Variant:
+	var arrival = Entities.Player.new(Data.DEFAULT_CLASS, difficulty)
+	arrival.auto_shoot = true
+	var spot: Vector2i = _room_for_one(Vector2i(player.x, player.y))
+	arrival.x = spot.x
+	arrival.y = spot.y
+	arrival.snap()
+	say("Ein Mitspieler betritt den Dungeon.")
+	return arrival
+
+
+## Somewhere free next to a given cell, or that cell if the room is full.
+func _room_for_one(near: Vector2i) -> Vector2i:
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
+			Vector2i(1, 1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(-1, -1)]:
+		var at: Vector2i = near + offset
+		if Dungeon.is_walkable(grid, at.x, at.y) and not blocks(at) and not occupied(at):
+			return at
+	return near
+
+
+func remove_guest(peer: int) -> void:
+	say("Ein Mitspieler ist gegangen.")
+
+
+## Runs one guest's action as if it were the hero standing here.
+##
+## The whole game is written around a single `player`, and rewriting all
+## of it to carry a hero through every call would be a month of work and a
+## thousand chances to get it wrong. So the acting hero is swapped in for
+## the length of the action and swapped back out afterwards. Everything -
+## walking, fighting, drinking, the monsters' turn - then happens to the
+## right person without a single rule having to know that anyone else
+## exists.
+##
+## The cost is honest and worth naming: monsters chase and hit whoever
+## just moved. Standing still is safe in a way it should not be. That is
+## the next thing to fix, not a thing to pretend is a feature.
+func guest_acts(peer: int, what: String, step: Vector2i) -> void:
+	if not party.has(peer) or dead or choosing:
+		return
+	if what.begins_with("class:"):
+		_dress_guest(peer, what.substr(6))
+		return
+	var was = player
+	var was_deep: int = depth
+	_acting_peer = peer
+	player = party[peer]
+	match what:
+		"move":
+			try_move(step)
+		"wait":
+			wait_a_turn()
+		"shoot":
+			shoot()
+		"drink":
+			drink()
+	party[peer] = player
+	_acting_peer = 1
+	player = was
+	# A staircase takes the whole party with it. Anything else would be one
+	# player alone on a floor nobody else can reach.
+	if depth != was_deep:
+		_gather_party()
+		net.send_floor()
+	recompute_fov()
+	paint()
+
+
+## The class a guest picked on their own title screen. The hero is rebuilt
+## rather than edited: a class is a starting hand - health, kit, reach -
+## and half of it applied would be a hero nobody designed.
+func _dress_guest(peer: int, id: String) -> void:
+	var known := false
+	for entry in Data.CLASSES:
+		if entry["id"] == id:
+			known = true
+			break
+	if not known:
+		return
+	var where: Vector2i = Vector2i(party[peer].x, party[peer].y)
+	var fresh = Entities.Player.new(id, difficulty)
+	fresh.auto_shoot = true
+	fresh.x = where.x
+	fresh.y = where.y
+	fresh.snap()
+	party[peer] = fresh
+	net.names[peer] = Data.class_by_id(id)["name"]
+	net.party_changed.emit()
+	say("%s schließt sich an." % Data.class_by_id(id)["name"])
+	net.send_floor(peer)
+	net.pulse()
+
+
+## Everybody onto the staircase after somebody used it.
+func _gather_party() -> void:
+	var arrival := Vector2i(player.x, player.y)
+	for peer in party:
+		if peer == 1:
+			continue
+		var spot: Vector2i = _room_for_one(arrival)
+		party[peer].x = spot.x
+		party[peer].y = spot.y
+		party[peer].snap()
+
+
+## The whole floor, as the save file writes it. One serialiser for the
+## disk and the wire: a field added for one and forgotten for the other is
+## how a guest ends up walking through a wall that is there.
+func floor_for_network() -> Dictionary:
+	var plan: Dictionary = Save.floor_data(self)
+	plan["explored"] = []
+	for cell in explored:
+		plan["explored"].append([cell.x, cell.y])
+	return plan
+
+
+## What has moved since the last action.
+func pulse_for_network() -> Dictionary:
+	var heroes: Array = []
+	for peer in party:
+		var hero = party[peer]
+		heroes.append({
+			"peer": peer, "class": hero.hero_class, "x": hero.x, "y": hero.y,
+			"hp": hero.hp, "max_hp": hero.max_hp, "level": hero.level,
+			"xp": hero.xp, "next": hero.xp_to_next, "gold": hero.gold,
+			"shield": hero.shield, "potions": hero.potions,
+			"weapon": hero.weapon, "armour": hero.armour,
+			"poison": hero.poison_turns, "bleed": hero.bleed_turns,
+		})
+
+	var beasts: Array = []
+	for monster in monsters:
+		if not monster.is_alive():
+			continue
+		if monster.net_id == 0:
+			_net_ids += 1
+			monster.net_id = _net_ids
+		beasts.append({
+			"i": monster.net_id, "kind": monster.kind, "x": monster.x, "y": monster.y,
+			"hp": monster.hp, "max_hp": monster.max_hp, "awake": monster.awake,
+			"name": monster.display_name, "boss": monster.is_boss,
+			"elite": monster.is_elite, "keeper": monster.is_keeper,
+		})
+
+	var loot: Array = []
+	for item in items:
+		loot.append({"x": item["cell"].x, "y": item["cell"].y, "kind": item["kind"],
+			"amount": item.get("amount", 0), "potion": item.get("potion", ""),
+			"scroll": item.get("scroll", "")})
+
+	var gates: Array = []
+	for cell in doors:
+		gates.append([cell.x, cell.y, doors[cell]])
+
+	var tail: Array = []
+	var from: int = maxi(0, log_lines.size() - Net.LOG_TAIL)
+	for at in range(from, log_lines.size()):
+		tail.append(log_lines[at])
+
+	return {
+		"depth": depth, "heroes": heroes, "monsters": beasts, "items": loot,
+		"doors": gates, "log": tail, "over": dead,
+		"chest": null if chest == null else [chest["cell"].x, chest["cell"].y,
+			chest["opened"], chest.get("gone", false)],
+	}
+
+
+# --- and what a guest does with it ----------------------------------------
+
+## A whole floor has arrived. The same code the save file goes through,
+## because it is the same dictionary.
+func apply_network_floor(plan: Dictionary) -> void:
+	choosing = false
+	_run_over = false
+	depth = int(plan.get("depth", 1))
+	_clear_level_nodes()
+	_apply_floor(plan)
+	if _play_ui != null:
+		_play_ui.visible = true
+	if _title_panel != null:
+		_title_panel.visible = false
+	_by_net_id.clear()
+	recompute_fov()
+	paint()
+
+
+## One beat of the world. Everything that moves is replaced from what the
+## host says; everything that does not - walls, the shape of the floor -
+## is left exactly as it was.
+func apply_network_pulse(beat: Dictionary) -> void:
+	if player == null:
+		return
+	depth = int(beat.get("depth", depth))
+	tier = Data.tier_for(depth)
+
+	_mates.clear()
+	var mine: int = multiplayer.get_unique_id()
+	for entry in beat.get("heroes", []):
+		if int(entry["peer"]) == mine:
+			_wear(entry)
+		else:
+			_mates.append(entry)
+
+	_take_monsters(beat.get("monsters", []))
+	_take_items(beat.get("items", []))
+
+	doors.clear()
+	for gate in beat.get("doors", []):
+		doors[Vector2i(int(gate[0]), int(gate[1]))] = bool(gate[2])
+
+	var box: Variant = beat.get("chest")
+	if box == null:
+		chest = null
+	else:
+		chest = {"cell": Vector2i(int(box[0]), int(box[1])), "mimic": false,
+			"opened": bool(box[2]), "gone": bool(box[3])}
+
+	log_lines.clear()
+	for line in beat.get("log", []):
+		log_lines.append(str(line))
+
+	recompute_fov()
+	paint()
+
+
+## The guest's own hero, as the host sees it. Only the numbers travel: the
+## class was rolled once, on the host, and rerolling it every beat would
+## hand out a new hero sixty times a minute.
+func _wear(entry: Dictionary) -> void:
+	if player.hero_class != str(entry["class"]):
+		player = Entities.Player.new(str(entry["class"]), difficulty)
+		hero_class = player.hero_class
+		if _hero_node != null:
+			_hero_node.texture = load(CLASS_DIR
+				+ Data.class_by_id(player.hero_class)["sprite"] + ".png")
+	player.x = int(entry["x"])
+	player.y = int(entry["y"])
+	player.hp = int(entry["hp"])
+	player.max_hp = int(entry["max_hp"])
+	player.level = int(entry["level"])
+	player.xp = int(entry["xp"])
+	player.xp_to_next = int(entry["next"])
+	player.gold = int(entry["gold"])
+	player.shield = int(entry["shield"])
+	player.potions = int(entry["potions"])
+	player.weapon = int(entry["weapon"])
+	player.armour = int(entry["armour"])
+	player.poison_turns = int(entry["poison"])
+	player.bleed_turns = int(entry["bleed"])
+	_run_over = false
+
+
+## Monsters, matched up by their number rather than by their place in a
+## list: one that died in the middle would otherwise shift every monster
+## after it onto somebody else's sprite.
+func _take_monsters(beasts: Array) -> void:
+	var still_here := {}
+	for entry in beasts:
+		var id: int = int(entry["i"])
+		still_here[id] = true
+		var monster = _by_net_id.get(id)
+		if monster == null:
+			monster = Entities.Monster.new(str(entry["kind"]), 1.0, difficulty)
+			monster.net_id = id
+			_by_net_id[id] = monster
+			monsters.append(monster)
+			monster.x = int(entry["x"])
+			monster.y = int(entry["y"])
+			monster.snap()
+		monster.x = int(entry["x"])
+		monster.y = int(entry["y"])
+		monster.hp = int(entry["hp"])
+		monster.max_hp = int(entry["max_hp"])
+		monster.awake = bool(entry["awake"])
+		monster.display_name = str(entry["name"])
+		monster.is_boss = bool(entry["boss"])
+		monster.is_elite = bool(entry["elite"])
+		monster.is_keeper = bool(entry["keeper"])
+	for id in _by_net_id.keys():
+		if still_here.has(id):
+			continue
+		var gone = _by_net_id[id]
+		monsters.erase(gone)
+		if _actor_nodes.has(gone):
+			var sprite = _actor_nodes[gone]
+			if _shadows.has(sprite):
+				_shadows[sprite].queue_free()
+				_shadows.erase(sprite)
+			sprite.queue_free()
+			_actor_nodes.erase(gone)
+		_by_net_id.erase(id)
+
+
+## Loot, rebuilt outright - there are rarely more than a dozen pieces, and
+## a picture left behind for something somebody else picked up is worse
+## than rebuilding a short list.
+func _take_items(loot: Array) -> void:
+	items.clear()
+	var filled := {}
+	for entry in loot:
+		var cell := Vector2i(int(entry["x"]), int(entry["y"]))
+		filled[cell] = true
+		items.append({"cell": cell, "kind": str(entry["kind"]),
+			"amount": int(entry["amount"]), "potion": str(entry["potion"]),
+			"scroll": str(entry["scroll"])})
+	for key in _item_nodes.keys():
+		if typeof(key) != TYPE_VECTOR2I or filled.has(key):
+			continue
+		_item_nodes[key].queue_free()
+		_item_nodes.erase(key)
+
+
+## The other heroes, drawn where the host last saw them.
+func _paint_mates() -> void:
+	var shown := {}
+	for entry in _mates:
+		var peer: int = int(entry["peer"])
+		shown[peer] = true
+		var cell := Vector2i(int(entry["x"]), int(entry["y"]))
+		var info: Dictionary = Data.class_by_id(str(entry["class"]))
+		var sprite: Sprite2D = _mate_nodes.get(peer)
+		if sprite == null or not is_instance_valid(sprite):
+			sprite = Sprite2D.new()
+			sprite.centered = false
+			sprite.z_index = 2
+			add_child(sprite)
+			_mate_nodes[peer] = sprite
+		sprite.texture = load(CLASS_DIR + info["sprite"] + ".png")
+		_stand_on(sprite, cell, HERO_TILES, true)
+		_shadow_for(sprite, cell, TILE * 1.35)
+		# A companion is only visible where your own torch reaches. Two
+		# players in different rooms cannot see each other, which is the
+		# whole reason to shout across one.
+		sprite.visible = lit.has(cell)
+		sprite.self_modulate = info.get("shade", Color.WHITE)
+	for peer in _mate_nodes.keys():
+		if shown.has(peer):
+			continue
+		if is_instance_valid(_mate_nodes[peer]):
+			_mate_nodes[peer].queue_free()
+		_mate_nodes.erase(peer)
 
 ## Hangs a dialog in the middle of the screen and keeps it there.
 ##
@@ -4270,6 +4709,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 ## Shuts the topmost thing that is open and says whether there was one.
 ## The order is the order they sit in front of each other.
 func close_topmost() -> bool:
+	if _party_panel != null and _party_panel.visible:
+		close_party()
+		return true
 	if _level_panel != null and _level_panel.visible:
 		close_levels()
 		return true
@@ -5737,17 +6179,24 @@ func _build_title_panel() -> void:
 
 	var to_options := Button.new()
 	to_options.text = "EINSTELLUNGEN"
-	to_options.custom_minimum_size = Vector2(320, 62)
-	to_options.add_theme_font_size_override("font_size", 26)
+	to_options.custom_minimum_size = Vector2(300, 62)
+	to_options.add_theme_font_size_override("font_size", 24)
 	to_options.pressed.connect(open_options)
 	doors.add_child(to_options)
 
 	var to_info := Button.new()
 	to_info.text = "INFO & UPDATE"
-	to_info.custom_minimum_size = Vector2(320, 62)
-	to_info.add_theme_font_size_override("font_size", 26)
+	to_info.custom_minimum_size = Vector2(300, 62)
+	to_info.add_theme_font_size_override("font_size", 24)
 	to_info.pressed.connect(open_info)
 	doors.add_child(to_info)
+
+	var to_party := Button.new()
+	to_party.text = "ZUSAMMEN SPIELEN"
+	to_party.custom_minimum_size = Vector2(340, 62)
+	to_party.add_theme_font_size_override("font_size", 24)
+	to_party.pressed.connect(open_party)
+	doors.add_child(to_party)
 
 	# The record so far, under the choice. A dead run leaves nothing
 	# else behind, and this is the line that makes the next one worth
@@ -5931,6 +6380,206 @@ func close_levels() -> void:
 	if _level_panel != null:
 		_level_panel.visible = false
 
+
+## Hosting, joining, and the address to read out.
+##
+## Self-hosted means somebody has to know where "here" is, so the address
+## is the loudest thing on this screen: large, selectable, and with the
+## port already written into it, because a number typed into the wrong box
+## is the most common way this fails.
+##
+## No lobby, no account, no server of mine in the middle. The host opens a
+## port on their own machine and reads out four numbers.
+func _build_party_panel() -> void:
+	_party_panel = PanelContainer.new()
+	_party_panel.custom_minimum_size = Vector2(880, 620)
+	_party_panel.visible = false
+	_solid_panel(_party_panel)
+	_hud.add_child(_centred(_party_panel))
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 12)
+	_party_panel.add_child(column)
+
+	var heading := Label.new()
+	heading.text = "Zusammen spielen"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 34)
+	heading.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
+	column.add_child(heading)
+
+	var blurb := Label.new()
+	blurb.text = ("Ein Gerät hostet und spielt mit, die anderen treten bei."
+		+ " Handy und PC gemischt ist ausdrücklich vorgesehen.")
+	blurb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	blurb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	blurb.custom_minimum_size = Vector2(820, 0)
+	blurb.add_theme_font_size_override("font_size", 20)
+	blurb.add_theme_color_override("font_color", Color(0.78, 0.78, 0.86))
+	column.add_child(blurb)
+
+	_party_host = Button.new()
+	_party_host.text = "SPIEL HOSTEN"
+	_party_host.custom_minimum_size = Vector2(0, 66)
+	_party_host.add_theme_font_size_override("font_size", 26)
+	_party_host.pressed.connect(start_hosting)
+	column.add_child(_party_host)
+
+	# The address. Big enough to read from across a room and out of a
+	# phone held at arm's length, because that is exactly what happens.
+	_party_where = Label.new()
+	_party_where.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_party_where.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_party_where.custom_minimum_size = Vector2(820, 0)
+	_party_where.add_theme_font_size_override("font_size", 30)
+	_party_where.add_theme_color_override("font_color", Color(0.55, 0.92, 1.0))
+	column.add_child(_party_where)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	column.add_child(row)
+
+	_party_field = LineEdit.new()
+	_party_field.placeholder_text = "192.168.0.12"
+	_party_field.custom_minimum_size = Vector2(420, 60)
+	_party_field.add_theme_font_size_override("font_size", 26)
+	_party_field.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	row.add_child(_party_field)
+
+	_party_join = Button.new()
+	_party_join.text = "BEITRETEN"
+	_party_join.custom_minimum_size = Vector2(240, 60)
+	_party_join.add_theme_font_size_override("font_size", 24)
+	_party_join.pressed.connect(start_joining)
+	row.add_child(_party_join)
+
+	_party_note = Label.new()
+	_party_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_party_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_party_note.custom_minimum_size = Vector2(820, 0)
+	_party_note.add_theme_font_size_override("font_size", 21)
+	_party_note.add_theme_color_override("font_color", Color(0.86, 0.86, 0.92))
+	column.add_child(_party_note)
+
+	_party_list = Label.new()
+	_party_list.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_party_list.add_theme_font_size_override("font_size", 21)
+	_party_list.add_theme_color_override("font_color", Color(0.80, 0.86, 0.78))
+	column.add_child(_party_list)
+
+	_party_leave = Button.new()
+	_party_leave.text = "VERBINDUNG TRENNEN"
+	_party_leave.custom_minimum_size = Vector2(0, 58)
+	_party_leave.add_theme_font_size_override("font_size", 22)
+	_party_leave.pressed.connect(stop_playing_together)
+	column.add_child(_party_leave)
+
+	var back := Button.new()
+	back.text = "ZURÜCK"
+	back.custom_minimum_size = Vector2(0, 58)
+	back.add_theme_font_size_override("font_size", 24)
+	back.pressed.connect(close_party)
+	column.add_child(back)
+
+	net.note.connect(_party_says)
+	net.party_changed.connect(_refresh_party)
+
+
+func open_party() -> void:
+	if _party_panel == null:
+		return
+	_party_panel.get_parent().move_to_front()
+	_party_panel.visible = true
+	_refresh_party()
+	audio.play("equip")
+
+
+func close_party() -> void:
+	if _party_panel != null:
+		_party_panel.visible = false
+
+
+func start_hosting() -> void:
+	if not net.host():
+		return
+	# Hosting is playing: the host drops straight into its own run, and the
+	# panel stays open behind it so the address can still be read out.
+	if choosing:
+		choose_class(hero_class)
+	# The hero the host is actually playing, in the party list: choose_class
+	# builds a fresh one, so the entry made a moment ago points at the hero
+	# from before.
+	party[1] = player
+	_refresh_party()
+
+
+func start_joining() -> void:
+	var address: String = _party_field.text.strip_edges()
+	if address == "":
+		_party_says("Erst die Adresse des Gastgebers eintippen.")
+		return
+	if net.join(address):
+		_refresh_party()
+
+
+func stop_playing_together() -> void:
+	net.shut()
+	_party_says("Getrennt. Du spielst wieder allein.")
+	_refresh_party()
+
+
+func _party_says(text: String) -> void:
+	if _party_note != null:
+		_party_note.text = text
+
+
+## Rewrites the panel for whatever state the connection is in. Three
+## states, and each one hides what makes no sense in it: you cannot join
+## while hosting, and there is nothing to leave while alone.
+func _refresh_party() -> void:
+	if _party_panel == null:
+		return
+	var together: bool = net.playing_together()
+	_party_host.visible = not together
+	_party_field.visible = not together
+	_party_join.visible = not together
+	_party_leave.visible = together
+
+	if net.hosting:
+		var found: Array[String] = Net.addresses()
+		if found.is_empty():
+			_party_where.text = ("Kein Netzwerk gefunden. Ohne WLAN oder Kabel"
+				+ " kann niemand hierher finden.")
+		else:
+			var lines: Array[String] = []
+			lines.append("Deine Adresse:  %s" % found[0])
+			if found.size() > 1:
+				var rest: Array[String] = []
+				for at in range(1, mini(found.size(), 4)):
+					rest.append(found[at])
+				lines.append("Falls das nicht geht:  %s" % "   ".join(rest))
+			lines.append("Port %d" % Net.PORT)
+			_party_where.text = "\n".join(lines)
+	elif net.guest:
+		_party_where.text = "Gast bei %s" % _party_field.text.strip_edges()
+	else:
+		_party_where.text = ""
+
+	if not together:
+		_party_list.text = ""
+		return
+	var who: Array[String] = []
+	if net.hosting:
+		for peer in party:
+			var hero = party[peer]
+			who.append("%s (%s, Stufe %d)" % [str(net.names.get(peer, "Gast")),
+				Data.class_by_id(hero.hero_class)["name"], hero.level])
+	else:
+		who.append("Du: %s" % Data.class_by_id(player.hero_class)["name"])
+		for entry in _mates:
+			who.append(Data.class_by_id(str(entry["class"]))["name"])
+	_party_list.text = "Im Dungeon:  " + ",  ".join(who)
 
 ## The switches, one level below the title screen.
 func _build_options_panel() -> void:
