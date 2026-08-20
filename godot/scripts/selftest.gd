@@ -86,6 +86,7 @@ func _process(_delta: float) -> bool:
 	_check_bestiary_and_waiting()
 	_check_bow()
 	_check_auto_shoot()
+	_check_difficulty_sight()
 	_check_captive()
 	_check_floor_memory()
 	_check_elements()
@@ -449,6 +450,42 @@ func every_door_leads_somewhere(game) -> void:
 			if game._pocket_behind(cell, cell + offset) <= game.DOOR_POCKET:
 				_complain("Tür führt ins Nichts",
 					"Ebene %d, %s" % [game.depth, str(cell)])
+
+## Sight, traps and landmarks follow the difficulty and the depth.
+##
+## All three are one-line rules in a table, which is exactly the kind of
+## thing that gets edited later and quietly stops meaning anything.
+func _check_difficulty_sight() -> void:
+	_settle()
+	var was: String = _game.difficulty
+	var seen := {}
+	for entry in Data.DIFFICULTIES:
+		_game.difficulty = entry["id"]
+		var far: int = _game.sight_radius()
+		if far < 4:
+			_complain("Sichtweite zu klein", "%s: %d" % [entry["id"], far])
+		seen[entry["id"]] = far
+	_game.difficulty = was
+	if seen.get("easy", 0) <= seen.get("normal", 0):
+		_complain("Leicht sieht nicht weiter als Normal")
+	if seen.get("hardcore", 0) >= seen.get("hard", 0):
+		_complain("Hardcore sieht nicht weniger als Schwer")
+	if not Data.difficulty_by_id("easy").get("traps_seen", false):
+		_complain("auf Leicht sind Fallen nicht sichtbar")
+	if Data.difficulty_by_id("hard").get("traps_seen", false):
+		_complain("auf Schwer sind Fallen sichtbar")
+
+	# Something worth remembering every second or third floor, and never
+	# two of them on the same one.
+	var landmarks := 0
+	for level in range(2, 16):
+		if Data.has_boss(level) and Data.has_mini_boss(level):
+			_complain("Boss und Mini-Boss auf derselben Ebene", "Ebene %d" % level)
+		if Data.has_boss(level) or Data.has_mini_boss(level):
+			landmarks += 1
+	if landmarks < 7:
+		_complain("zu wenige Bosse zwischen Ebene 2 und 15", str(landmarks))
+	_settle()
 
 func _complain(what: String, detail: String = "") -> void:
 	_problems[what] = _problems.get(what, 0) + 1

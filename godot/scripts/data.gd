@@ -534,8 +534,10 @@ const ELITES := [
 const ELITE_CHANCE := 0.10
 const ELITE_XP_MULT := 2.5
 
-# A mini-boss on every third floor that has no real boss - so the gap
-# between boss floors has a landmark in it.
+# A mini-boss on the floor before each boss floor, so the gap between
+# bosses has a landmark in it. With bosses on 6, 9, 12 that puts one on
+# 2, 5, 8, 11: something worth remembering every second or third floor,
+# and never two in a row.
 const MINI_BOSS_EVERY := 3
 const MINI_BOSS_MULT := 1.6
 const MINI_BOSS_XP_MULT := 2.5
@@ -556,7 +558,7 @@ const TREASURE_MIN_LEVEL := 2
 
 
 static func has_mini_boss(level: int) -> bool:
-	return level % MINI_BOSS_EVERY == 0 and not has_boss(level)
+	return level >= 2 and level % MINI_BOSS_EVERY == 2 and not has_boss(level)
 
 
 # --- Seltenheit -----------------------------------------------------------
@@ -626,18 +628,22 @@ static func smith_price(bonus: int) -> int:
 # monster is built from and to the hero's starting health - not to every
 # calculation afterwards, so nothing has to remember to re-apply them.
 const DIFFICULTIES := [
-	{"id": "easy", "name": "Leicht", "desc": "Für den Weg dahin.",
+	# `sight` shifts the torch, `traps_seen` decides whether a trap is a
+	# thing you avoid or a thing you discover. Both belong to the
+	# difficulty because both are the same question - how much is the
+	# floor willing to tell you before it costs you something.
+	{"id": "easy", "name": "Leicht", "desc": "Für den Weg dahin. Weite Sicht, sichtbare Fallen.",
 		"player_hp": 2.0, "player_damage": 1.0, "enemy_hp": 0.75, "enemy_damage": 0.5,
-		"markup": 0.0},
+		"markup": 0.0, "sight": 2, "traps_seen": true},
 	{"id": "normal", "name": "Normal", "desc": "So ist es gedacht.",
 		"player_hp": 1.0, "player_damage": 1.0, "enemy_hp": 1.0, "enemy_damage": 1.0,
-		"markup": 0.0},
-	{"id": "hard", "name": "Schwer", "desc": "Härter, teurer, tödlicher.",
+		"markup": 0.0, "sight": 0, "traps_seen": false},
+	{"id": "hard", "name": "Schwer", "desc": "Härter, teurer, tödlicher. Engere Sicht.",
 		"player_hp": 0.75, "player_damage": 1.2, "enemy_hp": 1.25, "enemy_damage": 1.25,
-		"markup": 0.20},
-	{"id": "hardcore", "name": "Hardcore", "desc": "Jeder Fehler zählt doppelt.",
+		"markup": 0.20, "sight": -1, "traps_seen": false},
+	{"id": "hardcore", "name": "Hardcore", "desc": "Jeder Fehler zählt doppelt. Du siehst kaum etwas.",
 		"player_hp": 0.5, "player_damage": 0.5, "enemy_hp": 2.0, "enemy_damage": 2.0,
-		"markup": 0.50},
+		"markup": 0.50, "sight": -2, "traps_seen": false},
 ]
 const DEFAULT_DIFFICULTY := "normal"
 

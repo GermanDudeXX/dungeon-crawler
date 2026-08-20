@@ -102,6 +102,16 @@ func direction() -> Vector2i:
 	return _direction
 
 
+## How far the thumb has been pushed, and which way, before the snap to
+## eight directions. Needed by whoever has to decide which single axis a
+## diagonal was mostly meant as - the snapped direction has thrown that
+## away by then.
+func pull() -> Vector2:
+	if _touching < 0:
+		return Vector2.ZERO
+	return _knob - _origin
+
+
 func _draw() -> void:
 	if _touching < 0:
 		return

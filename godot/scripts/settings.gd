@@ -20,6 +20,9 @@ const DEFAULTS := {
 	"flash": true,
 	"pad": false,
 	"auto_shoot": true,
+	# Eight directions or four. Off means the stick and the keys give the
+	# stronger of the two axes instead of both at once.
+	"diagonal": true,
 	# Asked once, on Windows, whether the game should move itself into a
 	# proper folder. Remembered either way: an offer that comes back every
 	# single launch is not an offer, it is nagging.

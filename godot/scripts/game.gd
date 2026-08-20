@@ -116,6 +116,14 @@ var _sound_button: Button
 var _difficulty_button: Button
 var _flash_button: Button
 var _volume_label: Label
+var _diagonal_button: Button
+var _stats_panel: PanelContainer   ## what the hero actually adds up to
+var _options_panel: PanelContainer ## the title screen, one level down
+var _info_panel: PanelContainer
+var _info_record: Label
+var _buff_chips: Array = []      ## one plate per running buff
+var _buff_peak := {}             ## the longest each buff has been, to draw a share of
+var _stats_text: Label
 var _setup_panel: PanelContainer  ## the Windows "shall I move in?" offer
 var _setup_text: Label
 var _music_label: Label
@@ -149,6 +157,7 @@ var _pause_sound: Button
 var _pause_music: Button
 var _pause_flash: Button
 var _pause_pad: Button
+var _pause_stats: Button
 var _pause_auto: Button
 var _bag_panel: PanelContainer
 var _bag_list: VBoxContainer
@@ -1130,12 +1139,23 @@ func item_at(cell: Vector2i) -> Variant:
 
 # --- sight ----------------------------------------------------------------
 
+## How far the torch reaches on this difficulty.
+##
+## An easy run sees two tiles further, a hard one one less, hardcore two
+## less. Sight is the cheapest difficulty there is: the same floor with
+## the same monsters is a different problem when you meet them one tile
+## later.
+func sight_radius() -> int:
+	return maxi(4, Data.FOV_RADIUS + int(Data.difficulty_by_id(difficulty).get("sight", 0)))
+
+
 func recompute_fov() -> void:
 	lit.clear()
 	var here := Vector2i(player.x, player.y)
-	for dy in range(-Data.FOV_RADIUS, Data.FOV_RADIUS + 1):
-		for dx in range(-Data.FOV_RADIUS, Data.FOV_RADIUS + 1):
-			if Vector2(dx, dy).length() > Data.FOV_RADIUS:
+	var far: int = sight_radius()
+	for dy in range(-far, far + 1):
+		for dx in range(-far, far + 1):
+			if Vector2(dx, dy).length() > far:
 				continue
 			var cell := here + Vector2i(dx, dy)
 			# Off the map is not somewhere you can see. Without this the
@@ -1213,6 +1233,22 @@ func _corner_cut(from: Vector2i, step: Vector2i) -> bool:
 	return false
 
 
+## Cuts a diagonal down to one axis when the player has asked for four
+## directions.
+##
+## Not everyone wants eight. On a stick a diagonal is easy to hit by
+## accident, and in a corridor it is never the step that was meant. The
+## stronger axis wins; on a perfect diagonal, sideways - because the
+## screen is wider than it is tall and that is the way the room usually
+## runs.
+func _straighten(step: Vector2i) -> Vector2i:
+	if settings.get("diagonal", true) or step.x == 0 or step.y == 0:
+		return step
+	if _stick != null and absf(_stick.pull().y) > absf(_stick.pull().x):
+		return Vector2i(0, step.y)
+	return Vector2i(step.x, 0)
+
+
 func try_move(step: Vector2i) -> void:
 	# Caught in a web: the turn is spent tearing free instead of
 	# moving, and the monsters get their turn anyway.
@@ -1224,6 +1260,10 @@ func try_move(step: Vector2i) -> void:
 		paint()
 		return
 	if busy() or step == Vector2i.ZERO:
+		return
+	# Also here, not only where the input is read: a key held from before
+	# the switch was flipped would otherwise still walk at an angle.
+	if not settings.get("diagonal", true) and step.x != 0 and step.y != 0:
 		return
 	var target := Vector2i(player.x + step.x, player.y + step.y)
 	if _corner_cut(Vector2i(player.x, player.y), step):
@@ -2971,6 +3011,10 @@ func busy() -> bool:
 		return true
 	if _pause_panel != null and _pause_panel.visible:
 		return true
+	# Reading your own numbers costs no turn, but it does stop the world:
+	# a step taken while that page is open is a step nobody meant.
+	if _stats_panel != null and _stats_panel.visible:
+		return true
 	if _perk_panel != null and _perk_panel.visible and player.pending_perks > 0:
 		return true
 	return false
@@ -3081,6 +3125,14 @@ func paint() -> void:
 		_place_prop(cell, Data.HAZARDS[hazards[cell]]["tile"])
 	for cell in webs:
 		_place_prop(cell, "wall_goo")
+	# On an easy run a trap is something to walk around rather than
+	# something to discover, so it is drawn as soon as the light reaches
+	# it. On every other difficulty it stays exactly what it was: a floor
+	# tile that turns out not to be one.
+	if Data.difficulty_by_id(difficulty).get("traps_seen", false):
+		for cell in traps:
+			if lit.has(cell):
+				_place_prop(cell, "floor_spikes_anim_f0")
 	for cell in doors:
 		_place_prop(cell, "doors_leaf_open" if doors[cell] else "doors_leaf_closed")
 		# A door is part of the floor plan, so it stays on the map once
@@ -3267,6 +3319,17 @@ func _place_monster(monster) -> void:
 		track.material = unlit
 		track.visible = false
 		node.add_child(track)
+		# And a name, for the ones that have one worth reading. Not for
+		# ordinary monsters: five rats in a room would put the word "Ratte"
+		# on the screen five times, and the picture already says rat.
+		var plate := Label.new()
+		plate.name = "nameplate"
+		plate.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		plate.material = unlit
+		plate.visible = false
+		node.add_child(plate)
+
 		var bar := ColorRect.new()
 		bar.name = "health"
 		bar.color = Color(0.85, 0.25, 0.25)
@@ -3322,6 +3385,43 @@ func _place_monster(monster) -> void:
 			track.size = Vector2(span + edge.x * 2.0, thick + edge.y * 2.0)
 			bar.position = Vector2(art.position.x, top)
 			bar.size = Vector2(span * left, thick)
+
+			var plate: Label = sprite.get_node_or_null("nameplate")
+			if plate != null:
+				# A boss is named wherever it stands. An elite only close up:
+				# six of them across a room put six lines of text over the
+				# floor and hid the fight underneath.
+				var close: bool = absi(monster.x - player.x) + absi(monster.y - player.y) <= 4
+				plate.visible = monster.is_boss or ((monster.is_elite or monster.is_keeper) and close)
+				if plate.visible:
+					# The label hangs off the sprite, and the sprite is scaled to
+					# fill its tiles - a boss by two and a half. Left alone the
+					# name is scaled with it and ends up bigger than the monster,
+					# which is exactly what it did. So the label carries the
+					# inverse scale and a fixed size in real pixels.
+					const PLATE_W := 220.0
+					const PLATE_H := 20.0
+					# Against the sprite scale *and* the camera zoom: both magnify
+					# whatever is drawn in the world, and a name is meant to be
+					# the same size on the screen no matter how far the view is
+					# zoomed in or how large the thing wearing it is.
+					var magnified: float = _camera.zoom.x if _camera != null else 1.0
+					var back := Vector2(1.0 / (sprite.scale.x * magnified),
+						1.0 / (sprite.scale.y * magnified))
+					plate.scale = back
+					plate.size = Vector2(PLATE_W, PLATE_H)
+					plate.add_theme_font_size_override("font_size", 15)
+					plate.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+					plate.add_theme_constant_override("outline_size", 5)
+					plate.add_theme_color_override("font_color",
+						Color(1.0, 0.72, 0.55) if monster.is_boss else Color(1.0, 0.92, 0.62))
+					plate.text = monster.display_name
+					# Centred over the art and sitting on top of the bar, both
+					# worked out in the sprite's coordinates.
+					plate.position = Vector2(
+						art.position.x + art.size.x * 0.5 - PLATE_W * back.x * 0.5,
+						top - edge.y - PLATE_H * back.y)
+
 			if monster.is_boss:
 				bar.color = Color(1.0, 0.45, 0.25)
 			else:
@@ -3364,8 +3464,8 @@ func _build_hud() -> void:
 	# Two lines, because one did not fit: at 1280 wide the gear names
 	# pushed the buff row off the right-hand edge, where a player has no
 	# way to know it exists.
-	_play_ui.get_node("gear").position = Vector2(14, 84)
-	_play_ui.get_node("fps").position = Vector2(14, 112)
+	_play_ui.get_node("gear").position = Vector2(14, 82)
+	_play_ui.get_node("fps").position = Vector2(14, 190)
 
 	var log_label: Label = _play_ui.get_node("log")
 	log_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
@@ -3495,6 +3595,9 @@ func _build_hud() -> void:
 	_build_perk_panel()
 	_build_dead_panel()
 	_build_setup_panel()
+	_build_stats_panel()
+	_build_options_panel()
+	_build_info_panel()
 	_build_title_panel()
 
 
@@ -3556,18 +3659,87 @@ func _build_gauges() -> void:
 	_plate(Vector2(14, 68), Vector2(GAUGE_W, 8), Color(0.10, 0.10, 0.14, 0.92))
 	_xp_fill = _plate(Vector2(14, 68), Vector2(0, 8), Color(0.62, 0.55, 0.95))
 
+	# What is running on the hero, as six little plates rather than a
+	# line of text.
+	#
+	# "[Hast 12, Kraft 4]" is a sentence to read; a plate that is running
+	# out is something to see. The bar is the share of that buff's own
+	# longest run, so a twenty-five turn blessing and a four turn
+	# scramble both start full and both empty at the same rate they
+	# actually expire.
+	#
+	# Turns, not seconds: a turn happens when you make it happen, so a
+	# buff on a clock would punish standing still to think - which is
+	# the one thing this kind of game is made of.
+	_buff_chips.clear()
+	for at in 6:
+		var left := 14.0 + float(at) * 116.0
+		var chip := {}
+		chip["frame"] = _plate(Vector2(left, 108), Vector2(112, 26), Color(0, 0, 0, 0.80))
+		chip["track"] = _plate(Vector2(left + 2, 110), Vector2(108, 22), Color(0.12, 0.11, 0.16, 0.95))
+		chip["fill"] = _plate(Vector2(left + 2, 110), Vector2(108, 22), Color(0.36, 0.52, 0.86, 0.70))
+		chip["text"] = _gauge_label(Vector2(left + 2, 110), Vector2(108, 22), 16)
+		_buff_chips.append(chip)
+
 	# A boss gets the top of the screen. Something with four hundred hit
 	# points needs a bar you can watch from across the room, and a name -
 	# otherwise the only sign that this one is different is that it is not
 	# dying.
-	_boss_frame = _plate(Vector2(-BOSS_W * 0.5 - 3, 105), Vector2(BOSS_W + 6, 26),
+	_boss_frame = _plate(Vector2(-BOSS_W * 0.5 - 3, 149), Vector2(BOSS_W + 6, 26),
 		Color(0, 0, 0, 0.80), true)
-	_boss_track = _plate(Vector2(-BOSS_W * 0.5, 108), Vector2(BOSS_W, 20),
+	_boss_track = _plate(Vector2(-BOSS_W * 0.5, 152), Vector2(BOSS_W, 20),
 		Color(0.14, 0.08, 0.08, 0.92), true)
-	_boss_fill = _plate(Vector2(-BOSS_W * 0.5, 108), Vector2(BOSS_W, 20),
+	_boss_fill = _plate(Vector2(-BOSS_W * 0.5, 152), Vector2(BOSS_W, 20),
 		Color(0.86, 0.26, 0.20), true)
-	_boss_text = _gauge_label(Vector2(-BOSS_W * 0.5, 108), Vector2(BOSS_W, 20), 19, true)
+	_boss_text = _gauge_label(Vector2(-BOSS_W * 0.5, 152), Vector2(BOSS_W, 20), 19, true)
 	_boss_text.add_theme_color_override("font_color", Color(1.0, 0.92, 0.86))
+
+
+## The row of buff plates: one per effect, longest first, six at most.
+##
+## Poison and bleeding are in there too. They are not buffs, but they
+## run on the same clock and they are the two the player most wants to
+## see counting down.
+func _refresh_chips() -> void:
+	if _buff_chips.is_empty() or player == null:
+		return
+	var running: Array = []
+	for id in player.buffs:
+		running.append({"id": id, "name": str(Data.BUFFS[id]["name"]),
+			"turns": int(player.buffs[id]), "shade": Color(0.36, 0.52, 0.86, 0.70)})
+	if player.poison_turns > 0:
+		running.append({"id": "poison", "name": "Gift", "turns": player.poison_turns,
+			"shade": Color(0.42, 0.72, 0.34, 0.70)})
+	if player.bleed_turns > 0:
+		running.append({"id": "bleed", "name": "Blutung", "turns": player.bleed_turns,
+			"shade": Color(0.80, 0.28, 0.28, 0.70)})
+	running.sort_custom(func(a, b): return a["turns"] > b["turns"])
+
+	# What has stopped running loses its remembered length, or the next
+	# potion of the same kind starts its bar half empty.
+	var alive := {}
+	for entry in running:
+		alive[entry["id"]] = true
+	for id in _buff_peak.keys():
+		if not alive.has(id):
+			_buff_peak.erase(id)
+
+	for at in _buff_chips.size():
+		var chip: Dictionary = _buff_chips[at]
+		var showing: bool = at < running.size()
+		chip["frame"].visible = showing
+		chip["track"].visible = showing
+		chip["fill"].visible = showing
+		chip["text"].visible = showing
+		if not showing:
+			continue
+		var entry: Dictionary = running[at]
+		var peak: int = maxi(int(_buff_peak.get(entry["id"], 0)), int(entry["turns"]))
+		_buff_peak[entry["id"]] = peak
+		chip["fill"].size.x = 108.0 * clampf(
+			float(entry["turns"]) / float(maxi(1, peak)), 0.0, 1.0)
+		chip["fill"].color = entry["shade"]
+		chip["text"].text = "%s %d" % [entry["name"], int(entry["turns"])]
 
 
 ## Moves the bars to where the numbers already are. Called every frame,
@@ -3607,6 +3779,8 @@ func _refresh_gauges(delta: float) -> void:
 	_xp_fill.size.x = GAUGE_W * clampf(
 		float(player.xp) / float(maxi(1, player.xp_to_next)), 0.0, 1.0)
 
+	_refresh_chips()
+
 	var boss = null
 	for monster in monsters:
 		if monster.is_alive() and monster.is_boss and monster.awake \
@@ -3635,6 +3809,11 @@ func _centred(panel: Control) -> CenterContainer:
 	var holder := CenterContainer.new()
 	holder.set_anchors_preset(Control.PRESET_FULL_RECT)
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Over the title screen, whatever order things were built in. The
+	# title panel is built last and paints a near-opaque wash over the
+	# whole screen, so a dialog built before it came out looking like a
+	# dialog behind frosted glass.
+	holder.z_index = 10
 	holder.add_child(panel)
 	return holder
 
@@ -3644,7 +3823,7 @@ func _centred(panel: Control) -> CenterContainer:
 ## the buttons and the text sits on rubble.
 func _solid_panel(panel: PanelContainer) -> void:
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.07, 0.06, 0.09, 0.98)
+	style.bg_color = Color(0.07, 0.06, 0.09, 1.0)
 	style.border_color = Color(0.91, 0.71, 0.29, 0.75)
 	style.set_border_width_all(3)
 	style.set_corner_radius_all(10)
@@ -3867,6 +4046,11 @@ func _unhandled_key_input(event: InputEvent) -> void:
 				open_bag()
 		KEY_Q:
 			cycle_potion()
+		KEY_C:
+			if _stats_panel != null and _stats_panel.visible:
+				close_stats()
+			else:
+				open_stats()
 		KEY_SPACE, KEY_PERIOD:
 			wait_a_turn()
 		KEY_F:
@@ -3880,6 +4064,15 @@ func _unhandled_key_input(event: InputEvent) -> void:
 ## Shuts the topmost thing that is open and says whether there was one.
 ## The order is the order they sit in front of each other.
 func close_topmost() -> bool:
+	if _options_panel != null and _options_panel.visible:
+		close_options()
+		return true
+	if _info_panel != null and _info_panel.visible:
+		close_info()
+		return true
+	if _stats_panel != null and _stats_panel.visible:
+		close_stats()
+		return true
 	if _pause_panel != null and _pause_panel.visible:
 		close_pause()
 		return true
@@ -3931,6 +4124,7 @@ func _build_pause_panel() -> void:
 	_pause_music = _pause_button(column, toggle_music)
 	_pause_flash = _pause_button(column, toggle_flash)
 	_pause_pad = _pause_button(column, toggle_pad)
+	_pause_stats = _pause_button(column, open_stats)
 	_pause_auto = _pause_button(column, toggle_auto_shoot)
 
 	var back := Button.new()
@@ -4362,6 +4556,9 @@ func open_kin() -> void:
 	var holder := _kin_panel.get_parent()
 	if holder != null:
 		holder.move_to_front()
+	# In front of whatever opened it: the info page was built after
+	# this panel and would otherwise cover it.
+	_kin_panel.get_parent().move_to_front()
 	_kin_panel.visible = true
 
 
@@ -4430,6 +4627,9 @@ func open_awards() -> void:
 	var holder := _awards_panel.get_parent()
 	if holder != null:
 		holder.move_to_front()
+	# In front of whatever opened it: the info page was built after
+	# this panel and would otherwise cover it.
+	_awards_panel.get_parent().move_to_front()
 	_awards_panel.visible = true
 
 
@@ -4537,7 +4737,7 @@ func _build_light() -> void:
 	_torch = PointLight2D.new()
 	_torch.texture = glow
 	_torch.energy = 1.75
-	_torch.texture_scale = TILE * (Data.FOV_RADIUS + 3.0) * 2.0 / 256.0
+	_torch.texture_scale = TILE * (sight_radius() + 3.0) * 2.0 / 256.0
 	_torch.blend_mode = Light2D.BLEND_MODE_ADD
 	_torch.z_index = 3
 	add_child(_torch)
@@ -4771,6 +4971,117 @@ func _build_dead_panel() -> void:
 	column.add_child(menu)
 
 
+## Every number the hero is made of, on one page.
+##
+## The bar at the top says how much health is left and the second line
+## says what is in your hands, but the numbers those two are built from
+## - what a critical hit actually multiplies, how often one lands, how
+## much damage the armour eats, when the next point of health arrives -
+## were nowhere. They decide every fight and were the one thing the game
+## never showed.
+func _build_stats_panel() -> void:
+	_stats_panel = PanelContainer.new()
+	_stats_panel.custom_minimum_size = Vector2(620, 480)
+	_stats_panel.visible = false
+	_solid_panel(_stats_panel)
+	_hud.add_child(_centred(_stats_panel))
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 12)
+	_stats_panel.add_child(column)
+
+	var heading := Label.new()
+	heading.text = "Werte"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 36)
+	heading.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
+	column.add_child(heading)
+
+	_stats_text = Label.new()
+	_stats_text.add_theme_font_size_override("font_size", 23)
+	_stats_text.add_theme_color_override("font_color", Color(0.86, 0.86, 0.92))
+	column.add_child(_stats_text)
+
+	var back := Button.new()
+	back.text = "ZURÜCK"
+	back.custom_minimum_size = Vector2(0, 64)
+	back.add_theme_font_size_override("font_size", 26)
+	back.pressed.connect(close_stats)
+	column.add_child(back)
+
+
+## Reads the hero out loud. Written on opening rather than every frame:
+## nothing on this page changes while it is being looked at, because
+## looking at it costs no turn.
+func open_stats() -> void:
+	if dead or choosing or _stats_panel == null:
+		return
+	close_pause()
+	var p = player
+	var rows: Array[String] = []
+	rows.append("Klasse:  %s          Stufe %d  (%d / %d XP)" % [
+		Data.class_by_id(p.hero_class)["name"], p.level, p.xp, p.xp_to_next])
+	rows.append("")
+	rows.append("Leben:  %d / %d%s" % [p.hp, p.max_hp,
+		"    Schild %d" % p.shield if p.shield > 0 else ""])
+	rows.append("Angriff:  %d      (Grundwert %d + Waffe %d)" % [
+		p.power(), p.base_power, p.weapon_bonus()])
+	rows.append("Verteidigung:  %d      (Grundwert %d + Rüstung %d)" % [
+		p.defense(), p.base_defense, p.armour_bonus()])
+	rows.append("Schadensminderung:  %d %%" % roundi(p.damage_reduction * 100.0))
+	rows.append("")
+	rows.append("Kritische Treffer:  %.1f %%      Schaden ×%.1f" % [
+		p.crit_chance() * 100.0, float(Data.CRIT_MULT)])
+	if p.regen_interval > 0:
+		rows.append("Regeneration:  1 Leben alle %d Züge" % p.regen_interval)
+	else:
+		rows.append("Regeneration:  keine")
+	if p.reach() > 0:
+		rows.append("Reichweite:  %d Felder" % p.reach())
+	rows.append("")
+	rows.append("Waffe:  %s +%d%s" % [p.weapon_name(), p.weapon_bonus(),
+		_rarity_note(p.weapon_rarity)])
+	if p.weapon_element != "":
+		rows.append("Element:  %s" % Data.ELEMENTS[p.weapon_element]["name"])
+	rows.append("Rüstung:  %s +%d%s" % [p.armour_name(), p.armour_bonus(),
+		_rarity_note(p.armour_rarity)])
+	rows.append("")
+	rows.append("Gold:  %d      Kills:  %d      Tiefe:  Ebene %d" % [
+		p.gold, p.kills, depth])
+	var bonus: Array[String] = []
+	if p.gold_mult != 1.0:
+		bonus.append("Gold ×%.2f" % p.gold_mult)
+	if p.xp_mult != 1.0:
+		bonus.append("Erfahrung ×%.2f" % p.xp_mult)
+	if p.potion_mult != 1.0:
+		bonus.append("Tränke ×%.2f" % p.potion_mult)
+	if not bonus.is_empty():
+		rows.append("Gaben:  %s" % "      ".join(bonus))
+	_stats_text.text = nl_join(rows)
+	_stats_panel.visible = true
+	audio.play("equip")
+
+
+## The rarity in brackets, or nothing at all: the common one has no
+## name, and "(  )" after every starting sword is worse than silence.
+func _rarity_note(rarity: int) -> String:
+	if rarity < 0 or rarity >= Data.RARITIES.size():
+		return ""
+	var name: String = str(Data.RARITIES[rarity]["name"])
+	return "" if name == "" else "      (%s)" % name
+
+
+## String.join on an Array[String] with a newline, spelled out once so
+## the line above stays readable.
+func nl_join(rows: Array[String]) -> String:
+	return "\n".join(rows)
+
+
+func close_stats() -> void:
+	if _stats_panel != null:
+		_stats_panel.visible = false
+
+
 ## The offer to move into a proper folder, shown once on Windows.
 ##
 ## A single downloaded exe sitting in the Downloads folder is not an
@@ -4922,25 +5233,17 @@ func _build_settings(column: VBoxContainer) -> void:
 	_flash_button.pressed.connect(toggle_flash)
 	row.add_child(_flash_button)
 
-	var awards := Button.new()
-	awards.text = "Erfolge"
-	awards.custom_minimum_size = Vector2(170, 54)
-	awards.add_theme_font_size_override("font_size", 24)
-	awards.pressed.connect(open_awards)
-	row_two.add_child(awards)
-
-	var kin := Button.new()
-	kin.text = "Bestiarium"
-	kin.custom_minimum_size = Vector2(210, 54)
-	kin.add_theme_font_size_override("font_size", 24)
-	kin.pressed.connect(open_kin)
-	row_two.add_child(kin)
-
 	_pad_button = Button.new()
 	_pad_button.custom_minimum_size = Vector2(250, 54)
 	_pad_button.add_theme_font_size_override("font_size", 24)
 	_pad_button.pressed.connect(toggle_pad)
 	row_two.add_child(_pad_button)
+
+	_diagonal_button = Button.new()
+	_diagonal_button.custom_minimum_size = Vector2(260, 54)
+	_diagonal_button.add_theme_font_size_override("font_size", 24)
+	_diagonal_button.pressed.connect(toggle_diagonal)
+	row_two.add_child(_diagonal_button)
 
 	# Loudness in tenths rather than on and off.
 	#
@@ -5015,11 +5318,15 @@ func _refresh_settings() -> void:
 		_pause_music.text = "Musik: %s" % ("AN" if settings["music"] else "AUS")
 		_pause_flash.text = "Roter Blitz: %s" % ("AN" if settings.get("flash", true) else "AUS")
 		_pause_pad.text = "Steuerung: %s" % ("Kreuz" if settings.get("pad", false) else "Stick")
+		_pause_stats.text = "Werte ansehen"
 		_pause_auto.visible = player != null and player.reach() > 0
 		_pause_auto.text = "Automatisch schießen: %s" % (
 			"AN" if settings.get("auto_shoot", true) else "AUS")
 	if _pad_button != null:
 		_pad_button.text = "Steuerung: %s" % ("Kreuz" if settings.get("pad", false) else "Stick")
+	if _diagonal_button != null:
+		_diagonal_button.text = "Richtungen: %s" % (
+			"8 (diagonal)" if settings.get("diagonal", true) else "4 (gerade)")
 	_music_button.text = "Musik: %s" % ("AN" if settings["music"] else "AUS")
 	if _volume_label != null:
 		_volume_label.text = "Ton %d %%" % roundi(float(settings.get("volume", 0.75)) * 100.0)
@@ -5044,6 +5351,13 @@ func toggle_auto_shoot() -> void:
 	settings["auto_shoot"] = not settings.get("auto_shoot", true)
 	if player != null:
 		player.auto_shoot = settings["auto_shoot"]
+	Settings.write(settings)
+	_refresh_settings()
+	audio.play("equip")
+
+
+func toggle_diagonal() -> void:
+	settings["diagonal"] = not settings.get("diagonal", true)
 	Settings.write(settings)
 	_refresh_settings()
 	audio.play("equip")
@@ -5186,8 +5500,32 @@ func _build_title_panel() -> void:
 		pick.pressed.connect(choose_class.bind(info["id"]))
 		card.add_child(pick)
 
-	_build_settings(column)
-	_build_update(column)
+	# Two doors instead of a wall of switches.
+	#
+	# Everything used to be on this one screen: four heroes, seven
+	# switches, two volume rows, the update button, the record. On a
+	# phone the bottom of it fell off the screen, and what falls off is
+	# invisible rather than scrollable. The choice of hero stays here,
+	# because that is what this screen is for; the rest is one press
+	# away.
+	var doors := HBoxContainer.new()
+	doors.alignment = BoxContainer.ALIGNMENT_CENTER
+	doors.add_theme_constant_override("separation", 16)
+	column.add_child(doors)
+
+	var to_options := Button.new()
+	to_options.text = "EINSTELLUNGEN"
+	to_options.custom_minimum_size = Vector2(320, 62)
+	to_options.add_theme_font_size_override("font_size", 26)
+	to_options.pressed.connect(open_options)
+	doors.add_child(to_options)
+
+	var to_info := Button.new()
+	to_info.text = "INFO & UPDATE"
+	to_info.custom_minimum_size = Vector2(320, 62)
+	to_info.add_theme_font_size_override("font_size", 26)
+	to_info.pressed.connect(open_info)
+	doors.add_child(to_info)
 
 	# The record so far, under the choice. A dead run leaves nothing
 	# else behind, and this is the line that makes the next one worth
@@ -5207,10 +5545,132 @@ Treppe hinab = tiefer. Tasche zeigt Tränke und Rollen."
 	column.add_child(_record_label)
 
 
+## The switches, one level below the title screen.
+func _build_options_panel() -> void:
+	_options_panel = PanelContainer.new()
+	_options_panel.custom_minimum_size = Vector2(1120, 380)
+	_options_panel.visible = false
+	_solid_panel(_options_panel)
+	_hud.add_child(_centred(_options_panel))
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 14)
+	_options_panel.add_child(column)
+
+	var heading := Label.new()
+	heading.text = "Einstellungen"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 36)
+	heading.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
+	column.add_child(heading)
+
+	_build_settings(column)
+
+	var back := Button.new()
+	back.text = "ZURÜCK"
+	back.custom_minimum_size = Vector2(0, 62)
+	back.add_theme_font_size_override("font_size", 26)
+	back.pressed.connect(close_options)
+	column.add_child(back)
+
+
+## What has been done so far, and what version is doing it.
+func _build_info_panel() -> void:
+	_info_panel = PanelContainer.new()
+	_info_panel.custom_minimum_size = Vector2(860, 460)
+	_info_panel.visible = false
+	_solid_panel(_info_panel)
+	_hud.add_child(_centred(_info_panel))
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 14)
+	_info_panel.add_child(column)
+
+	var heading := Label.new()
+	heading.text = "Info"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 36)
+	heading.add_theme_color_override("font_color", Color(0.91, 0.71, 0.29))
+	column.add_child(heading)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 16)
+	column.add_child(row)
+
+	var awards := Button.new()
+	awards.text = "Erfolge"
+	awards.custom_minimum_size = Vector2(240, 58)
+	awards.add_theme_font_size_override("font_size", 25)
+	awards.pressed.connect(open_awards)
+	row.add_child(awards)
+
+	var kin := Button.new()
+	kin.text = "Bestiarium"
+	kin.custom_minimum_size = Vector2(240, 58)
+	kin.add_theme_font_size_override("font_size", 25)
+	kin.pressed.connect(open_kin)
+	row.add_child(kin)
+
+	_info_record = Label.new()
+	_info_record.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_info_record.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_info_record.custom_minimum_size = Vector2(800, 0)
+	_info_record.add_theme_font_size_override("font_size", 22)
+	_info_record.add_theme_color_override("font_color", Color(0.80, 0.80, 0.88))
+	column.add_child(_info_record)
+
+	_build_update(column)
+
+	var back := Button.new()
+	back.text = "ZURÜCK"
+	back.custom_minimum_size = Vector2(0, 62)
+	back.add_theme_font_size_override("font_size", 26)
+	back.pressed.connect(close_info)
+	column.add_child(back)
+
+
+func open_options() -> void:
+	if _options_panel == null:
+		return
+	_options_panel.get_parent().move_to_front()
+	_options_panel.visible = true
+	_refresh_settings()
+	audio.play("equip")
+
+
+func close_options() -> void:
+	if _options_panel != null:
+		_options_panel.visible = false
+
+
+func open_info() -> void:
+	if _info_panel == null:
+		return
+	var record := Stats.read()
+	if int(record["runs"]) == 0:
+		_info_record.text = "Noch kein Lauf. Viel Glück."
+	else:
+		_info_record.text = ("%d Läufe, %d Tode\nTiefste Ebene %d, beste Stufe %d,"
+			+ " %d Kills\nBestwert %d") % [
+			int(record["runs"]), int(record["deaths"]), int(record["deepest"]),
+			int(record["best_level"]), int(record["kills"]), int(record["best_score"])]
+	_info_panel.get_parent().move_to_front()
+	_info_panel.visible = true
+	audio.play("equip")
+
+
+func close_info() -> void:
+	if _info_panel != null:
+		_info_panel.visible = false
+
+
 ## Puts the title screen back up and rolls a fresh floor behind it, so
 ## the choice is never made against the corpse of the last run.
 func show_title() -> void:
 	choosing = true
+	close_options()
+	close_info()
 	close_pause()
 	close_bag()
 	if _perk_panel != null:
@@ -5390,9 +5850,9 @@ func _process(delta: float) -> void:
 	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
 		keyed.y -= 1
 	if keyed != Vector2i.ZERO:
-		_held = keyed
+		_held = _straighten(keyed)
 	elif _stick != null and _stick.direction() != Vector2i.ZERO:
-		_held = _stick.direction()
+		_held = _straighten(_stick.direction())
 
 	# Steps run on a clock, not per frame, so the hero does not walk faster
 	# the smoother it runs.
@@ -5415,7 +5875,7 @@ func _process(delta: float) -> void:
 		_step_cooldown = pace * (sqrt(2.0) if diagonal else 1.0)
 		_stepped = _held
 		if _stick != null and _stick.direction() != Vector2i.ZERO:
-			_held = _stick.direction()
+			_held = _straighten(_stick.direction())
 		elif not Input.is_anything_pressed():
 			_held = Vector2i.ZERO
 	if _held == Vector2i.ZERO:
@@ -5434,19 +5894,9 @@ func _process(delta: float) -> void:
 	var gear := "%s +%d     %s +%d" % [
 		player.weapon_name(), player.weapon_bonus(),
 		player.armour_name(), player.armour_bonus()]
-	# The running buffs, newest numbers first. The pygame build shows
-	# five and counts the rest; there are only thirteen in total, and
-	# a row that wraps over the map is worse than a truncated one.
-	var chips: Array[String] = []
-	for id in player.buffs:
-		if chips.size() >= 5:
-			chips.append("+%d" % (player.buffs.size() - 5))
-			break
-		chips.append("%s %d" % [Data.BUFFS[id]["name"], player.buffs[id]])
-	if player.poison_turns > 0:
-		chips.append("Gift %d" % player.poison_turns)
-	if not chips.is_empty():
-		gear += "     [%s]" % ", ".join(chips)
+	# The buffs used to be listed here as text. They have their own row
+	# of plates under the bars now, where a number that is running out
+	# can be seen running out.
 	_play_ui.get_node("stats").text = line
 	_play_ui.get_node("gear").text = gear
 	_update_minimap()

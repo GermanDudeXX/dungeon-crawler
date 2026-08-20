@@ -17,6 +17,72 @@ Das Spiel gibt es in zwei Fassungen:
 
 # Godot-Fassung
 
+## 1.6.0 — Menü in Gruppen, Werte-Seite, Buff-Plättchen
+
+Die sieben Punkte aus dem Wunschzettel, von oben nach unten.
+
+### Menü
+- **Der Titelbildschirm hatte alles auf einmal**: vier Helden, sieben
+  Schalter, zwei Lautstärkezeilen, den Update-Knopf und den Rekord. Auf
+  dem Handy fiel das untere Ende heraus, und was herausfällt, ist
+  unsichtbar statt scrollbar. Jetzt bleibt die Heldenwahl dort, wo sie
+  hingehört, und dahinter liegen zwei Türen: **Einstellungen** und
+  **Info & Update**.
+
+### Steuerung
+- **Diagonale abschaltbar.** „Richtungen: 8 (diagonal)" oder „4 (gerade)".
+  Bei vier Richtungen gewinnt die Achse, in die der Daumen stärker
+  gedrückt hat — auf dem Stick ist eine Diagonale leicht aus Versehen
+  getroffen, und im Gang ist sie nie der gemeinte Schritt.
+
+### Buffs
+- **Statt einer Textzeile sechs Plättchen** unter den Balken, jeweils mit
+  ablaufendem Balken: Gift grün, Blutung rot, alles andere blau. Der
+  Balken ist der Anteil an der längsten Laufzeit, die dieser Buff hatte —
+  ein Segen über 25 Züge und ein Trank über 4 starten beide voll und
+  leeren sich so schnell, wie sie wirklich ablaufen.
+- **Sekunden statt Züge habe ich bewusst nicht gebaut.** Ein Zug passiert,
+  wenn du ihn machst. Eine Uhr würde Nachdenken bestrafen, und das ist das
+  Einzige, woraus dieses Spiel besteht. Der Plan für den echten Umbau
+  steht unten.
+
+### Bosse
+- **Mini-Boss auf der Ebene vor jedem Boss.** Bosse liegen auf 6, 9, 12,
+  Mini-Bosse jetzt auf 2, 5, 8, 11 — etwas Denkwürdiges alle zwei bis drei
+  Ebenen, nie zwei auf einmal.
+
+### Anzeige
+- **Namen über Boss, Elite und Wächter.** Nicht über gewöhnlichen
+  Gegnern: fünf Ratten in einem Raum schrieben fünfmal „Ratte" über die
+  Karte. Elite nur in vier Feldern Nähe, ein Boss immer.
+- Das Namensschild trägt die Gegenskalierung von Sprite *und* Kamerazoom,
+  sonst ist der Name größer als das Monster — was er beim ersten Versuch
+  auch war.
+
+### Werte
+- **Neue Seite „Werte"** (Pausenmenü oder Taste C): Angriff und
+  Verteidigung mit ihren Bestandteilen, Schadensminderung, kritische
+  Treffer in Prozent samt Multiplikator, Regeneration, Reichweite, Waffe
+  und Rüstung mit Seltenheit und Element, Gold, Kills, Gaben. Alle Zahlen
+  gab es längst — sie standen nur nirgends.
+
+### Schwierigkeit
+- **Sicht und Fallen hängen jetzt daran.** Leicht: zwei Felder weiter,
+  Fallen sichtbar, sobald Licht darauf fällt. Normal: wie gehabt. Schwer:
+  ein Feld weniger. Hardcore: zwei Felder weniger. Sicht ist die
+  billigste Schwierigkeit, die es gibt — dieselbe Ebene mit denselben
+  Gegnern ist ein anderes Problem, wenn man sie ein Feld später sieht.
+
+### Plan für die zeitbasierte Umstellung (nicht gebaut)
+Falls es doch echt werden soll, in dieser Reihenfolge:
+1. Eine Zugdauer einführen (z. B. 0,25 s) und alles, was heute „pro Zug"
+   zählt, auf `delta` umstellen: Buffs, Gift, Blutung, Regeneration,
+   Abklingzeiten.
+2. Gegner bekommen eigene Timer statt eines gemeinsamen `enemy_turn()`.
+3. Der Selbsttest-Bot braucht eine feste Schrittzeit, sonst prüft er
+   nichts Reproduzierbares mehr.
+4. Balance neu: alles, was heute „12 Züge" heißt, ist dann drei Sekunden.
+
 ## 1.5.0 — Karte, Anzeige und eine Windows-Fassung, die sich installiert
 
 Ein Stapel aus zwölf gemeldeten Fehlern und zwei neuen Windows-Wünschen.

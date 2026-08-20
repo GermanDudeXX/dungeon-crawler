@@ -49,6 +49,10 @@ func _process(_delta: float) -> bool:
 			_game.monsters.append(beast)
 		_game.player.hp = int(_game.player.max_hp * 0.4)
 		_game.player.shield = 5
+		_game.player.buffs["haste"] = 9
+		_game.player.buffs["strength"] = 21
+		_game.player.poison_turns = 4
+		_game.player.bleed_turns = 2
 		_game.recompute_fov()
 		_game.paint()
 		return false
