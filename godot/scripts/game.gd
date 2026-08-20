@@ -428,6 +428,7 @@ func _apply_floor(save: Dictionary) -> void:
 		var c: Dictionary = save["chest"]
 		chest = {"cell": Vector2i(int(c["x"]), int(c["y"])),
 			"mimic": bool(c["mimic"]), "opened": bool(c["opened"]),
+			"gone": bool(c.get("gone", false)),
 			"guarded": bool(c.get("guarded", false))}
 
 	monsters = []
@@ -986,7 +987,8 @@ func _seals_something(blocked := {}) -> bool:
 	var open_cells := reachable_from(Vector2i(player.x, player.y), shut)
 	if not open_cells.has(stairs):
 		return true
-	if chest != null and not open_cells.has(chest["cell"]):
+	if chest != null and not chest.get("gone", false) \
+			and not open_cells.has(chest["cell"]):
 		return true
 	if shrine != null and not open_cells.has(shrine):
 		return true
@@ -1100,7 +1102,7 @@ func _shopkeeper_spot(where: Array) -> Variant:
 func taken(cell: Vector2i) -> bool:
 	if item_at(cell) != null or traps.has(cell):
 		return true
-	if chest != null and chest["cell"] == cell:
+	if chest != null and not chest.get("gone", false) and chest["cell"] == cell:
 		return true
 	if shrine != null and shrine == cell:
 		return true
@@ -2440,6 +2442,20 @@ func _open_chest(cell: Vector2i) -> void:
 	banner("Es war eine Mimik!", Color(0.85, 0.32, 0.30))
 	say("Die Truhe schnappt zu - es war eine Mimik!")
 
+	# And the chest is gone, because there never was one.
+	#
+	# It used to stay lying there as an opened empty chest, which is the
+	# one thing it certainly is not: the box got up and is now standing
+	# next to you. Leaving the picture behind reads as a second chest
+	# that has already been looted, and it draws the eye away from the
+	# thing that just came out of it.
+	#
+	# Marked rather than deleted: the floor is saved and the "open the
+	# chest" errand still has to be able to see that it was opened.
+	chest["gone"] = true
+	_forget_prop(cell)
+	_quest_progress()
+
 
 ## The shop is a panel over the game rather than a screen of its own:
 ## the dungeon stays visible behind it, and closing it is one tap.
@@ -3214,7 +3230,7 @@ func paint() -> void:
 
 	for item in items:
 		_place_item(item)
-	if chest != null:
+	if chest != null and not chest.get("gone", false):
 		_place_prop(chest["cell"], "chest_empty_open_anim_f2" if chest["opened"]
 			else "chest_full_open_anim_f0")
 	for cell in hazards:
@@ -3340,6 +3356,21 @@ func _item_art(item: Dictionary) -> String:
 ## One standing thing on the map - a chest, a shopkeeper. Kept in the
 ## same node cache as everything else so a repaint moves sprites
 ## rather than rebuilding them.
+## Takes a piece of scenery off the floor for good.
+##
+## paint() only ever adds: it draws what is there and leaves everything
+## else where it is. So something that stops existing has to say so, or
+## its picture stays on the map for the rest of the floor.
+func _forget_prop(cell: Vector2i) -> void:
+	var key := "prop:%s" % str(cell)
+	if not _item_nodes.has(key):
+		return
+	var sprite: Sprite2D = _item_nodes[key]
+	if is_instance_valid(sprite):
+		sprite.queue_free()
+	_item_nodes.erase(key)
+
+
 func _place_prop(cell: Vector2i, art: String) -> void:
 	var key := "prop:%s" % str(cell)
 	if not _item_nodes.has(key):
@@ -4121,7 +4152,8 @@ func _update_minimap() -> void:
 		image.set_pixelv(stairs, Color(0.40, 0.85, 0.95))
 	if depth > 1 and explored.has(up_stairs):
 		image.set_pixelv(up_stairs, Color(0.55, 0.55, 0.65))
-	if chest != null and explored.has(chest["cell"]) and not chest["opened"]:
+	if chest != null and not chest.get("gone", false) \
+			and explored.has(chest["cell"]) and not chest["opened"]:
 		image.set_pixelv(chest["cell"], Color(1.0, 0.84, 0.30))
 	if shrine != null and explored.has(shrine):
 		image.set_pixelv(shrine, Color(0.70, 0.60, 1.0))

@@ -124,6 +124,9 @@ static func floor_data(game) -> Dictionary:
 		"chest": null if game.chest == null else {
 			"x": game.chest["cell"].x, "y": game.chest["cell"].y,
 			"mimic": game.chest["mimic"], "opened": game.chest["opened"],
+			# A mimic's chest is gone once it has got up; without this it
+			# would be lying there again after a reload.
+			"gone": game.chest.get("gone", false),
 			"guarded": game.chest.get("guarded", false)},
 	}
 

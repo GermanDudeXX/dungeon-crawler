@@ -991,7 +991,29 @@ func _check_mimic() -> void:
 			"(%d, %d) statt neben (%d, %d)" % [mimic.x, mimic.y, spot.x, spot.y])
 	if not mimic.awake:
 		_complain("Mimik schläft nach dem Zuschnappen")
+
+	# The chest is gone: it was never a chest, it was the thing standing
+	# beside you now. Left lying there it reads as a second, already
+	# looted chest.
+	if not _game.chest.get("gone", false):
+		_complain("Mimik-Truhe bleibt liegen")
+	_game.paint()
+	if _game._item_nodes.has("prop:%s" % str(spot)):
+		_complain("Bild der Mimik-Truhe bleibt auf der Karte")
+	# And it stays gone across a save.
+	var kept: Dictionary = JSON.parse_string(JSON.stringify(Save.floor_data(_game)))
+	if not bool(kept["chest"]["gone"]):
+		_complain("Mimik-Truhe kommt nach dem Speichern zurück")
 	_game.monsters.erase(mimic)
+
+	# An ordinary chest still stays where it is, opened.
+	_game.chest = {"cell": spot, "mimic": false, "opened": false}
+	_game._open_chest(spot)
+	_game.paint()
+	if _game.chest.get("gone", false):
+		_complain("normale Truhe verschwindet")
+	if not _game._item_nodes.has("prop:%s" % str(spot)):
+		_complain("normale Truhe wird nach dem Öffnen nicht mehr gezeichnet")
 	_game.chest = null
 
 

@@ -17,6 +17,19 @@ Das Spiel gibt es in zwei Fassungen:
 
 # Godot-Fassung
 
+## 1.6.6 — Die Mimik lässt keine Truhe zurück
+
+- **Eine Mimik-Truhe verschwindet jetzt beim Öffnen.** Vorher blieb sie
+  als geöffnete leere Truhe liegen — und das ist das Einzige, was sie
+  sicher nicht ist: die Kiste ist aufgestanden und steht jetzt neben dir.
+  Das liegengebliebene Bild las sich wie eine zweite, bereits geplünderte
+  Truhe und zog den Blick von dem weg, was gerade herausgekommen ist.
+- Sie bleibt auch nach dem Speichern verschwunden, und der Auftrag „Öffne
+  die Truhe" gilt trotzdem als erfüllt — eine Mimik zu öffnen ist immer
+  noch, eine Truhe zu öffnen.
+- **Eine gewöhnliche Truhe bleibt unverändert liegen**, geöffnet und
+  leer, wie bisher.
+
 ## 1.6.5 — Schießen geht auch aus dem Stand
 
 - **Der SCHIESSEN-Knopf hatte denselben Fehler wie der Automatikschuss**,
