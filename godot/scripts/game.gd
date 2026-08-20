@@ -502,7 +502,9 @@ func load_run() -> bool:
 	player.facing = int(p["facing"])
 	player.poison_turns = int(p["poison_turns"])
 	player.webbed = int(p.get("webbed", 0))
-	player.shot_cooldown = int(p.get("shot_cooldown", 0))
+	# Always zero: shooting runs on the clock now, and a one left in an
+	# older save would jam the bow for good.
+	player.shot_cooldown = 0
 	player.bonus_crit = float(p.get("bonus_crit", 0.0))
 	player.damage_reduction = float(p.get("damage_reduction", 0.0))
 	player.gold_mult = float(p.get("gold_mult", 1.0))
@@ -2954,7 +2956,14 @@ func _blink() -> void:
 func shoot(on_its_own := false) -> void:
 	if busy() or player.reach() <= 0:
 		return
-	if player.shot_cooldown > 0:
+	# Paced by the clock, not by turns.
+	#
+	# The cooldown counted turns, and a shot is a turn - but standing still
+	# makes no further turns, so after one shot nothing ever counted it
+	# down again. Shoot, walk one step, shoot: that was the only way, and
+	# it was not a design, it was a deadlock. The automatic shot was fixed
+	# this way in 1.6.3 and the button was left behind.
+	if _shot_pause > 0.0:
 		audio.play("denied")
 		say("Der Bogen ist noch nicht bereit.")
 		return
@@ -3024,13 +3033,12 @@ func shoot(on_its_own := false) -> void:
 	# runs on turns runs inside this call, so a cooldown set earlier is
 	# counted down again immediately and the bow is never actually
 	# busy.
-	# A shot fired by hand keeps the old rhythm - one turn to draw
-	# again. One fired on its own is paced by the clock instead, because
-	# there is no next turn coming while the player stands still.
-	if on_its_own:
-		_shot_pause = SHOT_TIME
-	else:
-		player.shot_cooldown = Data.SHOT_COOLDOWN
+	_shot_pause = SHOT_TIME
+	# Kept at zero rather than removed: the field is written to the save
+	# file, and an older save may carry a one in it. Left alone, that one
+	# would never count down and the bow would be jammed for the rest of
+	# the run.
+	player.shot_cooldown = 0
 	if dead:
 		return
 	enemy_turn()
@@ -3073,7 +3081,7 @@ func busy() -> bool:
 ## It also never starts a fight: only things already awake are shot at.
 ## Waking a room from across it by reflex is not a tactic, it is a trap.
 func _auto_shoot() -> void:
-	if busy() or player.reach() <= 0 or player.shot_cooldown > 0:
+	if busy() or player.reach() <= 0:
 		return
 	if not player.auto_shoot or _step_cooldown > 0.0 or _shot_pause > 0.0:
 		return

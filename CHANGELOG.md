@@ -17,6 +17,19 @@ Das Spiel gibt es in zwei Fassungen:
 
 # Godot-Fassung
 
+## 1.6.5 — Schießen geht auch aus dem Stand
+
+- **Der SCHIESSEN-Knopf hatte denselben Fehler wie der Automatikschuss**,
+  und den hatte ich in 1.6.3 stehen lassen: die Abklingzeit zählt *Züge*,
+  ein Schuss ist ein Zug — aber wer stillsteht, macht keinen weiteren
+  Zug, und nichts zählte sie je herunter. Schuss, Schritt, Schuss war die
+  einzige Reihenfolge, die funktionierte. Das war kein Rhythmus, das war
+  eine Sackgasse. Jetzt läuft auch der Handschuss nach der Uhr: alle 0,30
+  Sekunden einer, ob man sich bewegt oder nicht.
+- Alte Spielstände, in denen die Abklingzeit auf 1 festhing, werden beim
+  Laden bereinigt — sonst wäre der Bogen dort für den Rest des Laufs
+  blockiert gewesen.
+
 ## 1.6.4 — Ein Symbol, das nach dem Spiel aussieht
 
 - **Das App-Symbol auf dem Handy war ein Ausschnitt.** Als Projektsymbol

@@ -1578,7 +1578,14 @@ func _check_monster_habits() -> void:
 		_game.player.armour_extra = 0
 		if Dungeon.is_walkable(_game.grid, _game.player.x, _game.player.y):
 			var hp_before: int = _game.player.hp
-			for _turn in 4:
+			# Twelve turns, and stop as soon as it lands one. A skeleton backs
+			# away before it shoots, so with four turns whether it ever got a
+			# shot off depended on where the wall behind it was - which made
+			# this check fail on one seed and pass on the next for reasons that
+			# had nothing to do with skeletons.
+			for _turn in 12:
+				if _game.player.hp < hp_before or not bones.is_alive():
+					break
 				_game.enemy_turn()
 			if _game.player.hp >= hp_before and bones.is_alive():
 				_complain("Skelett trifft aus der Entfernung nie",
@@ -2489,8 +2496,20 @@ func _check_bow() -> void:
 		_complain("Schuss richtet nichts an")
 	if int(p.buffs.get("strength", 0)) != 4:
 		_complain("Schuss kostet keinen Zug")
-	if p.shot_cooldown <= 0:
+	# Ready again after a pause measured in seconds, not in turns. Turns
+	# only happen when the player does something, so a hero standing still
+	# after one shot would never have got a second one off.
+	if _game._shot_pause <= 0.0:
 		_complain("Bogen ist sofort wieder bereit")
+	var denied: int = mark.hp
+	_game.shoot()
+	if mark.is_alive() and mark.hp < denied:
+		_complain("Bogen schießt während der Pause noch einmal")
+	_game._shot_pause = 0.0
+	var ready: int = mark.hp
+	_game.shoot()
+	if mark.is_alive() and mark.hp >= ready:
+		_complain("Bogen wird nach der Pause nicht wieder bereit")
 
 	# And the second shot has to wait.
 	var after_first: int = mark.hp
