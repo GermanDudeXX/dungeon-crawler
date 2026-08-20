@@ -2672,13 +2672,16 @@ func _check_auto_shoot() -> void:
 	_game.monsters.append(mark)
 	_game.recompute_fov()
 	var before: int = mark.hp
+	_game._shot_pause = 0.0
 	_game._auto_shoot()
 	if mark.is_alive() and mark.hp >= before:
 		_complain("schießt nicht von selbst")
 
-	# And now right beside the hero: no shot.
+	# And now right beside the hero: no shot. Both clocks cleared first,
+	# so what stops it is the distance rule and not the pacing.
 	p.shot_cooldown = 0
 	_game._step_cooldown = 0.0
+	_game._shot_pause = 0.0
 	var close = Entities.Monster.new("orc", 8.0, "easy")
 	close.x = spot.x
 	close.y = spot.y

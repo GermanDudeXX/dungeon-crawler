@@ -17,6 +17,29 @@ Das Spiel gibt es in zwei Fassungen:
 
 # Godot-Fassung
 
+## 1.6.3 — Der Fernkampf funktioniert wirklich
+
+Gemeldet: „automatischer Angriff, nichts mit Projektil fliegen sehen und
+Schaden machen, die Klassen sind immer noch purer Nahkampf." Drei
+Ursachen, alle drei echt.
+
+- **Nach dem ersten Schuss war Schluss.** Die Abklingzeit zählt *Züge* —
+  ein Schuss ist ein Zug, aber wer stillsteht, macht keinen weiteren Zug,
+  und nichts setzte sie je zurück. Der Held schoss also genau einmal und
+  danach nie wieder. Der automatische Schuss läuft jetzt nach der Uhr:
+  alle **0,30 Sekunden** einer, etwas langsamer als Gehen. Der
+  Handschuss über den Knopf behält den alten Rhythmus.
+- **Das Geschoss war 4 × 2 Pixel und nach einer Zehntelsekunde weg.** Am
+  Handy auf Armlänge sieht man das schlicht nicht. Jetzt ein halbes Feld
+  lang, mit hellem Kern in einem additiven Glühen, sechzehn
+  Hundertstelsekunden Flugzeit, Funken an beiden Enden.
+- **Ein Magier ohne Bogen hat mit der Faust geworfen.** Der Schaden kam
+  aus der Waffe — und die Waffe des Magiers ist die Faust, also machte
+  der Schuss 2 Punkte, für immer. Ein Klassenschuss ohne Bogen ist jetzt
+  ein eigener Wert, der mit der **Stufe** wächst statt mit dem, was du in
+  der Hand hältst, und Rüstung zählt dabei nur halb: Stufe 1 = 3, Stufe 5
+  = 7, Stufe 10 = 11 gegen Panzer 2. Ein Bogen rechnet weiter wie bisher.
+
 ## 1.6.2 — Knöpfe aus Stein und Messing, Schwierigkeit gehört zum Lauf
 
 - **Knöpfe sehen jetzt nach diesem Spiel aus.** Godots Standardknopf ist

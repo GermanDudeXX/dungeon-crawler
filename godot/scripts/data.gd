@@ -122,6 +122,29 @@ const WEAPONS := [
 	{"name": "Bogen der Tiefe", "bonus": 11, "cost": 190, "reach": 7},
 ]
 const SHOT_DAMAGE_MULT := 0.75      ## a shot lands for less than a swing
+
+## What a shot does when there is no bow behind it - a mage's bolt, a
+## ranger drawing on nothing but practice.
+##
+## It scales with the level rather than with what is in your hands,
+## because the whole point of a class reach is that it works when your
+## hands are empty. Worked out from the weapon before, it came to two
+## points of damage for a mage whose entire character is that he does
+## not hit things - which made the one class built around range the
+## worst at it.
+##
+## Armour counts for half. A bolt of fire is not stopped by a shield the
+## way a swung sword is, and that difference is most of what makes it
+## worth having.
+const SPELL_BASE := 1.5
+const SPELL_PER_LEVEL := 0.8
+const SPELL_ARMOUR := 0.5
+
+
+static func spell_damage(level: int, base_power: int, defense: int) -> int:
+	return maxi(1, int(round(SPELL_BASE + level * SPELL_PER_LEVEL
+		+ base_power * 0.5 - defense * SPELL_ARMOUR)))
+
 const SHOT_COOLDOWN := 1            ## turns between shots
 # A mage has no bow; the reach comes from the class itself, which is
 # what "elements answer to you" is supposed to mean in play.

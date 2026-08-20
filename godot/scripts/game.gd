@@ -38,6 +38,14 @@ const GAUGE_W := 340.0           ## the health and experience bars
 const GAUGE_H := 26.0
 const BOSS_W := 520.0
 const DOOR_POCKET := 4           ## fewer floor tiles than this behind a door is nothing
+## Seconds between two shots fired on their own.
+##
+## The turn cooldown cannot do this job: it counts turns, a shot is a
+## turn, and standing still makes no turns at all - so the hero fired
+## once, the cooldown stuck at one, and nothing ever cleared it. It
+## looked exactly like a feature that does nothing. This is the same
+## idea in real time, a little slower than walking.
+const SHOT_TIME := 0.30
 const STEP_TIME := 0.14
 # How long a held direction waits before it starts walking by itself.
 const REPEAT_DELAY := 0.34
@@ -192,6 +200,7 @@ var _stick: Stick
 var _pad_buttons: Array[Button] = []
 var _haste_flip := false
 var _step_cooldown := 0.0
+var _shot_pause := 0.0           ## seconds until the next shot on its own
 
 
 func _ready() -> void:
@@ -2942,7 +2951,7 @@ func _blink() -> void:
 ## attack is worth. It costs a turn like any other action, hits for less
 ## than a swing, and needs a moment before the next one - otherwise a bow
 ## is simply a sword that also works at range.
-func shoot() -> void:
+func shoot(on_its_own := false) -> void:
 	if busy() or player.reach() <= 0:
 		return
 	if player.shot_cooldown > 0:
@@ -2968,8 +2977,15 @@ func shoot() -> void:
 		say("Nichts in Reichweite.")
 		return
 
-	var damage: int = maxi(1, int(round(
-		(player.power() - target.defense_now()) * Data.SHOT_DAMAGE_MULT)))
+	# A bow throws what the bow is worth; a class with reach and no bow
+	# throws a spell, which is worth something of its own.
+	var damage: int = 0
+	if int(Data.WEAPONS[player.weapon].get("reach", 0)) > 0:
+		damage = maxi(1, int(round(
+			(player.power() - target.defense_now()) * Data.SHOT_DAMAGE_MULT)))
+	else:
+		damage = Data.spell_damage(player.level, player.base_power,
+			target.defense_now())
 	var crit := rng.randf() < player.crit_chance()
 	if crit:
 		damage *= Data.CRIT_MULT
@@ -3008,7 +3024,13 @@ func shoot() -> void:
 	# runs on turns runs inside this call, so a cooldown set earlier is
 	# counted down again immediately and the bow is never actually
 	# busy.
-	player.shot_cooldown = Data.SHOT_COOLDOWN
+	# A shot fired by hand keeps the old rhythm - one turn to draw
+	# again. One fired on its own is paced by the clock instead, because
+	# there is no next turn coming while the player stands still.
+	if on_its_own:
+		_shot_pause = SHOT_TIME
+	else:
+		player.shot_cooldown = Data.SHOT_COOLDOWN
 	if dead:
 		return
 	enemy_turn()
@@ -3053,7 +3075,7 @@ func busy() -> bool:
 func _auto_shoot() -> void:
 	if busy() or player.reach() <= 0 or player.shot_cooldown > 0:
 		return
-	if not player.auto_shoot or _step_cooldown > 0.0:
+	if not player.auto_shoot or _step_cooldown > 0.0 or _shot_pause > 0.0:
 		return
 	var here := Vector2i(player.x, player.y)
 	for monster in monsters:
@@ -3067,7 +3089,7 @@ func _auto_shoot() -> void:
 			continue
 		if not _line_clear(here, monster.cell()):
 			continue
-		shoot()
+		shoot(true)
 		return
 
 
@@ -4814,21 +4836,47 @@ func banner(text: String, colour := Color(0.91, 0.71, 0.29)) -> void:
 func _bolt(from_cell: Vector2i, to_cell: Vector2i, colour: Color) -> void:
 	var start := Vector2(from_cell) * TILE + Vector2(TILE, TILE) * 0.5
 	var finish := Vector2(to_cell) * TILE + Vector2(TILE, TILE) * 0.5
-	var bolt := ColorRect.new()
-	bolt.color = colour
-	bolt.size = Vector2(4.5, 2.5)
-	bolt.pivot_offset = bolt.size * 0.5
-	bolt.rotation = (finish - start).angle()
-	bolt.z_index = 4
-	bolt.position = start - bolt.size * 0.5
-	add_child(bolt)
-	# A short trail of sparks behind it, so a fast bolt still leaves a
-	# line the eye can follow.
+	# Half a tile long and a fifth of one thick, in front of everything,
+	# and it takes about a sixth of a second to cross the room.
+	#
+	# It was four pixels by two and gone in a tenth of a second, which on
+	# a phone at arm's length is nothing at all - the shot happened, the
+	# damage landed, and the player never saw a thing.
+	var glow := ColorRect.new()
+	glow.color = Color(colour.r, colour.g, colour.b, 0.45)
+	glow.size = Vector2(TILE * 0.7, TILE * 0.34)
+	glow.pivot_offset = glow.size * 0.5
+	glow.rotation = (finish - start).angle()
+	glow.z_index = 5
+	glow.position = start - glow.size * 0.5
+	var unlit := CanvasItemMaterial.new()
+	unlit.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+	unlit.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	glow.material = unlit
+	add_child(glow)
+
+	# A hard bright core inside the glow: the glow says where, the core
+	# says what.
+	var core := ColorRect.new()
+	core.color = Color(minf(1.0, colour.r + 0.35), minf(1.0, colour.g + 0.35),
+		minf(1.0, colour.b + 0.35))
+	core.size = Vector2(TILE * 0.5, TILE * 0.14)
+	core.pivot_offset = core.size * 0.5
+	core.rotation = glow.rotation
+	core.z_index = 6
+	core.position = start - core.size * 0.5
+	core.material = unlit
+	add_child(core)
+
 	var flight := create_tween()
-	flight.tween_property(bolt, "position", finish - bolt.size * 0.5, 0.12)
-	flight.parallel().tween_property(bolt, "modulate:a", 0.35, 0.12)
-	flight.tween_callback(bolt.queue_free)
-	_sparks(from_cell, colour, 3)
+	flight.tween_property(glow, "position", finish - glow.size * 0.5, 0.16)
+	flight.parallel().tween_property(core, "position", finish - core.size * 0.5, 0.16)
+	flight.parallel().tween_property(glow, "modulate:a", 0.0, 0.16)
+	flight.tween_callback(glow.queue_free)
+	flight.tween_callback(core.queue_free)
+	# Sparks at both ends: a puff where it was loosed, a burst where it
+	# lands.
+	_sparks(from_cell, colour, 4)
 
 
 ## A few specks thrown off a cell. Cheap on purpose: a handful of small
@@ -6138,6 +6186,7 @@ func _process(delta: float) -> void:
 		if note != "":
 			_update_label.text = note
 	_step_cooldown -= delta
+	_shot_pause -= delta
 	# Keys are added up rather than taken one at a time, so holding two
 	# walks diagonally. Eight directions instead of four is the other half
 	# of not feeling nailed to a grid.
