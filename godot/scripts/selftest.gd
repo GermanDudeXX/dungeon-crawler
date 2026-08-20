@@ -423,11 +423,17 @@ func every_door_leads_somewhere(game) -> void:
 			if game.doors.has(cell + offset):
 				_complain("zwei Türen nebeneinander",
 					"Ebene %d: %s und %s" % [game.depth, str(cell), str(cell + offset)])
-		var open_x: bool = Dungeon.is_walkable(game.grid, cell.x - 1, cell.y) \
-			and Dungeon.is_walkable(game.grid, cell.x + 1, cell.y)
-		var open_y: bool = Dungeon.is_walkable(game.grid, cell.x, cell.y - 1) \
-			and Dungeon.is_walkable(game.grid, cell.x, cell.y + 1)
-		if open_x == open_y:
+		var west: bool = Dungeon.is_walkable(game.grid, cell.x - 1, cell.y)
+		var east: bool = Dungeon.is_walkable(game.grid, cell.x + 1, cell.y)
+		var north: bool = Dungeon.is_walkable(game.grid, cell.x, cell.y - 1)
+		var south: bool = Dungeon.is_walkable(game.grid, cell.x, cell.y + 1)
+		var open_x: bool = west and east
+		var open_y: bool = north and south
+		# Floor on two opposite sides and wall on the other two. Checking
+		# only the floor was the hole this test had: a tile with floor on
+		# three sides passed it, and the game happily hung a door there.
+		if open_x == open_y or (open_x and (north or south)) \
+				or (open_y and (west or east)):
 			_complain("Tür steht nicht in einem Durchgang",
 				"Ebene %d, %s" % [game.depth, str(cell)])
 			continue
@@ -1592,14 +1598,29 @@ func _check_monster_habits() -> void:
 		# nowhere to put anything, and that is the level being crowded,
 		# not the goblin refusing.
 		_game.traps.clear()
+		var room_for_it := false
 		for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 			var beside: Vector2i = goblin.cell() + offset
 			_game.decor.erase(beside)
 			_game.hazards.erase(beside)
-		for _try in 200:
-			_game._monster_sets_trap(goblin)
-		if _game.traps.is_empty():
-			_complain("Goblin legt nie etwas ab")
+			_game.webs.erase(beside)
+			_game.doors.erase(beside)
+			var loot: Variant = _game.item_at(beside)
+			if loot != null:
+				_game.items.erase(loot)
+			if Dungeon.is_walkable(_game.grid, beside.x, beside.y) \
+					and not _game.blocks(beside) and not _game.taken(beside) \
+					and not _game.occupied(beside) \
+					and beside != Vector2i(_game.player.x, _game.player.y) \
+					and beside != _game.stairs and beside != _game.up_stairs:
+				room_for_it = true
+		# A goblin boxed in on all four sides has nowhere to put a trap, and
+		# demanding one anyway tests the floor plan, not the goblin.
+		if room_for_it:
+			for _try in 200:
+				_game._monster_sets_trap(goblin)
+			if _game.traps.is_empty():
+				_complain("Goblin legt nie etwas ab")
 		_game.traps.clear()
 
 

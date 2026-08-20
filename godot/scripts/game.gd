@@ -117,6 +117,7 @@ var _difficulty_button: Button
 var _flash_button: Button
 var _volume_label: Label
 var _diagonal_button: Button
+var _corner_buttons: Array = []  ## the four diagonal keys of the pad
 var _stats_panel: PanelContainer   ## what the hero actually adds up to
 var _options_panel: PanelContainer ## the title screen, one level down
 var _info_panel: PanelContainer
@@ -1554,11 +1555,24 @@ func _hang_doors(where: Array) -> void:
 ## And there is something on both sides. A door onto three tiles of
 ## nothing is worse than no door.
 func _is_doorway(cell: Vector2i, room) -> bool:
-	var open_x: bool = Dungeon.is_walkable(grid, cell.x - 1, cell.y) \
-		and Dungeon.is_walkable(grid, cell.x + 1, cell.y)
-	var open_y: bool = Dungeon.is_walkable(grid, cell.x, cell.y - 1) \
-		and Dungeon.is_walkable(grid, cell.x, cell.y + 1)
+	var west: bool = Dungeon.is_walkable(grid, cell.x - 1, cell.y)
+	var east: bool = Dungeon.is_walkable(grid, cell.x + 1, cell.y)
+	var north: bool = Dungeon.is_walkable(grid, cell.x, cell.y - 1)
+	var south: bool = Dungeon.is_walkable(grid, cell.x, cell.y + 1)
+	var open_x: bool = west and east
+	var open_y: bool = north and south
 	if open_x == open_y:
+		return false
+	# And wall on the other two sides - both of them.
+	#
+	# Only the floor was being checked before, never the wall, and the two
+	# are not the same question: a corridor tile with floor left, right and
+	# below and wall only above passed as a passage. It is not one, it is
+	# the edge of an open room, and a door standing there is a frame with
+	# one post. Fifteen per cent of every door on the map was that.
+	if open_x and (north or south):
+		return false
+	if open_y and (west or east):
 		return false
 	var sides: Array = ([Vector2i(-1, 0), Vector2i(1, 0)] if open_x
 		else [Vector2i(0, -1), Vector2i(0, 1)])
@@ -3539,11 +3553,27 @@ func _build_hud() -> void:
 	_stick.offset_right = 620
 	_play_ui.add_child(_stick)
 
-	var origin := Vector2(pad + size, -pad - size * 2.0)
-	_button("^", origin + Vector2(0, -size), size, Vector2i(0, -1))
-	_button("v", origin, size, Vector2i(0, 1))
-	_button("<", origin + Vector2(-size, -size * 0.5), size, Vector2i(-1, 0))
-	_button(">", origin + Vector2(size, -size * 0.5), size, Vector2i(1, 0))
+	# Nine squares with the middle left out, so the pad can walk
+	# everywhere the stick can.
+	#
+	# It had four buttons while the setting offered eight directions,
+	# which made "8 (diagonal)" a promise the pad could not keep. The
+	# corners are hidden again when four directions are chosen - a
+	# button that is refused the moment it is pressed is worse than no
+	# button.
+	var middle := Vector2(pad + size * 1.5, -pad - size * 2.1)
+	_button("^", middle + Vector2(0, -size), size, Vector2i(0, -1))
+	_button("v", middle + Vector2(0, size), size, Vector2i(0, 1))
+	_button("<", middle + Vector2(-size, 0), size, Vector2i(-1, 0))
+	_button(">", middle + Vector2(size, 0), size, Vector2i(1, 0))
+	_corner_buttons.append(_button("↖", middle + Vector2(-size, -size), size,
+		Vector2i(-1, -1)))
+	_corner_buttons.append(_button("↗", middle + Vector2(size, -size), size,
+		Vector2i(1, -1)))
+	_corner_buttons.append(_button("↙", middle + Vector2(-size, size), size,
+		Vector2i(-1, 1)))
+	_corner_buttons.append(_button("↘", middle + Vector2(size, size), size,
+		Vector2i(1, 1)))
 	_apply_control_style()
 
 	# Two buttons, because there are thirty kinds of flask now: one
@@ -5123,12 +5153,14 @@ func open_stats() -> void:
 	audio.play("equip")
 
 
-## The rarity in brackets, or nothing at all: the common one has no
-## name, and "(  )" after every starting sword is worse than silence.
-func _rarity_note(rarity: int) -> String:
-	if rarity < 0 or rarity >= Data.RARITIES.size():
-		return ""
-	var name: String = str(Data.RARITIES[rarity]["name"])
+## The rarity in brackets, or nothing at all.
+##
+## The common one has no name - "(  )" after every starting sword is
+## worse than silence. And the rarity is an id like "rare", not a number:
+## typing the parameter as an int made this function throw the moment the
+## page was opened, which is why the page did nothing at all.
+func _rarity_note(rarity: String) -> String:
+	var name: String = str(Data.rarity_by_id(rarity).get("name", ""))
 	return "" if name == "" else "      (%s)" % name
 
 
@@ -5404,8 +5436,9 @@ func _apply_control_style() -> void:
 		_stick.visible = not use_pad
 		_stick.mouse_filter = (Control.MOUSE_FILTER_IGNORE if use_pad
 			else Control.MOUSE_FILTER_STOP)
+	var corners: bool = settings.get("diagonal", true)
 	for button in _pad_buttons:
-		button.visible = use_pad
+		button.visible = use_pad and (corners or not _corner_buttons.has(button))
 
 
 func toggle_auto_shoot() -> void:
@@ -5420,6 +5453,7 @@ func toggle_auto_shoot() -> void:
 func toggle_diagonal() -> void:
 	settings["diagonal"] = not settings.get("diagonal", true)
 	Settings.write(settings)
+	_apply_control_style()
 	_refresh_settings()
 	audio.play("equip")
 
@@ -5959,7 +5993,7 @@ func _refresh_shop() -> void:
 		button.pressed.connect(buy.bind(offer[0]))
 
 
-func _button(label: String, where: Vector2, size: float, step: Vector2i) -> void:
+func _button(label: String, where: Vector2, size: float, step: Vector2i) -> Button:
 	var button := Button.new()
 	button.text = label
 	button.custom_minimum_size = Vector2(size, size)
@@ -5974,6 +6008,7 @@ func _button(label: String, where: Vector2, size: float, step: Vector2i) -> void
 			_held = Vector2i.ZERO)
 	_play_ui.add_child(button)
 	_pad_buttons.append(button)
+	return button
 
 
 func _process(delta: float) -> void:

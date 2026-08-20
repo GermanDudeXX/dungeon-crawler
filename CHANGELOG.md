@@ -19,6 +19,25 @@ Das Spiel gibt es in zwei Fassungen:
 
 ## 1.6.1 — Ein Knopf, der auch zuschlägt
 
+### Behoben (gemeldet nach 1.6.0)
+- **Türen standen weiter falsch.** Die Regel prüfte, ob auf zwei
+  gegenüberliegenden Seiten Boden liegt — aber nie, ob auf den anderen
+  beiden Wand ist. Ein Gangfeld mit Boden links, rechts und unten und
+  Wand nur oben galt als Durchgang. Es ist keiner, es ist der Rand eines
+  offenen Raums, und eine Tür darin ist ein Rahmen mit einem Pfosten.
+  Über 120 Ebenen gemessen: **59 von 405 Türen** waren so. Jetzt 0 von
+  346.
+- **„Werte ansehen" tat nichts.** Meine Hilfsfunktion für die Seltenheit
+  erwartete eine Zahl, bekommt aber eine Kennung wie `"rare"` — der
+  Laufzeitfehler brach das Öffnen ab, bevor die Seite sichtbar wurde. In
+  1.6.0 war die Seite damit nicht erreichbar.
+- **Das Steuerkreuz hatte vier Knöpfe**, während die Einstellung acht
+  Richtungen anbot. Jetzt neun Felder ohne Mitte, mit ↖ ↗ ↙ ↘. Bei „4
+  Richtungen" verschwinden die Ecken wieder — ein Knopf, der im Moment
+  des Drückens abgelehnt wird, ist schlimmer als keiner.
+
+### Neu
+
 - **WARTEN heißt ANGREIFEN**, solange etwas Waches direkt neben dir
   steht, und schlägt dann zu. Warten ist kein Kampfzug: wer neben einem
   wachen Gegner stehen bleibt, schenkt ihm einen Schlag und muss danach
