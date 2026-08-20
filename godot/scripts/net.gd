@@ -58,6 +58,7 @@ var _floorless := false           ## a guest that has not been handed a floor ye
 var _asked := 0.0
 var _asks := 0
 var trail: Array[String] = []     ## the last few steps, for reading
+var _dialled := ""                ## the address currently being tried
 
 
 func _ready() -> void:
@@ -185,6 +186,7 @@ func join(address: String, port := PORT) -> bool:
 	_floorless = true
 	_asked = 1.6
 	_asks = 0
+	_dialled = where
 	trace("wähle %s:%d" % [where, port])
 	note.emit("Verbinde mit %s ..." % where)
 	return true
@@ -275,6 +277,7 @@ func _someone_left(peer: int) -> void:
 func _we_are_in() -> void:
 	_dialing = -1.0
 	trace("verbunden, ich bin %d" % multiplayer.get_unique_id())
+	game.remember_host(_dialled)
 	note.emit("Verbunden. Warte auf die Ebene ...")
 	# The class was picked before joining, on this machine. The host has to
 	# be told, because the host is the one who builds the hero.

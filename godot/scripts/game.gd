@@ -100,7 +100,10 @@ var dead: bool:
 	get:
 		return _run_over
 	set(value):
-		if value and net != null and net.hosting and _acting_peer > 1:
+		# Not "whose turn is it" but "who fell": a monster picks its own
+		# target now, so the one who dies is often not the one who moved.
+		if value and net != null and net.hosting \
+				and party.has(1) and player != party[1]:
 			_pick_guest_up()
 			return
 		_run_over = value
@@ -132,6 +135,8 @@ var _party_where: Label
 var _party_note: Label
 var _party_list: Label
 var _party_trail: Label
+var _party_again: HBoxContainer  ## the addresses joined before
+var _party_heroes: HBoxContainer ## picking a hero as a guest
 var _party_field: LineEdit
 var _party_host: Button
 var _party_join: Button
@@ -1959,10 +1964,20 @@ func enemy_turn() -> void:
 		_haste_flip = not _haste_flip
 		if _haste_flip:
 			return
+	# Whoever acted is put back afterwards: for the length of one
+	# monster's turn, `player` is that monster's target, and every rule
+	# below - chasing, shooting, swinging - then works on the right
+	# person without knowing that anyone else exists.
+	var acting = player
 	var here := Vector2i(player.x, player.y)
 	for monster in monsters.duplicate():
 		if not monster.is_alive():
 			continue
+		# Monsters used to go for whoever had just moved, which meant
+		# standing still made you invisible and the person walking drew
+		# every blow in the room. They go for the nearest hero now.
+		player = _nearest_hero(monster.cell())
+		here = Vector2i(player.x, player.y)
 		# Fire keeps burning whether the thing acts or not.
 		if monster.afraid > 0:
 			monster.afraid -= 1
@@ -2049,12 +2064,34 @@ func enemy_turn() -> void:
 			if monster.is_fleeing():
 				step = -step
 			_step_monster(monster, step)
+	# Everyone's turn is over, so the hero who is standing here is the one
+	# who was here before the monsters picked their targets.
+	player = acting
+
 
 
 
 ## Returns whether it actually moved: a kiter needs to know, because
 ## a backwards step that failed means it is cornered and should
 ## swing after all.
+## The living hero closest to a cell. Alone, that is always the one and
+## only hero, and this costs a dictionary lookup.
+func _nearest_hero(cell: Vector2i) -> Variant:
+	if net == null or not net.hosting or party.size() <= 1:
+		return player
+	var best = player
+	var closest := 1 << 30
+	for peer in party:
+		var hero = party[peer]
+		if hero.hp <= 0:
+			continue
+		var away: int = absi(hero.x - cell.x) + absi(hero.y - cell.y)
+		if away < closest:
+			closest = away
+			best = hero
+	return best
+
+
 func _step_monster(monster, step: Vector2i) -> bool:
 	for candidate in [monster.cell() + step,
 			monster.cell() + Vector2i(step.x, 0),
@@ -4414,10 +4451,29 @@ func _take_items(loot: Array) -> void:
 		_item_nodes.erase(key)
 
 
+## Everyone else in the party, as plain data.
+##
+## A guest is told about the others and keeps them in `_mates`. The host
+## has them in `party` all along - and drew none of them, which is why
+## the host could not see a single guest while every guest could see the
+## host. One list, built from whichever end this is.
+func _companions() -> Array:
+	if net == null or not net.hosting:
+		return _mates
+	var others: Array = []
+	for peer in party:
+		if peer == 1:
+			continue
+		var hero = party[peer]
+		others.append({"peer": peer, "class": hero.hero_class,
+			"x": hero.x, "y": hero.y})
+	return others
+
+
 ## The other heroes, drawn where the host last saw them.
 func _paint_mates() -> void:
 	var shown := {}
-	for entry in _mates:
+	for entry in _companions():
 		var peer: int = int(entry["peer"])
 		shown[peer] = true
 		var cell := Vector2i(int(entry["x"]), int(entry["y"]))
@@ -6456,6 +6512,32 @@ func _build_party_panel() -> void:
 	_party_join.pressed.connect(start_joining)
 	row.add_child(_party_join)
 
+	# The addresses joined before, one press each.
+	#
+	# Typing an address once is fair. Typing it again every evening, on a
+	# phone, with a keyboard covering half the screen, is not.
+	_party_again = HBoxContainer.new()
+	_party_again.alignment = BoxContainer.ALIGNMENT_CENTER
+	_party_again.add_theme_constant_override("separation", 10)
+	column.add_child(_party_again)
+
+	# And the hero, for a guest. The host picks one the usual way, before
+	# the run; a guest joins a run that already exists, so the choice
+	# belongs here - and it is a request like every other, because the
+	# host is the one who builds the hero.
+	_party_heroes = HBoxContainer.new()
+	_party_heroes.alignment = BoxContainer.ALIGNMENT_CENTER
+	_party_heroes.add_theme_constant_override("separation", 10)
+	column.add_child(_party_heroes)
+	for info in Data.CLASSES:
+		var pick := Button.new()
+		pick.text = info["name"]
+		pick.custom_minimum_size = Vector2(190, 56)
+		pick.add_theme_font_size_override("font_size", 22)
+		pick.add_theme_color_override("font_color", info["color"])
+		pick.pressed.connect(become.bind(str(info["id"])))
+		_party_heroes.add_child(pick)
+
 	_party_note = Label.new()
 	_party_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_party_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -6506,6 +6588,30 @@ func _refresh_trail() -> void:
 		_party_trail.text = "\n".join(net.trail)
 
 
+## A guest swapping hero mid-session. The host rebuilds it and sends the
+## floor back, so the change is real everywhere at once.
+func become(id: String) -> void:
+	hero_class = id
+	if net.guest:
+		net.ask("class:" + id)
+		_party_says("%s angefragt." % Data.class_by_id(id)["name"])
+	audio.play("equip")
+
+
+## Remembers a host that answered, newest first.
+func remember_host(address: String) -> void:
+	if address == "":
+		return
+	var seen: Array = settings.get("seen_hosts", [])
+	seen.erase(address)
+	seen.insert(0, address)
+	while seen.size() > 3:
+		seen.remove_at(seen.size() - 1)
+	settings["seen_hosts"] = seen
+	Settings.write(settings)
+	_refresh_party()
+
+
 func open_party() -> void:
 	if _party_panel == null:
 		return
@@ -6533,6 +6639,12 @@ func start_hosting() -> void:
 	# from before.
 	party[1] = player
 	_refresh_party()
+
+
+## One press instead of twelve keystrokes.
+func _join_again(address: String) -> void:
+	_party_field.text = address
+	start_joining()
 
 
 func start_joining() -> void:
@@ -6566,6 +6678,21 @@ func _refresh_party() -> void:
 	_party_field.visible = not together
 	_party_join.visible = not together
 	_party_leave.visible = together
+	# A guest may swap hero at any time; a host picks before the run,
+	# like always.
+	_party_heroes.visible = net.guest
+
+	for old in _party_again.get_children():
+		old.queue_free()
+	_party_again.visible = not together
+	if not together:
+		for address in settings.get("seen_hosts", []):
+			var again := Button.new()
+			again.text = str(address)
+			again.custom_minimum_size = Vector2(240, 52)
+			again.add_theme_font_size_override("font_size", 21)
+			again.pressed.connect(_join_again.bind(str(address)))
+			_party_again.add_child(again)
 
 	if net.hosting:
 		var found: Array[String] = Net.addresses()
@@ -6736,6 +6863,12 @@ func close_info() -> void:
 ## Puts the title screen back up and rolls a fresh floor behind it, so
 ## the choice is never made against the corpse of the last run.
 func show_title() -> void:
+	# Back to the title screen is the end of this run, and this run is
+	# the session: hosting stops, guests are let go, and a guest that
+	# walks out stops asking the host for floors.
+	if net != null and net.playing_together():
+		net.trace("zurück zum Titelbildschirm - Sitzung beendet")
+		net.shut()
 	choosing = true
 	close_levels()
 	close_options()
@@ -6781,6 +6914,18 @@ func continue_run() -> void:
 
 func choose_class(id: String) -> void:
 	hero_class = id
+	# A guest owns no dungeon, so picking a hero is a request like any
+	# other. Starting a run here as well would be a second dungeon
+	# pretending to be the first.
+	if net != null and net.guest:
+		net.ask("class:" + id)
+		close_party()
+		if _title_panel != null:
+			_title_panel.visible = false
+		if _play_ui != null:
+			_play_ui.visible = true
+		choosing = false
+		return
 	close_pause()
 	close_awards()
 	close_bag()

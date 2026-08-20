@@ -17,6 +17,30 @@ Das Spiel gibt es in zwei Fassungen:
 
 # Godot-Fassung
 
+## 1.7.2 — Der Gastgeber sieht seine Gäste, und die Monster sehen alle
+
+Fünf Punkte aus dem ersten echten Koop-Abend.
+
+- **Der Gastgeber sah niemanden.** Ein Gast bekommt die anderen Helden
+  zugeschickt und merkt sie sich; der Gastgeber hatte sie die ganze Zeit
+  in seiner Party — und hat keinen einzigen davon gezeichnet. Jetzt eine
+  Liste, gebaut von dem Ende, an dem man gerade sitzt.
+- **Gegner haben einen ignoriert.** Sie liefen dem hinterher, der zuletzt
+  gezogen hatte — Stillstehen machte unsichtbar, und wer sich bewegte,
+  zog jeden Schlag im Raum auf sich. Jetzt sucht sich jedes Monster den
+  **nächstgelegenen lebenden Helden**. Damit endet auch die Sonderregel
+  „wer gerade dran ist, stirbt": es fällt, wer wirklich getroffen wurde.
+- **Die Sitzung endete nicht.** Zurück zum Titelbildschirm ist das Ende
+  des Laufs, und der Lauf *ist* die Sitzung: das Hosten hört auf, Gäste
+  werden entlassen, und ein Gast, der hinausgeht, fragt nicht weiter nach
+  Ebenen.
+- **Der Held ist als Gast wählbar.** Vier Knöpfe im Fenster „Zusammen
+  spielen", jederzeit. Der Gastgeber baut den Helden neu und schickt die
+  Ebene zurück, damit die Änderung überall gleichzeitig echt ist.
+- **Zuletzt verbundene Adressen** stehen als Knöpfe da. Eine Adresse
+  einmal abzutippen ist zumutbar; jeden Abend erneut, auf einem Handy,
+  mit halb verdeckter Tastatur, nicht.
+
 ## 1.7.1 — Der Doppelschritt, und ein Mehrspieler, der sagt was er tut
 
 ### Behoben

@@ -27,6 +27,9 @@ const DEFAULTS := {
 	# A button that changes what it does deserves one sentence of warning;
 	# it does not deserve that sentence every time.
 	"attack_hint_seen": false,
+	# The last few hosts joined, newest first. Typing an address once is
+	# fair; typing it again every evening is not.
+	"seen_hosts": [],
 	# Asked once, on Windows, whether the game should move itself into a
 	# proper folder. Remembered either way: an offer that comes back every
 	# single launch is not an offer, it is nagging.
