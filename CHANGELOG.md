@@ -17,6 +17,33 @@ Das Spiel gibt es in zwei Fassungen:
 
 # Godot-Fassung
 
+## 1.7.3 — Niemand steht auf jemandem, und Gaben zeigen was sie tun
+
+- **„Sobald der Host sich bewegt, verschwindet die andere Person."**
+  Nichts hinderte zwei Helden daran, auf derselben Kachel zu stehen — und
+  wer als Zweiter dort ankam, wurde einfach über den Ersten gezeichnet.
+  Von der anderen Seite des Raums sieht das exakt so aus, als wäre dein
+  Mitspieler verschwunden. Jetzt **tauscht ihr die Plätze**, wenn ihr
+  ineinander lauft. Verweigern wäre schlechter: in einem ein Feld breiten
+  Gang würde man sich gegenseitig einmauern.
+  (Nicht das Netzwerk — die Verbindung hielt die ganze Zeit. Nachgemessen
+  mit zwei Prozessen.)
+- Auch beim Beitreten und beim Treppensteigen wird kein Held mehr auf
+  einen anderen gesetzt.
+
+### Gaben
+- **„Ich wähle zweimal +1 Leben alle 5 Züge und es bleibt bei +1."** Die
+  Gabe stapelte in Wahrheit schon — sie machte die Heilung *schneller*
+  (alle 5 → 4 → 3 Züge), nur stand auf der Karte für immer derselbe Satz.
+  Eine Gabe, der man beim Wirken nicht zusehen kann, nimmt niemand
+  absichtlich zweimal.
+- **Jede Karte sagt jetzt, was sie bei dir bewirkt:** „Angriff 5 → 7",
+  „Schaden -10 % → -20 %", „1 Leben alle 4 statt alle 5 Züge",
+  „2 statt 1 Leben alle 3 Züge".
+- **Und unter drei Zügen wird sie stärker statt schneller.** Vorher ging
+  es bis „alle 1 Züge" hinunter — ein Held, der gar nicht mehr
+  kleinzukriegen ist. Jetzt: 5 → 4 → 3 Züge, danach +1 Leben pro Tick.
+
 ## 1.7.2 — Der Gastgeber sieht seine Gäste, und die Monster sehen alle
 
 Fünf Punkte aus dem ersten echten Koop-Abend.

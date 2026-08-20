@@ -48,6 +48,9 @@ const DOOR_POCKET := 4           ## fewer floor tiles than this behind a door is
 const SHOT_TIME := 0.30
 const STEP_TIME := 0.14
 # How long a held direction waits before it starts walking by itself.
+## How close together the healing ticks may ever get. Below this, more
+## of the gift means bigger ticks instead of faster ones.
+const REGEN_FLOOR := 3
 const REPEAT_DELAY := 0.34
 
 # Scenery only, no rules: what a floor is dressed with.
@@ -559,6 +562,7 @@ func load_run() -> bool:
 	player.potion_mult = float(p.get("potion_mult", 1.0))
 	player.scholar = float(p.get("scholar", 0.0))
 	player.regen_interval = int(p.get("regen_interval", 0))
+	player.regen_power = maxi(1, int(p.get("regen_power", 1)))
 	player.regen_counter = int(p.get("regen_counter", 0))
 	player.pending_perks = int(p.get("pending_perks", 0))
 	player.selected_potion = str(p.get("selected_potion", Data.DEFAULT_POTION))
@@ -1341,6 +1345,29 @@ func try_move(step: Vector2i) -> void:
 	if step.x != 0:
 		player.facing = 1 if step.x > 0 else -1
 
+	# Walking into a companion trades places with them.
+	#
+	# Nothing stopped two heroes standing on the same tile, and the one who
+	# arrived second was simply drawn over the first - which from the other
+	# side of the room looks exactly like your friend vanishing the moment
+	# the host moved. Refusing the step would be worse: in a one-tile
+	# corridor it walls people in behind each other.
+	var mate: Variant = _hero_at(target)
+	if mate != null:
+		var was := Vector2i(player.x, player.y)
+		player.x = target.x
+		player.y = target.y
+		player.snap()
+		mate.x = was.x
+		mate.y = was.y
+		mate.snap()
+		say("Ihr tauscht die Plätze.")
+		_tick_buffs()
+		enemy_turn()
+		recompute_fov()
+		paint()
+		return
+
 	var monster: Variant = monster_at(target)
 	var shop: Variant = shop_at(target)
 	if monster != null:
@@ -2074,6 +2101,20 @@ func enemy_turn() -> void:
 ## Returns whether it actually moved: a kiter needs to know, because
 ## a backwards step that failed means it is cornered and should
 ## swing after all.
+## The other hero standing on a cell, if anybody is. Never the one whose
+## turn it is: walking into yourself is not a thing that happens.
+func _hero_at(cell: Vector2i) -> Variant:
+	if net == null or not net.hosting or party.size() <= 1:
+		return null
+	for peer in party:
+		var hero = party[peer]
+		if hero == player or hero.hp <= 0:
+			continue
+		if hero.x == cell.x and hero.y == cell.y:
+			return hero
+	return null
+
+
 ## The living hero closest to a cell. Alone, that is always the one and
 ## only hero, and this costs a dictionary lookup.
 func _nearest_hero(cell: Vector2i) -> Variant:
@@ -2376,7 +2417,7 @@ func _tick_regen() -> void:
 	if player.regen_counter < player.regen_interval:
 		return
 	player.regen_counter = 0
-	player.hp = mini(player.max_hp, player.hp + 1)
+	player.hp = mini(player.max_hp, player.hp + player.regen_power)
 
 
 func _tick_poison() -> void:
@@ -4154,7 +4195,8 @@ func _room_for_one(near: Vector2i) -> Vector2i:
 	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
 			Vector2i(1, 1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(-1, -1)]:
 		var at: Vector2i = near + offset
-		if Dungeon.is_walkable(grid, at.x, at.y) and not blocks(at) and not occupied(at):
+		if Dungeon.is_walkable(grid, at.x, at.y) and not blocks(at) \
+				and not occupied(at) and _hero_at(at) == null:
 			return at
 	return near
 
@@ -4574,8 +4616,52 @@ func _offer_perk() -> void:
 		var shown: bool = i < perk_choices.size()
 		button.visible = shown
 		if shown:
-			button.text = "%s - %s" % [perk_choices[i]["name"], perk_choices[i]["desc"]]
+			button.text = "%s - %s" % [perk_choices[i]["name"], _perk_promise(perk_choices[i])]
 	_perk_panel.visible = true
+
+
+## What this gift would actually change, in the numbers you have now.
+##
+## The card used to read the same sentence for ever: "1 Leben alle 5
+## Züge", whether it was your first Regeneration or your fourth. Taking
+## it again then looked like it did nothing at all - it was making the
+## ticks come faster, and nothing on the screen said so. A gift that
+## cannot be seen working is a gift nobody picks twice on purpose.
+func _perk_promise(perk: Dictionary) -> String:
+	var p = player
+	if perk.has("power"):
+		return "Angriff %d → %d" % [p.power(), p.power() + int(perk["power"])]
+	if perk.has("defense"):
+		return "Verteidigung %d → %d" % [p.defense(), p.defense() + int(perk["defense"])]
+	if perk.has("hp"):
+		return "max. Leben %d → %d" % [p.max_hp, p.max_hp + int(perk["hp"])]
+	if perk.has("crit"):
+		return "Krit %.1f %% → %.1f %%" % [p.crit_chance() * 100.0,
+			(p.crit_chance() + float(perk["crit"])) * 100.0]
+	if perk.has("reduction"):
+		return "Schaden -%d %% → -%d %%" % [roundi(p.damage_reduction * 100.0),
+			roundi(minf(0.8, p.damage_reduction + float(perk["reduction"])) * 100.0)]
+	if perk.has("gold"):
+		return "Gold %d %% → %d %%" % [roundi(p.gold_mult * 100.0),
+			roundi((p.gold_mult + float(perk["gold"])) * 100.0)]
+	if perk.has("xp"):
+		return "Erfahrung %d %% → %d %%" % [roundi(p.xp_mult * 100.0),
+			roundi((p.xp_mult + float(perk["xp"])) * 100.0)]
+	if perk.has("alchemy"):
+		return "Tränke %d %% → %d %%" % [roundi(p.potion_mult * 100.0),
+			roundi((p.potion_mult + float(perk["alchemy"])) * 100.0)]
+	if perk.has("scholar"):
+		return "Rolle bleibt %d %% → %d %%" % [roundi(p.scholar * 100.0),
+			roundi(minf(0.8, p.scholar + float(perk["scholar"])) * 100.0)]
+	if perk.has("regen"):
+		if p.regen_interval <= 0:
+			return "1 Leben alle %d Züge" % int(perk["regen"])
+		if p.regen_interval > REGEN_FLOOR:
+			return "%d Leben alle %d statt alle %d Züge" % [p.regen_power,
+				p.regen_interval - 1, p.regen_interval]
+		return "%d statt %d Leben alle %d Züge" % [p.regen_power + 1,
+			p.regen_power, p.regen_interval]
+	return str(perk.get("desc", ""))
 
 
 func take_perk(index: int) -> void:
@@ -4594,9 +4680,16 @@ func take_perk(index: int) -> void:
 	player.potion_mult += float(perk.get("alchemy", 0.0))
 	player.scholar = minf(0.8, player.scholar + float(perk.get("scholar", 0.0)))
 	if perk.has("regen"):
-		# Taking it twice makes it faster rather than doing nothing.
-		player.regen_interval = (int(perk["regen"]) if player.regen_interval == 0
-			else maxi(1, player.regen_interval - 1))
+		# First time it starts healing; after that the ticks come closer
+		# together, down to three turns; after that each tick is worth
+		# more. It used to go all the way to one turn, which is a hero
+		# who cannot be worn down at all.
+		if player.regen_interval <= 0:
+			player.regen_interval = int(perk["regen"])
+		elif player.regen_interval > REGEN_FLOOR:
+			player.regen_interval -= 1
+		else:
+			player.regen_power += 1
 	player.pending_perks -= 1
 	audio.play("levelup")
 	say("Gabe erhalten: %s." % perk["name"])
@@ -5773,7 +5866,8 @@ func open_stats() -> void:
 	rows.append("Kritische Treffer:  %.1f %%      Schaden ×%.1f" % [
 		p.crit_chance() * 100.0, float(Data.CRIT_MULT)])
 	if p.regen_interval > 0:
-		rows.append("Regeneration:  1 Leben alle %d Züge" % p.regen_interval)
+		rows.append("Regeneration:  %d Leben alle %d Züge" % [p.regen_power,
+			p.regen_interval])
 	else:
 		rows.append("Regeneration:  keine")
 	if p.reach() > 0:

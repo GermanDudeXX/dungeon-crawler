@@ -156,6 +156,7 @@ static func write(game) -> void:
 			"gold_mult": p.gold_mult, "xp_mult": p.xp_mult,
 			"potion_mult": p.potion_mult, "scholar": p.scholar,
 			"regen_interval": p.regen_interval,
+			"regen_power": p.regen_power,
 			"regen_counter": p.regen_counter, "pending_perks": p.pending_perks,
 			"potion_counts": p.potion_counts, "selected_potion": p.selected_potion,
 			"buffs": p.buffs, "shield": p.shield, "bleed_turns": p.bleed_turns,

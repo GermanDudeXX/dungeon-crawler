@@ -195,6 +195,8 @@ func join(address: String, port := PORT) -> bool:
 ## Hangs up, whichever end this is. Leaves the game running on its own,
 ## because a lost connection should cost a run at most once.
 func shut() -> void:
+	if hosting or guest:
+		trace("shut() aufgerufen")
 	_dialing = -1.0
 	_floorless = false
 	if multiplayer.multiplayer_peer != null:
@@ -263,6 +265,7 @@ func _someone_arrived(peer: int) -> void:
 
 
 func _someone_left(peer: int) -> void:
+	trace("Peer %d ist weg" % peer)
 	if not hosting:
 		return
 	if game.party.has(peer):
@@ -286,6 +289,7 @@ func _we_are_in() -> void:
 
 
 func _we_are_not() -> void:
+	trace("Verbindung abgelehnt")
 	_dialing = -1.0
 	guest = false
 	multiplayer.multiplayer_peer = null
@@ -294,6 +298,7 @@ func _we_are_not() -> void:
 
 
 func _host_is_gone() -> void:
+	trace("Gastgeber weg (server_disconnected)")
 	guest = false
 	multiplayer.multiplayer_peer = null
 	note.emit("Die Verbindung zum Gastgeber ist weg.")

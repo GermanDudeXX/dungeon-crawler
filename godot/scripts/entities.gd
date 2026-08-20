@@ -60,6 +60,11 @@ class Player extends Actor:
 	var potion_mult := 1.0
 	var scholar := 0.0             ## chance a scroll survives being read
 	var regen_interval := 0        ## 0 means no regeneration at all
+	# How much one tick gives back. Taking the gift again first makes the
+	# ticks come closer together, and once they are as close as they
+	# should ever get, makes each one worth more - because "every single
+	# turn" is not a reward any more, it is a hero who cannot be hurt.
+	var regen_power := 1
 	var regen_counter := 0
 	var pending_perks := 0         ## levels gained but not yet spent
 
