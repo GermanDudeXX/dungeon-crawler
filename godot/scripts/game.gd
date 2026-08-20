@@ -121,6 +121,9 @@ var _stats_panel: PanelContainer   ## what the hero actually adds up to
 var _options_panel: PanelContainer ## the title screen, one level down
 var _info_panel: PanelContainer
 var _info_record: Label
+var _rest_button: Button         ## waits, or hits whatever is in reach
+var _attack_panel: PanelContainer ## the one-time explanation for that
+var _attack_step := Vector2i.ZERO ## the blow the explanation is holding back
 var _buff_chips: Array = []      ## one plate per running buff
 var _buff_peak := {}             ## the longest each buff has been, to draw a share of
 var _stats_text: Label
@@ -3015,6 +3018,8 @@ func busy() -> bool:
 	# a step taken while that page is open is a step nobody meant.
 	if _stats_panel != null and _stats_panel.visible:
 		return true
+	if _attack_panel != null and _attack_panel.visible:
+		return true
 	if _perk_panel != null and _perk_panel.visible and player.pending_perks > 0:
 		return true
 	return false
@@ -3049,6 +3054,52 @@ func _auto_shoot() -> void:
 			continue
 		shoot()
 		return
+
+
+## The neighbour worth hitting, or nothing.
+##
+## Only things already awake: something asleep beside you is a chance
+## to walk away, and a button that quietly offers to wake the room is
+## a button that loses runs. Among those awake, the one closest to
+## dying - a fight is shortest when something stops swinging.
+##
+## Steps the hero could not take anyway are left out: a diagonal while
+## the four-direction setting is on, or one that would cut a corner.
+func _reachable_foe() -> Variant:
+	if player == null:
+		return null
+	var here := Vector2i(player.x, player.y)
+	var best: Variant = null
+	for monster in monsters:
+		if not monster.is_alive() or not monster.awake:
+			continue
+		var step: Vector2i = monster.cell() - here
+		if absi(step.x) > 1 or absi(step.y) > 1 or step == Vector2i.ZERO:
+			continue
+		if step.x != 0 and step.y != 0:
+			if not settings.get("diagonal", true) or _corner_cut(here, step):
+				continue
+		if best == null or monster.hp < best.hp:
+			best = monster
+	return best
+
+
+## The button in the corner: hit what is in reach, or let a turn pass.
+func rest_or_attack() -> void:
+	if busy():
+		return
+	var mark: Variant = _reachable_foe()
+	if mark == null:
+		wait_a_turn()
+		return
+	var step: Vector2i = mark.cell() - Vector2i(player.x, player.y)
+	# The first time, the button explains itself and waits to be told to
+	# go ahead. After that it simply swings.
+	if not settings.get("attack_hint_seen", false):
+		_attack_step = step
+		_show_attack_hint(mark)
+		return
+	try_move(step)
 
 
 ## Stand still for a turn.
@@ -3524,14 +3575,20 @@ func _build_hud() -> void:
 	_shoot_button.visible = false
 	_play_ui.add_child(_shoot_button)
 
-	var rest := Button.new()
-	rest.text = "WARTEN"
-	rest.custom_minimum_size = Vector2(size * 1.2, size * 0.6)
-	rest.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	rest.position = Vector2(-pad - size * 3.6, pad)
-	rest.add_theme_font_size_override("font_size", 24)
-	rest.pressed.connect(wait_a_turn)
-	_play_ui.add_child(rest)
+	# One button, two jobs, and the label says which.
+	#
+	# Waiting is not a fight move: standing still next to something
+	# awake hands it a free hit and you still have to swing afterwards.
+	# So while something is in reach the same button hits it, and while
+	# nothing is, it waits.
+	_rest_button = Button.new()
+	_rest_button.text = "WARTEN"
+	_rest_button.custom_minimum_size = Vector2(size * 1.4, size * 0.6)
+	_rest_button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_rest_button.position = Vector2(-pad - size * 3.8, pad)
+	_rest_button.add_theme_font_size_override("font_size", 24)
+	_rest_button.pressed.connect(rest_or_attack)
+	_play_ui.add_child(_rest_button)
 
 	var bag := Button.new()
 	bag.text = "TASCHE"
@@ -3596,6 +3653,7 @@ func _build_hud() -> void:
 	_build_dead_panel()
 	_build_setup_panel()
 	_build_stats_panel()
+	_build_attack_hint()
 	_build_options_panel()
 	_build_info_panel()
 	_build_title_panel()
@@ -4064,6 +4122,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 ## Shuts the topmost thing that is open and says whether there was one.
 ## The order is the order they sit in front of each other.
 func close_topmost() -> bool:
+	if _attack_panel != null and _attack_panel.visible:
+		_attack_never_mind()
+		return true
 	if _options_panel != null and _options_panel.visible:
 		close_options()
 		return true
@@ -5545,6 +5606,93 @@ Treppe hinab = tiefer. Tasche zeigt Tränke und Rollen."
 	column.add_child(_record_label)
 
 
+## What the button does, said once, before it does it.
+##
+## A button that changes what it does behind your back is a button that
+## gets pressed by mistake, and the mistake here costs a turn and a hit
+## in the face. So the first time it would swing, it explains itself and
+## waits to be told to go ahead. Once.
+func _build_attack_hint() -> void:
+	_attack_panel = PanelContainer.new()
+	_attack_panel.custom_minimum_size = Vector2(760, 400)
+	_attack_panel.visible = false
+	_solid_panel(_attack_panel)
+	_hud.add_child(_centred(_attack_panel))
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 14)
+	_attack_panel.add_child(column)
+
+	var heading := Label.new()
+	heading.text = "Achtung: dieser Knopf greift an"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	heading.custom_minimum_size = Vector2(700, 0)
+	heading.add_theme_font_size_override("font_size", 32)
+	heading.add_theme_color_override("font_color", Color(1.0, 0.66, 0.40))
+	column.add_child(heading)
+
+	var body := Label.new()
+	body.name = "body"
+	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.custom_minimum_size = Vector2(700, 0)
+	body.add_theme_font_size_override("font_size", 21)
+	body.add_theme_color_override("font_color", Color(0.84, 0.84, 0.90))
+	column.add_child(body)
+
+	var yes := Button.new()
+	yes.text = "ANGREIFEN"
+	yes.custom_minimum_size = Vector2(0, 70)
+	yes.add_theme_font_size_override("font_size", 28)
+	yes.pressed.connect(_attack_anyway)
+	column.add_child(yes)
+
+	var no := Button.new()
+	no.text = "DOCH NICHT"
+	no.custom_minimum_size = Vector2(0, 60)
+	no.add_theme_font_size_override("font_size", 24)
+	no.pressed.connect(_attack_never_mind)
+	column.add_child(no)
+
+
+func _show_attack_hint(mark) -> void:
+	if _attack_panel == null:
+		return
+	var body: Label = _attack_panel.find_child("body", true, false)
+	if body != null:
+		body.text = ("Solange etwas Waches direkt neben dir steht, heißt dieser"
+			+ " Knopf ANGREIFEN und schlägt zu - hier auf %s.\n\n"
+			+ "Das kostet einen Zug wie jede andere Handlung, und danach sind"
+			+ " die Gegner dran: der Getroffene schlägt zurück, wenn er noch"
+			+ " steht.\n\n"
+			+ "Stehen mehrere neben dir, trifft er den mit den wenigsten"
+			+ " Lebenspunkten. Schlafende lässt er in Ruhe - an denen kommst"
+			+ " du vorbei, wenn du willst.\n\n"
+			+ "Du kannst wie bisher auch einfach in einen Gegner hineinlaufen."
+			+ " Diese Erklärung kommt nur dieses eine Mal.") % mark.display_name
+	_attack_panel.get_parent().move_to_front()
+	_attack_panel.visible = true
+
+
+func _attack_anyway() -> void:
+	settings["attack_hint_seen"] = true
+	Settings.write(settings)
+	_attack_panel.visible = false
+	if _attack_step != Vector2i.ZERO:
+		try_move(_attack_step)
+	_attack_step = Vector2i.ZERO
+
+
+## Backing out still counts as having read it: the point was to be told
+## once, not to be asked every time until the answer is yes.
+func _attack_never_mind() -> void:
+	settings["attack_hint_seen"] = true
+	Settings.write(settings)
+	_attack_panel.visible = false
+	_attack_step = Vector2i.ZERO
+
+
 ## The switches, one level below the title screen.
 func _build_options_panel() -> void:
 	_options_panel = PanelContainer.new()
@@ -5903,6 +6051,11 @@ func _process(delta: float) -> void:
 	# The shooting button appears for whoever can shoot. It was built
 	# hidden and then never shown again, which left a ranger on a phone
 	# with auto-shooting turned off holding a bow and no way to loose it.
+	if _rest_button != null:
+		var mark: Variant = _reachable_foe()
+		_rest_button.text = "ANGREIFEN" if mark != null else "WARTEN"
+		_rest_button.add_theme_color_override("font_color",
+			Color(1.0, 0.72, 0.62) if mark != null else Color(1, 1, 1))
 	if _shoot_button != null:
 		_shoot_button.visible = player.reach() > 0
 	if _drink_button != null:

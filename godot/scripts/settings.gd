@@ -23,6 +23,10 @@ const DEFAULTS := {
 	# Eight directions or four. Off means the stick and the keys give the
 	# stronger of the two axes instead of both at once.
 	"diagonal": true,
+	# Shown once, the first time the wait button is pressed as an attack.
+	# A button that changes what it does deserves one sentence of warning;
+	# it does not deserve that sentence every time.
+	"attack_hint_seen": false,
 	# Asked once, on Windows, whether the game should move itself into a
 	# proper folder. Remembered either way: an offer that comes back every
 	# single launch is not an offer, it is nagging.

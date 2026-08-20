@@ -87,6 +87,7 @@ func _process(_delta: float) -> bool:
 	_check_bow()
 	_check_auto_shoot()
 	_check_difficulty_sight()
+	_check_rest_button()
 	_check_captive()
 	_check_floor_memory()
 	_check_elements()
@@ -485,6 +486,55 @@ func _check_difficulty_sight() -> void:
 			landmarks += 1
 	if landmarks < 7:
 		_complain("zu wenige Bosse zwischen Ebene 2 und 15", str(landmarks))
+	_settle()
+
+## The corner button hits what is in reach and waits when nothing is.
+##
+## The dangerous half is what it must *not* do: wake something asleep,
+## reach through a wall corner, or swing at an angle while the hero has
+## asked for four directions.
+func _check_rest_button() -> void:
+	_settle()
+	_game.settings["attack_hint_seen"] = true
+	_game.settings["diagonal"] = true
+	for other in _game.monsters.duplicate():
+		_game.monsters.erase(other)
+	var here := Vector2i(_game.player.x, _game.player.y)
+	if _game._reachable_foe() != null:
+		_complain("Angriffsziel ohne Gegner")
+
+	var spot: Variant = null
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var at: Vector2i = here + offset
+		if Dungeon.is_walkable(_game.grid, at.x, at.y) and not _game.blocks(at) \
+				and not _game.taken(at):
+			spot = at
+			break
+	if spot == null:
+		_settle()
+		return
+
+	var sleeper = Entities.Monster.new("orc", 1.0, "easy")
+	sleeper.x = spot.x
+	sleeper.y = spot.y
+	sleeper.awake = false
+	sleeper.snap()
+	_game.monsters.append(sleeper)
+	if _game._reachable_foe() != null:
+		_complain("Knopf greift Schlafende an")
+
+	sleeper.awake = true
+	var mark: Variant = _game._reachable_foe()
+	if mark == null:
+		_complain("Knopf sieht den wachen Nachbarn nicht")
+	else:
+		var before: int = mark.hp
+		_game.player.max_hp = 400
+		_game.player.hp = 400
+		_game.rest_or_attack()
+		if mark.is_alive() and mark.hp >= before:
+			_complain("Knopf greift nicht an")
+	_game.monsters.erase(sleeper)
 	_settle()
 
 func _complain(what: String, detail: String = "") -> void:

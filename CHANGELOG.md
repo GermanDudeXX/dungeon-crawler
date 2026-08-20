@@ -17,6 +17,26 @@ Das Spiel gibt es in zwei Fassungen:
 
 # Godot-Fassung
 
+## 1.6.1 — Ein Knopf, der auch zuschlägt
+
+- **WARTEN heißt ANGREIFEN**, solange etwas Waches direkt neben dir
+  steht, und schlägt dann zu. Warten ist kein Kampfzug: wer neben einem
+  wachen Gegner stehen bleibt, schenkt ihm einen Schlag und muss danach
+  trotzdem zuschlagen.
+- Stehen mehrere daneben, trifft er den mit den **wenigsten
+  Lebenspunkten** — ein Kampf ist am kürzesten, wenn zuerst etwas aufhört
+  zurückzuschlagen.
+- **Schlafende lässt er in Ruhe.** Etwas Schlafendes neben dir ist die
+  Gelegenheit vorbeizugehen, und ein Knopf, der ungefragt den Raum weckt,
+  verliert Läufe.
+- Schritte, die der Held ohnehin nicht gehen dürfte, zählen nicht als
+  Reichweite: eine Diagonale bei „4 Richtungen", oder eine, die um eine
+  Ecke schneiden würde.
+- **Beim ersten Mal erklärt sich der Knopf** und hält den Schlag zurück,
+  bis du bestätigst — mit Warnung, dass es einen Zug kostet und der
+  Getroffene zurückschlägt. Danach nie wieder.
+- Hineinlaufen greift weiterhin an, wie bisher.
+
 ## 1.6.0 — Menü in Gruppen, Werte-Seite, Buff-Plättchen
 
 Die sieben Punkte aus dem Wunschzettel, von oben nach unten.
