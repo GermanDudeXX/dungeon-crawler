@@ -85,7 +85,8 @@ static func floor_data(game) -> Dictionary:
 	var shops: Array = []
 	for shop in game.shops:
 		shops.append({"x": shop["cell"].x, "y": shop["cell"].y, "kind": shop["kind"],
-			"stock": shop.get("stock", []), "scroll": shop.get("scroll", "")})
+			"stock": shop.get("stock", []), "left": shop.get("left", {}),
+			"scroll": shop.get("scroll", "")})
 
 	# The rooms are part of the floor too: everything that places
 	# something later - a blink, a scattered purse - picks from them, and

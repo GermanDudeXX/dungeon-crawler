@@ -748,7 +748,18 @@ func _check_save() -> void:
 		return
 	var after := _fingerprint()
 	if before != after:
-		_complain("Spielstand kommt anders zurueck")
+		# Saying which line differs, not just that one does: "the save comes
+		# back different" is a sentence that costs an hour to act on.
+		var was := before.split("
+")
+		var now := after.split("
+")
+		var where := "Länge %d gegen %d" % [was.size(), now.size()]
+		for at in mini(was.size(), now.size()):
+			if was[at] != now[at]:
+				where = "vorher: %s   nachher: %s" % [was[at], now[at]]
+				break
+		_complain("Spielstand kommt anders zurueck", where)
 		_notes.append("  vorher: " + before)
 		_notes.append("  nachher: " + after)
 
@@ -1019,18 +1030,25 @@ func _check_mimic() -> void:
 
 ## A walkable cell with a free neighbour, for tests that need to put
 ## something down next to the hero.
-func _open_spot() -> Variant:
+## `need` is how many free neighbours the thing put there will want. A
+## slime splits into two, a skeleton backs away before it shoots, a bone
+## mage needs somewhere to put what it calls up - given one free side in a
+## corner, all three do nothing, and the test then blames the monster for
+## the room it was placed in.
+func _open_spot(need := 1) -> Variant:
 	for y in range(1, 24):
 		for x in range(1, 39):
 			var cell := Vector2i(x, y)
 			if not Dungeon.is_walkable(_game.grid, x, y) or _game.occupied(cell):
 				continue
+			var room := 0
 			for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 				var beside: Vector2i = cell + offset
-				var free: bool = Dungeon.is_walkable(_game.grid, beside.x, beside.y) \
-					and not _game.occupied(beside)
-				if free:
-					return cell
+				if Dungeon.is_walkable(_game.grid, beside.x, beside.y) \
+						and not _game.occupied(beside) and not _game.blocks(beside):
+					room += 1
+			if room >= need:
+				return cell
 	return null
 
 
@@ -1422,7 +1440,7 @@ func _check_deep_kin() -> void:
 		p.hp = 400
 
 	# Bone mage: calls something up, and not endlessly.
-	spot = _open_spot()
+	spot = _open_spot(3)
 	if spot != null:
 		var mage = Entities.Monster.new("bone_mage", 1.0, "normal")
 		mage.x = spot.x
@@ -1561,7 +1579,7 @@ func _check_monster_habits() -> void:
 		_complain("Schwarmtiere kommen einzeln", "größte Gruppe: %d" % biggest)
 
 	# A slime leaves two smaller ones behind.
-	var spot: Variant = _open_spot()
+	var spot: Variant = _open_spot(3)
 	if spot != null:
 		var slime = Entities.Monster.new("slime", 4.0, "normal")
 		slime.x = spot.x
@@ -1581,7 +1599,7 @@ func _check_monster_habits() -> void:
 				_game.monsters.erase(m)
 
 	# A skeleton shoots from a distance instead of walking up.
-	var shooter_spot: Variant = _open_spot()
+	var shooter_spot: Variant = _open_spot(3)
 	if shooter_spot != null:
 		var bones = Entities.Monster.new("skeleton", 1.0, "normal")
 		if not bones.ranged or not bones.kites:

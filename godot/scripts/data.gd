@@ -425,7 +425,11 @@ const POTIONS := [
 		"min_level": 2, "effect": {"reveal": true}},
 	{"id": "blink", "name": "Trank des Blinzelns", "flask": "flask_green", "price": 22, "weight": 4,
 		"min_level": 3, "effect": {"blink": true}},
-	{"id": "midas", "name": "Trank des Midas", "flask": "flask_big_yellow", "price": 0, "weight": 2,
+	# Sixty for something that gives back twenty-five to seventy: a
+	# gamble, not a wage. It used to cost nothing at all, which made a
+	# merchant carrying one an infinite supply of gold - buy, drink,
+	# repeat.
+	{"id": "midas", "name": "Trank des Midas", "flask": "flask_big_yellow", "price": 60, "weight": 2,
 		"min_level": 3, "effect": {"gold": [25, 70]}},
 	{"id": "antidote", "name": "Gegengift", "flask": "flask_green", "price": 15, "weight": 5,
 		"min_level": 2, "effect": {"cure": ["poison_turns"]}},
@@ -446,6 +450,15 @@ const POTIONS := [
 	{"id": "brittle", "name": "Spröde Phiole", "flask": "flask_blue", "price": 0, "weight": 2,
 		"min_level": 4, "effect": {"buff": "frailty", "turns": 12}, "cursed": true},
 ]
+## Nothing on a shelf is free. A price of zero means "never sold" - the
+## cursed flasks - and anything that does end up in a shop is worth at
+## least this much, so a forgotten zero cannot turn into a giveaway.
+const MIN_PRICE := 12
+
+## How many of each flask a merchant has. Two of something cheap, one of
+## something rare: a shop is a shop, not a tap.
+const STOCK_EACH := [1, 2]
+
 const DEFAULT_POTION := "healing"
 const BURST_RADIUS := 2
 

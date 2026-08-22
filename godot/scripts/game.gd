@@ -176,7 +176,8 @@ var _rest_button: Button         ## waits, or hits whatever is in reach
 var _attack_panel: PanelContainer ## the one-time explanation for that
 var _attack_step := Vector2i.ZERO ## the blow the explanation is holding back
 var _buff_chips: Array = []      ## one plate per running buff
-var _buff_peak := {}             ## the longest each buff has been, to draw a share of
+var _buff_peak := {}
+var _status_seen := {}           ## what was already running last turn             ## the longest each buff has been, to draw a share of
 var _stats_text: Label
 var _setup_panel: PanelContainer  ## the Windows "shall I move in?" offer
 var _setup_text: Label
@@ -467,10 +468,13 @@ func _apply_floor(save: Dictionary) -> void:
 	shops = []
 	for entry in save["shops"]:
 		var stock: Array = []
+		var left := {}
+		for id in entry.get("left", {}):
+			left[str(id)] = int(entry["left"][id])
 		for id in entry.get("stock", []):
 			stock.append(str(id))
 		shops.append({"cell": Vector2i(int(entry["x"]), int(entry["y"])),
-			"kind": str(entry["kind"]), "stock": stock,
+			"kind": str(entry["kind"]), "stock": stock, "left": left,
 			"scroll": str(entry.get("scroll", ""))})
 	chest = null
 	if save["chest"] != null:
@@ -828,8 +832,12 @@ func _populate() -> void:
 	if depth >= 2 and rng.randf() < 0.55:
 		var chest_cell = _free_cell(spawn_rooms)
 		if chest_cell != null:
+			# "gone" from the start, even though nothing is gone yet: a chest
+			# built here and a chest read back from a save have to have the
+			# same shape, or the two are not the same chest as far as any
+			# comparison is concerned.
 			chest = {"cell": chest_cell, "mimic": depth >= 3 and rng.randf() < 0.3,
-				"opened": false, "guarded": false}
+				"opened": false, "gone": false, "guarded": false}
 			# Often there is something standing over it. The chest will not
 			# open while it lives - a prize you have to earn rather than
 			# one you have to find.
@@ -946,7 +954,14 @@ func _populate() -> void:
 			# flask - a merchant who only sells potions is a merchant you
 			# stop visiting once you have eight.
 			var paper: String = Data.SCROLLS[rng.randi() % Data.SCROLLS.size()]["id"]
-			shops.append({"cell": spot, "kind": "merchant", "stock": stock,
+			# How many of each. A shop that never runs out is not a shop,
+			# it is a vending machine with infinite change - and with one
+			# it is possible to walk in with a pile of gold and walk out
+			# unkillable.
+			var left := {}
+			for id in stock:
+				left[id] = Data.STOCK_EACH[rng.randi() % Data.STOCK_EACH.size()]
+			shops.append({"cell": spot, "kind": "merchant", "stock": stock, "left": left,
 				"scroll": paper})
 	if depth >= 4 and rng.randf() < 0.3:
 		var spot = _shopkeeper_spot(spawn_rooms)
@@ -2609,8 +2624,15 @@ func buy(what: String) -> void:
 		"potion":
 			var id: String = what.substr(7) if what.begins_with("potion:") else Data.DEFAULT_POTION
 			var potion := Data.potion_by_id(id)
+			var left: Dictionary = shop_open.get("left", {})
+			if int(left.get(id, 1)) <= 0:
+				audio.play("denied")
+				say("Davon hat er keinen mehr.")
+				return
 			if _spend(price(int(potion["price"]))):
 				player.add_potion(id)
+				left[id] = int(left.get(id, 1)) - 1
+				shop_open["left"] = left
 				say("Gekauft: %s." % potion["name"])
 		"scroll":
 			var paper_id: String = what.substr(7)
@@ -2671,7 +2693,10 @@ func buy(what: String) -> void:
 ## monsters hit harder.
 func price(base: int) -> int:
 	var markup: float = float(Data.difficulty_by_id(difficulty)["markup"])
-	return int(round(base * (1.0 + markup)))
+	# Never free. A zero in the table means "not for sale", and a zero
+	# that slipped onto a shelf anyway - the Potion of Midas did exactly
+	# that - is a merchant handing out money.
+	return maxi(Data.MIN_PRICE, int(round(base * (1.0 + markup))))
 
 
 func _spend(cost: int) -> bool:
@@ -3414,6 +3439,7 @@ func paint() -> void:
 	for monster in monsters:
 		_place_monster(monster)
 	_paint_mates()
+	_watch_status()
 
 	# One repaint means one action has just finished, so this is where the
 	# others get told what happened. Cheap when alone: the pulse returns at
@@ -5715,6 +5741,77 @@ func _flash_monster(monster) -> void:
 	back.tween_property(sprite, "self_modulate", was, 0.16)
 
 
+## Says out loud when something starts happening to you.
+##
+## Poison, bleeding, a web, a curse and every blessing were only ever
+## written into the log at the bottom right - three lines of grey text
+## that nobody reads while something is hitting them. The plates under
+## the health bar show what *is* running; this is about the moment it
+## *starts*, which is the moment a decision changes.
+##
+## Worked out by comparing against last turn rather than by shouting from
+## each of the twenty places that can poison somebody. A trap, a bite, a
+## cloud of gas and a cursed flask all end at the same counter, so one
+## watcher catches all four - and the next source, written next month,
+## comes with its notice already attached.
+func _watch_status() -> void:
+	if player == null or dead:
+		return
+	var now := {}
+	if player.poison_turns > 0:
+		now["poison"] = true
+	if player.bleed_turns > 0:
+		now["bleed"] = true
+	if player.webbed > 0:
+		now["web"] = true
+	for id in player.buffs:
+		now[id] = true
+
+	var fresh: Array[String] = []
+	for key in now:
+		if not _status_seen.has(key):
+			fresh.append(str(key))
+	_status_seen = now
+	if fresh.is_empty():
+		return
+
+	# All at once in one line: a trap that poisons *and* weakens should
+	# say so once, not shove its own second banner over its first.
+	var words: Array[String] = []
+	var grim := false
+	for key in fresh:
+		words.append(_status_word(key))
+		if _status_is_bad(key):
+			grim = true
+	banner(" · ".join(words),
+		Color(1.0, 0.55, 0.42) if grim else Color(0.60, 0.90, 1.0))
+	audio.play("player_hurt" if grim else "equip")
+	# And over your own head, where your eyes already are.
+	_damage_number(Vector2i(player.x, player.y), words[0],
+		Color(1.0, 0.62, 0.48) if grim else Color(0.62, 0.92, 1.0))
+
+
+func _status_word(key: String) -> String:
+	match key:
+		"poison":
+			return "Vergiftet!"
+		"bleed":
+			return "Blutung!"
+		"web":
+			return "Im Netz!"
+	if Data.BUFFS.has(key):
+		return "%s!" % Data.BUFFS[key]["name"]
+	return key
+
+
+## Whether a status is something that happened *to* you. The two curses
+## are buffs by construction - they live in the same dictionary and run on
+## the same clock - but nobody drinking Ungeschick feels blessed.
+func _status_is_bad(key: String) -> bool:
+	if key in ["poison", "bleed", "web", "clumsy", "frailty"]:
+		return true
+	return false
+
 ## A number that floats off a cell and fades. The cheapest way to make a
 ## hit legible: without it the only sign that anything happened is a
 ## line of text at the bottom of the screen, which nobody reads mid-fight.
@@ -7099,7 +7196,11 @@ func _refresh_shop() -> void:
 	else:
 		for id in shop_open.get("stock", []):
 			var potion := Data.potion_by_id(id)
-			offers.append(["potion:" + id, potion["name"], price(int(potion["price"]))])
+			var left: int = int(shop_open.get("left", {}).get(id, 1))
+			if left <= 0:
+				continue
+			offers.append(["potion:" + id, "%s (noch %d)" % [potion["name"], left],
+				price(int(potion["price"]))])
 		var paper: String = shop_open.get("scroll", "")
 		if paper != "":
 			var scroll := Data.scroll_by_id(paper)

@@ -17,6 +17,45 @@ Das Spiel gibt es in zwei Fassungen:
 
 # Godot-Fassung
 
+## 1.8.0 — Meldungen, und ein Händler der nicht alles hergibt
+
+### Du erfährst, was mit dir passiert
+- **Sobald ein Zustand beginnt**, steht es groß im Bild und über deinem
+  Kopf: „Vergiftet!", „Blutung!", „Im Netz!", „Stärke!". Bisher stand das
+  nur unten rechts im Protokoll — drei Zeilen graue Schrift, die niemand
+  liest, während etwas auf ihn einschlägt.
+- Mehrere auf einmal kommen in **einer** Meldung: „Vergiftet! · Stärke!"
+  statt zwei Einblendungen übereinander.
+- Gebaut als Vergleich mit dem letzten Zug, nicht als Ruf aus jeder der
+  zwanzig Stellen, die vergiften können. Falle, Biss, Gaswolke und
+  verfluchte Phiole enden am selben Zähler — ein Beobachter erwischt alle
+  vier, und die nächste Quelle bringt ihre Meldung schon mit.
+
+### Der Laden
+- **Tränke sind begrenzt.** Ein bis zwei Stück je Sorte, und der Knopf
+  sagt „(noch 2)". Ein Laden, der nie leer wird, ist kein Laden, sondern
+  ein Automat mit unendlichem Wechselgeld — und mit dem kann man mit
+  genug Gold unsterblich hinausspazieren.
+- **Nichts ist umsonst.** Ein Preis von 0 in der Tabelle heißt „wird nie
+  verkauft"; alles, was tatsächlich im Regal landet, kostet mindestens 12
+  Gold, damit eine vergessene Null nicht zum Geschenk wird.
+- **Der Trank des Midas kostet 60 Gold.** Er gibt 25 bis 70 zurück — das
+  ist eine Wette. Vorher kostete er **nichts**, und ein Händler mit einem
+  im Regal war damit eine unendliche Goldquelle: kaufen, trinken,
+  wiederholen.
+
+### Nebenbei
+- Eine Truhe trägt ihren „ist weg"-Merker von Anfang an, damit eine frisch
+  gebaute und eine geladene Truhe dieselbe Form haben.
+- Der Spielstand-Vergleich im Selbsttest sagt jetzt, **welche** Zeile sich
+  unterscheidet. „Der Spielstand kommt anders zurück" ist ein Satz, der
+  eine Stunde kostet.
+- Und der Selbsttest sucht Platz, wo er Platz braucht: ein Schleim teilt
+  sich in zwei, ein Skelett weicht vor dem Schuss zurück, ein
+  Knochenmagier braucht Platz für seine Diener. In einer Ecke tut keiner
+  von ihnen irgendetwas — und dann war der Vorwurf an das Monster
+  gerichtet statt an den Raum.
+
 ## 1.7.3 — Niemand steht auf jemandem, und Gaben zeigen was sie tun
 
 - **„Sobald der Host sich bewegt, verschwindet die andere Person."**
